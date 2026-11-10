@@ -505,6 +505,101 @@ a denial yields 403, an invalid inventory yields 502 without a partial list. An
 invalid-inventory error retains CORS headers only when all responding engines
 approve. See README.md for the complete forwarding and intersection rules.
 
+### 5.9 Request ID
+
+Every request handled by a facade carries one caller-facing request ID in the
+`X-Request-ID` header.
+
+- **Accepted** from the client when it is 1–128 characters drawn from letters,
+  digits, `.`, `_`, `:` and `-`. That covers UUIDs, ULIDs and common trace
+  formats while keeping whitespace, header-injection and log-forging characters
+  out.
+- **Minted** as a random version 4 UUID when the client sent none or sent one
+  outside that set. An unacceptable value is replaced, never refused: the ID is
+  a correlation aid and must not fail inference.
+- **Echoed** on every response, including rejections, preflights, model lists
+  and the proxy's own error bodies. Exactly one value is returned; an upstream
+  that sets its own `X-Request-ID` does not add a second.
+- **Forwarded** on every dispatch attempt, so a peer's ingress and the engine
+  see the same value.
+- **Recorded** as `request_id` on `proxy/request-started` and `proxy/request`,
+  as `requestId` on every `workload:*` event, and as `request_id` on
+  per-request log lines.
+
+The request ID is distinct from the event `id` and `Workload.id`. Those are a
+per-facade counter that restarts with the process and form part of the workload
+store key; the request ID is opaque, not a key, and need not be unique across
+nodes or clients. A client that reuses an ID gets the same ID back and nothing
+else changes.
+
+### 5.10 Sessions and agents
+
+An inference request may name a conversation with `X-PAIR-Session-ID` and the
+agent that owns it with `X-PAIR-Agent-ID`. Both use the request ID's character
+set (§5.9). On any non-inference route both headers are forwarded untouched and
+otherwise ignored.
+
+- **A malformed header is refused with `400`**, not replaced. A substituted
+  session ID would silently start a different conversation.
+- **The first request creates the session**, and the agent it names (or none)
+  owns it. Every later request for that session must name the same agent,
+  including naming none; otherwise it is refused with `409`. Loopback has no
+  authentication, so this guards against two agents colliding on one ID, not
+  against a hostile local process.
+- **Refusals happen before candidate selection**, so they take no reservation,
+  count no attempt, and never reach an engine.
+- **Affinity.** For each engine, the session remembers the node that committed
+  its last turn (§5.2) and puts that node first in the next turn's first round.
+  The engines keep the evaluated prompt in their KV cache, so landing on the
+  same node reuses that work. Affinity ranks below an explicit manual selection
+  and, like it, cannot override the capability gate: a node that no longer
+  advertises the model is absent from the candidates and the scheduler's order
+  stands. Later retry rounds use the ordinary order, and the session re-pins to
+  whichever node commits.
+- **Echo and records.** The response carries `X-PAIR-Session-ID`. Request
+  events carry `session_id` and `agent_id`; workload events carry `sessionId`,
+  with the agent in `requesterId`.
+
+Sessions are held in memory by the proxy on the node where requests originate,
+because that node makes the routing decision; nothing is replicated to peers.
+The store holds IDs, the owning agent, timestamps, an in-flight count and the
+node per engine. It never holds prompts or responses (§9).
+
+### 5.11 Session lifetime and API
+
+A session expires after a **sliding idle timeout**: 10 minutes by default,
+adjustable from 1 to 60 minutes for the whole process (`sessions/configure`, or
+`--session-idle-timeout`) and per session at creation or by `PATCH`.
+
+- **What slides the window:** a request for the session starting or ending,
+  and `POST /pair/v1/sessions/{id}/keepalive`.
+- **Waiting is activity.** A session with a request in flight never expires,
+  however long the engine takes or the request waits for an owner (§5.1). The
+  window restarts when the last such request ends.
+- **Optional maximum lifetime** (`maxLifetimeSeconds`, off by default) caps the
+  total length even under keepalives. It too waits for in-flight work.
+- **Expiry and ending are complete.** The session's record is removed, any
+  request still running for it is cancelled (reported `cancelled`, exactly as a
+  client disconnect), and the ID is tombstoned for 24 hours: reusing it returns
+  `410 Gone` rather than silently opening a new conversation under the old
+  name. Expiry is checked on every access, and a sweep every 15 seconds
+  reclaims abandoned sessions.
+- **Limit.** At most `maxSessions` (default 4096) live sessions. A new one past
+  the limit is refused with `503` until one ends or expires.
+
+The proxy itself answers `/pair/v1/sessions` on every facade port; it is never
+forwarded to an engine and, being on the plaintext personality (§7), is
+loopback-only. Create (`POST`, optional `sessionId`, `agentId`,
+`idleTimeoutSeconds`), list (`GET`, optional `agentId` filter), read, keepalive,
+`PATCH idleTimeoutSeconds`, and `DELETE`. Every call that changes a session
+follows the ownership rule of §5.10. A session object reports `expiresAt` and a
+suggested `keepaliveIntervalSeconds` of one third of its window.
+
+`sessions/configure` is a process-wide JSON-RPC request with optional
+`idleTimeoutSeconds`, `maxLifetimeSeconds` and `maxSessions`; omitted fields keep
+their value and the result is the policy in force. A lower limit refuses new
+sessions without evicting live ones.
+
 ## 6. Reservations
 
 A reservation is one in-flight dispatch this process has made since the last
@@ -576,7 +671,7 @@ unable to locate it.
 
 Never log prompts, chat messages, request bodies, stream chunks, full responses,
 credentials, or pairing data. Operational metadata only — engine, model, job id,
-node id, path, stream flag, normalized error text — and keep per-request routing
+request id, node id, path, stream flag, normalized error text — and keep per-request routing
 detail below info level.
 
 The log component is the **process** (`nvpair-proxy`), because at process init

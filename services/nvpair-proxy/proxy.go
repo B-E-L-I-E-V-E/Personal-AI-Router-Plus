@@ -104,11 +104,17 @@ type SelectedResult struct {
 // Cluster model-list fan-out has no single node, so it reports an empty
 // NodeID and the explicit Target "cluster".
 type RequestStartedEvent struct {
-	ID     string `json:"id"`
-	NodeID string `json:"node_id,omitempty"`
-	Method string `json:"method"`
-	Path   string `json:"path"`
-	Target string `json:"target"`
+	ID string `json:"id"`
+	// RequestID is the caller-facing X-Request-ID; see requestIDHeader.
+	RequestID string `json:"request_id,omitempty"`
+	// SessionID and AgentID are the X-PAIR-Session-ID and X-PAIR-Agent-ID the
+	// request carried, when it named them; see sessions.go.
+	SessionID string `json:"session_id,omitempty"`
+	AgentID   string `json:"agent_id,omitempty"`
+	NodeID    string `json:"node_id,omitempty"`
+	Method    string `json:"method"`
+	Path      string `json:"path"`
+	Target    string `json:"target"`
 }
 
 // RequestEvent is emitted as a `proxy/request` notification when a
@@ -133,15 +139,21 @@ type RequestStartedEvent struct {
 // which for streaming Ollama responses is dominated by token
 // generation time and so doesn't really reflect latency at all.
 type RequestEvent struct {
-	ID       string `json:"id"`
-	NodeID   string `json:"node_id,omitempty"`
-	Method   string `json:"method"`
-	Path     string `json:"path"`
-	Target   string `json:"target"`
-	Status   int    `json:"status"`
-	Duration int64  `json:"duration_ms"`
-	TTFB     int64  `json:"ttfb_ms,omitempty"`
-	Error    string `json:"error,omitempty"`
+	ID string `json:"id"`
+	// RequestID is the caller-facing X-Request-ID; see requestIDHeader.
+	RequestID string `json:"request_id,omitempty"`
+	// SessionID and AgentID are the X-PAIR-Session-ID and X-PAIR-Agent-ID the
+	// request carried, when it named them; see sessions.go.
+	SessionID string `json:"session_id,omitempty"`
+	AgentID   string `json:"agent_id,omitempty"`
+	NodeID    string `json:"node_id,omitempty"`
+	Method    string `json:"method"`
+	Path      string `json:"path"`
+	Target    string `json:"target"`
+	Status    int    `json:"status"`
+	Duration  int64  `json:"duration_ms"`
+	TTFB      int64  `json:"ttfb_ms,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // Workload lifecycle method names (workload-manager spec 7). The proxy is
@@ -191,6 +203,14 @@ type Workload struct {
 	CompletedAt    *int64  `json:"completedAt"`
 	Error          *string `json:"error"`
 	RequesterID    *string `json:"requesterId"`
+	// RequestID is the caller-facing X-Request-ID (see requestIDHeader), so a
+	// job card can be matched to the client's request. Unlike ID it is not a
+	// store key and need not be unique across nodes.
+	RequestID string `json:"requestId,omitempty"`
+	// SessionID is the X-PAIR-Session-ID the request named, if any. The owning
+	// agent rides RequesterID, the field the workload spec already reserves for
+	// whoever asked for the work.
+	SessionID string `json:"sessionId,omitempty"`
 	// Seq counts this workload's events, from 1, in emission order.
 	//
 	// The workload-manager's inter-node dedup is a permanent set, so an event
@@ -399,6 +419,11 @@ type Proxy struct {
 	// exists because each facade's request counter restarts at 1, so without it
 	// a reused id after a restart would collide in the broker's store.
 	runID string
+
+	// sessions holds conversation routing state for every facade. Process-wide
+	// for the same reason as reservations: a session may use more than one
+	// engine, and its ID must mean one conversation whichever facade sees it.
+	sessions *sessionStore
 }
 
 // NewProxy builds a facade-less process host. Facades arrive via
@@ -408,6 +433,7 @@ func NewProxy(codec *Codec) *Proxy {
 		codec:    codec,
 		runID:    newRunID(),
 		activity: nodeactivity.NewReporter(activityReportInterval),
+		sessions: newSessionStore(),
 	}
 }
 
@@ -492,6 +518,10 @@ func (p *Proxy) Run(ctx context.Context) error {
 	// so the loopback rewrite in nodeURL stays correct after VPN/dock changes
 	// or a sleep/wake IP reassignment.
 	startLocalAddrWatch(ctx)
+
+	// Remove expired sessions in the background. Expiry is also enforced on
+	// every access, so this only reclaims memory from abandoned sessions.
+	go p.sessions.run(ctx)
 
 	// No facade is brought up here: the process serves the JSON-RPC channel
 	// first and binds only when the broker enables an engine. A bind failure is
@@ -1162,6 +1192,13 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// whether a matching Started was seen.
 	reqID := strconv.FormatUint(f.nextRequestID.Add(1), 10)
 
+	// The caller-facing request ID. Set on the inbound header so every forward
+	// attempt carries it upstream, and on the response before anything can be
+	// written, so rejections, preflights and model lists echo it too.
+	requestID := resolveRequestID(r.Header)
+	r.Header.Set(requestIDHeader, requestID)
+	w.Header().Set(requestIDHeader, requestID)
+
 	// Parse the request's model before choosing a node. Model eligibility only
 	// applies to inference routes; control endpoints retain their existing
 	// routing behavior even when their JSON happens to contain a model field.
@@ -1171,6 +1208,55 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	if isInf {
 		routingModel = model
 	}
+
+	// Sessions and agents apply to inference only; on any other route the
+	// headers are forwarded untouched and otherwise ignored. A malformed header,
+	// a request from an agent that does not own the session, an ended or expired
+	// session, and a full session table are all refused before any node is
+	// chosen, so they cost no reservation and no attempt.
+	//
+	// A request admitted to a session runs on a context the session can cancel,
+	// so ending the session stops its in-flight work. Swapping r here, before
+	// any attempt or watcher reads r.Context(), is what makes that cancellation
+	// look exactly like a client disconnect to everything below.
+	var sessionID, agentID string
+	var sess sessionView
+	if isInf {
+		var err error
+		sessionID, agentID, err = sessionHeaders(r.Header)
+		if err == nil && sessionID != "" {
+			sessCtx, cancelSess := context.WithCancel(r.Context())
+			var token uint64
+			sess, token, err = p.sessions.begin(sessionID, agentID, cancelSess)
+			if err != nil {
+				cancelSess()
+			} else {
+				r = r.WithContext(sessCtx)
+				defer cancelSess()
+				defer p.sessions.end(sessionID, token)
+				w.Header().Set(sessionIDHeader, sessionID)
+				w.Header().Set(sessionExpiresAtHeader, sess.ExpiresAt.UTC().Format(time.RFC3339))
+			}
+		}
+		if err != nil {
+			status := sessionStatus(err)
+			slog.Debug("proxy request refused by session check",
+				"id", reqID, "request_id", requestID, "method", r.Method,
+				"path", r.URL.Path, "status", status, "reason", err)
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.WriteHeader(status)
+			if body, mErr := json.Marshal(map[string]string{"error": err.Error()}); mErr == nil {
+				_, _ = w.Write(body)
+			}
+			_ = f.notify("proxy/request", RequestEvent{
+				ID: reqID, RequestID: requestID, SessionID: sessionID, AgentID: agentID, Method: r.Method, Path: r.URL.Path,
+				Status: status, Duration: time.Since(start).Milliseconds(), Error: err.Error(),
+			})
+			return
+		}
+	}
+
 	candidates := f.resolveCandidates(routingModel)
 	if cors.IsPreflight(r) {
 		targets := make([]cors.Target, 0, len(candidates))
@@ -1179,7 +1265,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		sc := &statusCapture{ResponseWriter: w, status: http.StatusOK}
 		cors.ServePreflight(sc, r, targets)
-		f.notify("proxy/request", RequestEvent{ID: reqID, Method: r.Method, Path: r.URL.Path, Target: "cluster", Status: sc.status, Duration: time.Since(start).Milliseconds()})
+		f.notify("proxy/request", RequestEvent{ID: reqID, RequestID: requestID, SessionID: sessionID, AgentID: agentID, Method: r.Method, Path: r.URL.Path, Target: "cluster", Status: sc.status, Duration: time.Since(start).Milliseconds()})
 		return
 	}
 	// held is this request's claim on a node's capacity while it is in flight.
@@ -1191,6 +1277,19 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	)
 	if isInf && model != "" {
 		candidates, held = p.reserveCandidate(f, candidates)
+	}
+	// Session affinity: put the node that served this session's last turn on
+	// this engine first, so the turn reuses that node's KV cache. It ranks below
+	// an explicit manual selection, and like that selection it cannot override
+	// the capability gate: a node that no longer advertises the model is absent
+	// from candidates and the scheduler's order stands. It applies to the first
+	// round only. A node that fails is left behind by failover, and the commit
+	// then re-pins the session to whichever node served. The reservation needs no
+	// adjustment here, because the dispatch loop moves it to each node it tries.
+	if sessionID != "" && f.SelectedID() == "" {
+		if node := sess.Nodes[f.profile.Name]; node != "" {
+			preferNode(candidates, node)
+		}
 	}
 	// Released exactly once, whichever way the request ends: normal unwind,
 	// client disconnect, or an early return below. Without this a node stays
@@ -1215,7 +1314,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	if matchedRoute, ok := f.profile.routeFor(r.Method, r.URL.Path); ok && matchedRoute.Role.isModelList() {
 		if len(candidates) > 0 {
 			_ = f.notify("proxy/request-started", RequestStartedEvent{
-				ID: reqID, Method: r.Method, Path: r.URL.Path, Target: "cluster",
+				ID: reqID, RequestID: requestID, SessionID: sessionID, AgentID: agentID, Method: r.Method, Path: r.URL.Path, Target: "cluster",
 			})
 		}
 		status, err := f.serveModelList(w, r, matchedRoute, candidates)
@@ -1224,7 +1323,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			errText = err.Error()
 		}
 		_ = f.notify("proxy/request", RequestEvent{
-			ID: reqID, Method: r.Method, Path: r.URL.Path, Target: "cluster",
+			ID: reqID, RequestID: requestID, SessionID: sessionID, AgentID: agentID, Method: r.Method, Path: r.URL.Path, Target: "cluster",
 			Status: status, Duration: time.Since(start).Milliseconds(), Error: errText,
 		})
 		return
@@ -1237,11 +1336,12 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			rejectionError = "no node advertises requested model"
 		}
 		slog.Warn("proxy request rejected",
-			"id", reqID, "method", r.Method, "path", r.URL.Path,
+			"id", reqID, "request_id", requestID, "method", r.Method, "path", r.URL.Path,
 			"remote", r.RemoteAddr, "reason", rejectionError)
 		http.Error(w, rejectionBody, http.StatusBadGateway)
 		_ = f.notify("proxy/request", RequestEvent{
-			ID:       reqID,
+			ID:        reqID,
+			RequestID: requestID, SessionID: sessionID, AgentID: agentID,
 			Method:   r.Method,
 			Path:     r.URL.Path,
 			Status:   http.StatusBadGateway,
@@ -1300,13 +1400,16 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	if isInf && model != "" {
 		createdMs := start.UnixMilli()
 		wl = &Workload{
-			ID:        reqID,
-			Model:     model,
-			Engine:    f.profile.Name,
-			RunID:     p.runID,
-			State:     "queued",
-			CreatedAt: createdMs,
-			Seq:       nextWlSeq(),
+			ID:          reqID,
+			Model:       model,
+			Engine:      f.profile.Name,
+			RunID:       p.runID,
+			RequestID:   requestID,
+			SessionID:   sessionID,
+			RequesterID: optionalString(agentID),
+			State:       "queued",
+			CreatedAt:   createdMs,
+			Seq:         nextWlSeq(),
 		}
 		p.emitWorkload(workloadSubmittedMethod, *wl)
 	}
@@ -1416,7 +1519,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		slog.Debug("proxy request complete",
-			"id", reqID,
+			"id", reqID, "request_id", requestID,
 			"node_id", servedNodeID,
 			"method", r.Method,
 			"path", r.URL.Path,
@@ -1428,7 +1531,8 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		)
 
 		_ = f.notify("proxy/request", RequestEvent{
-			ID:       reqID,
+			ID:        reqID,
+			RequestID: requestID, SessionID: sessionID, AgentID: agentID,
 			NodeID:   servedNodeID,
 			Method:   r.Method,
 			Path:     r.URL.Path,
@@ -1699,6 +1803,10 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			// have arrived but before the body streams. That's both the retry
 			// decision point and, on commit, the time-to-first-byte boundary.
 			ModifyResponse: func(resp *http.Response) error {
+				// ReverseProxy adds upstream headers to the ones already set on
+				// the client response, so an upstream that echoes X-Request-ID
+				// back would otherwise produce a second value.
+				resp.Header.Del(requestIDHeader)
 				if !last && shouldRetry(resp.StatusCode) {
 					// Abort before streaming: ReverseProxy closes resp.Body and
 					// calls ErrorHandler with our sentinel, then we try next.
@@ -1732,12 +1840,12 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 						if !last {
 							retry = true
 							slog.Warn("proxy upstream produced no content, failing over",
-								"id", reqID, "node_id", cand.id, "target", cand.url.Host,
+								"id", reqID, "request_id", requestID, "node_id", cand.id, "target", cand.url.Host,
 								"path", r.URL.Path, "err", err)
 							return retrySignal{}
 						}
 						slog.Warn("proxy upstream produced no content, retries exhausted",
-							"id", reqID, "node_id", cand.id, "target", cand.url.Host,
+							"id", reqID, "request_id", requestID, "node_id", cand.id, "target", cand.url.Host,
 							"method", r.Method, "path", r.URL.Path,
 							"duration_ms", time.Since(start).Milliseconds(), "err", err)
 						return err
@@ -1753,7 +1861,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 					if !last {
 						retry = true
 						slog.Warn("proxy target left discovery as the response committed, failing over",
-							"id", reqID, "node_id", cand.id, "target", cand.url.Host,
+							"id", reqID, "request_id", requestID, "node_id", cand.id, "target", cand.url.Host,
 							"path", r.URL.Path)
 						return retrySignal{}
 					}
@@ -1781,7 +1889,8 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				if !started {
 					started = true
 					_ = f.notify("proxy/request-started", RequestStartedEvent{
-						ID:     reqID,
+						ID:        reqID,
+						RequestID: requestID, SessionID: sessionID, AgentID: agentID,
 						NodeID: cand.id,
 						Method: r.Method,
 						Path:   r.URL.Path,
@@ -1792,6 +1901,11 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 					// as the belt-and-braces guarantee that the node that
 					// actually served is the one counted as loaded.
 					moveHeld(cand.id)
+					// The node that committed is the one holding this turn in
+					// its KV cache, so the session's next turn goes there.
+					if sessionID != "" {
+						p.sessions.pin(sessionID, f.profile.Name, cand.id)
+					}
 					// Record the commit here, not just after the loop: a copy
 					// error aborts this handler by panic, and finalize needs to
 					// know the response had committed (and on which capture) to
@@ -1837,7 +1951,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 					retry = true
 					proxyErr = err.Error()
 					slog.Warn("proxy upstream error, failing over",
-						"id", reqID, "node_id", cand.id, "target", cand.url.Host,
+						"id", reqID, "request_id", requestID, "node_id", cand.id, "target", cand.url.Host,
 						"path", r.URL.Path, "err", err)
 					return
 				}
@@ -1847,7 +1961,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				servedTarget = cand.url.Host
 				proxyErr = err.Error()
 				slog.Warn("proxy upstream error, retries exhausted",
-					"id", reqID, "node_id", cand.id, "target", cand.url.Host,
+					"id", reqID, "request_id", requestID, "node_id", cand.id, "target", cand.url.Host,
 					"method", r.Method, "path", r.URL.Path,
 					"duration_ms", time.Since(start).Milliseconds(), "err", err)
 				body, mErr := json.Marshal(map[string]string{
@@ -1910,7 +2024,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		proxyErr = reason
 		finalStatus = http.StatusServiceUnavailable
 		slog.Warn("proxy request exhausted its retry budget",
-			"id", reqID, "method", r.Method, "path", r.URL.Path,
+			"id", reqID, "request_id", requestID, "method", r.Method, "path", r.URL.Path,
 			"dispatches", dispatches, "duration_ms", time.Since(start).Milliseconds(),
 			"reason", reason)
 		body, mErr := json.Marshal(map[string]string{"error": reason})
@@ -2832,6 +2946,24 @@ func (p *Proxy) handleMessage(msg *Message) {
 			"engine", f.profile.Name, "host", b.Host, "port", b.Port, "healthy", b.Healthy)
 		if err := p.codec.Respond(msg.ID, map[string]bool{"ok": true}); err != nil {
 			log.Printf("failed to respond to node/set-local-backend: %v", err)
+		}
+
+	case "sessions/configure":
+		// Process-wide, so it is a bare method rather than engine-addressed.
+		// Omitted fields keep their current value; the result is the policy now
+		// in force.
+		cfg, err := applySessionConfigParams(p.sessions.config(), msg.Params)
+		if err == nil {
+			err = p.sessions.configure(cfg)
+		}
+		if err != nil {
+			p.codec.RespondError(msg.ID, -32602, "invalid params: "+err.Error())
+			return
+		}
+		slog.Info("session policy changed",
+			"idle_timeout", cfg.IdleTimeout, "max_lifetime", cfg.MaxLifetime, "max_sessions", cfg.MaxSessions)
+		if err := p.codec.Respond(msg.ID, sessionConfigResult(cfg)); err != nil {
+			log.Printf("failed to respond to sessions/configure: %v", err)
 		}
 
 	case "shutdown":

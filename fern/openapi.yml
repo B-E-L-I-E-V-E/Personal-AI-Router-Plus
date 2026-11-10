@@ -32,6 +32,10 @@ tags:
     description: Ollama-compatible inference proxied to an eligible node.
   - name: OpenAI-compatible
     description: OpenAI-compatible inference proxied to an eligible node.
+  - name: Sessions
+    description: >
+      PAIR's own session API, answered by the local proxy on any engine port and
+      never forwarded to an engine. Loopback only.
   - name: Node info
     description: Read-only node telemetry polled from discovered PAIR nodes.
 paths:
@@ -47,6 +51,10 @@ paths:
         with the requested model available. With streaming enabled the upstream
         engine returns newline-delimited JSON chunks; the final chunk sets
         `done` to true.
+      parameters:
+        - $ref: "#/components/parameters/RequestID"
+        - $ref: "#/components/parameters/SessionID"
+        - $ref: "#/components/parameters/AgentID"
       requestBody:
         required: true
         content:
@@ -65,6 +73,10 @@ paths:
         "200":
           description: Chat response from the serving node.
           headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+            X-PAIR-Session-ID:
+              $ref: "#/components/headers/SessionID"
             X-PAIR-Served-By:
               description: Stable host UUID of the node that served the request.
               schema:
@@ -99,6 +111,10 @@ paths:
         Send an OpenAI-compatible chat completion request to the local PAIR
         proxy. PAIR forwards the entire request to a single eligible node and
         returns the engine's response.
+      parameters:
+        - $ref: "#/components/parameters/RequestID"
+        - $ref: "#/components/parameters/SessionID"
+        - $ref: "#/components/parameters/AgentID"
       requestBody:
         required: true
         content:
@@ -116,6 +132,10 @@ paths:
         "200":
           description: Chat completion from the serving node.
           headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+            X-PAIR-Session-ID:
+              $ref: "#/components/headers/SessionID"
             X-PAIR-Served-By:
               description: Stable host UUID of the node that served the request.
               schema:
@@ -144,6 +164,145 @@ paths:
                       prompt_tokens: 18
                       completion_tokens: 24
                       total_tokens: 42
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+  /pair/v1/sessions:
+    post:
+      tags:
+        - Sessions
+      operationId: createSession
+      summary: Create a session
+      description: >
+        Start a session explicitly, for example to choose its idle timeout.
+        Sending `X-PAIR-Session-ID` on an inference request also creates one on
+        first use.
+      parameters:
+        - $ref: "#/components/parameters/AgentID"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSessionRequest"
+      responses:
+        "201":
+          description: The new session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+    get:
+      tags:
+        - Sessions
+      operationId: listSessions
+      summary: List live sessions
+      parameters:
+        - name: agentId
+          in: query
+          required: false
+          description: Only sessions owned by this agent.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Live sessions, oldest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sessions]
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Session"
+  /pair/v1/sessions/{sessionId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags:
+        - Sessions
+      operationId: getSession
+      summary: Read a session
+      responses:
+        "200":
+          description: The session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+    patch:
+      tags:
+        - Sessions
+      operationId: updateSession
+      summary: Change a session's idle timeout
+      parameters:
+        - $ref: "#/components/parameters/AgentID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [idleTimeoutSeconds]
+              properties:
+                idleTimeoutSeconds:
+                  type: integer
+                  minimum: 60
+                  maximum: 3600
+      responses:
+        "200":
+          description: The updated session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+    delete:
+      tags:
+        - Sessions
+      operationId: endSession
+      summary: End a session now
+      description: >
+        Removes the session and cancels any of its requests still running.
+        Reusing the ID afterwards returns `410`.
+      parameters:
+        - $ref: "#/components/parameters/AgentID"
+      responses:
+        "204":
+          description: The session has ended.
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+  /pair/v1/sessions/{sessionId}/keepalive:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags:
+        - Sessions
+      operationId: keepSessionAlive
+      summary: Restart a session's idle clock
+      parameters:
+        - $ref: "#/components/parameters/AgentID"
+      responses:
+        "200":
+          description: The session, with its new `expiresAt`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
         default:
           $ref: "#/components/responses/ErrorResponse"
   /v1/node-info:
@@ -188,14 +347,119 @@ paths:
         default:
           $ref: "#/components/responses/ErrorResponse"
 components:
+  parameters:
+    RequestID:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: >
+        Optional caller-chosen request ID, 1 to 128 characters from letters,
+        digits, `.`, `_`, `:` and `-`. PAIR mints a version 4 UUID when it is
+        absent or outside that set, and never rejects a request because of it.
+      schema:
+        type: string
+        maxLength: 128
+        pattern: "^[A-Za-z0-9._:-]{1,128}$"
+    SessionID:
+      name: X-PAIR-Session-ID
+      in: header
+      required: false
+      description: >
+        Optional conversation ID, in the same character set as `X-Request-ID`.
+        Send it on every turn: PAIR routes each turn to the node that served the
+        previous one so the engine can reuse its cached prompt. The first
+        request creates the session. A malformed value is refused with `400`;
+        an ended or expired session with `410`; a full session table with `503`.
+        The response carries `X-PAIR-Session-Expires-At`.
+      schema:
+        type: string
+        maxLength: 128
+        pattern: "^[A-Za-z0-9._:-]{1,128}$"
+    AgentID:
+      name: X-PAIR-Agent-ID
+      in: header
+      required: false
+      description: >
+        Optional ID of the agent that owns the session. The agent named on a
+        session's first request owns it; a later request naming a different
+        agent, or none when an owner exists, is refused with `409`.
+      schema:
+        type: string
+        maxLength: 128
+        pattern: "^[A-Za-z0-9._:-]{1,128}$"
+  headers:
+    SessionID:
+      description: The session this request was served under, when it named one.
+      schema:
+        type: string
+    RequestID:
+      description: >
+        The request ID PAIR used for this request: the caller's own value when
+        it was acceptable, otherwise one PAIR minted. Present on every response,
+        including errors.
+      schema:
+        type: string
   responses:
     ErrorResponse:
       description: Error response.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/RequestID"
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
   schemas:
+    CreateSessionRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        sessionId:
+          type: string
+          description: Optional; PAIR mints a version 4 UUID when omitted.
+          pattern: "^[A-Za-z0-9._:-]{1,128}$"
+        agentId:
+          type: string
+          description: Owning agent. Must match `X-PAIR-Agent-ID` when both are sent.
+          pattern: "^[A-Za-z0-9._:-]{1,128}$"
+        idleTimeoutSeconds:
+          type: integer
+          minimum: 60
+          maximum: 3600
+          description: Omit to use the process default (10 minutes unless configured).
+    Session:
+      type: object
+      required: [sessionId, agentId, createdAt, lastActiveAt, expiresAt, idleTimeoutSeconds, keepaliveIntervalSeconds, inFlight, requests, nodes]
+      properties:
+        sessionId:
+          type: string
+        agentId:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        lastActiveAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the session ends if nothing touches it. It never ends while `inFlight` is above zero.
+        idleTimeoutSeconds:
+          type: integer
+        keepaliveIntervalSeconds:
+          type: integer
+          description: Suggested keepalive interval, one third of the idle timeout.
+        inFlight:
+          type: integer
+        requests:
+          type: integer
+        nodes:
+          type: object
+          description: Node that served the session's last turn, per engine.
+          additionalProperties:
+            type: string
     ChatRole:
       type: string
       enum:

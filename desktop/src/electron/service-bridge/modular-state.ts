@@ -380,6 +380,10 @@ function parseWorkload(value: JsonValue | undefined): Workload | null {
     }
     const scheduledOn = nullableStringValue(obj.scheduledOn)
     if (scheduledOn) workload.scheduledOn = scheduledOn
+    const requestId = nullableStringValue(obj.requestId)
+    if (requestId) workload.requestId = requestId
+    const sessionId = nullableStringValue(obj.sessionId)
+    if (sessionId) workload.sessionId = sessionId
     return workload
 }
 

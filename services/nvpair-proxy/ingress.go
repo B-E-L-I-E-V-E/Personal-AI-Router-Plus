@@ -91,6 +91,11 @@ func (f *facade) handlePlain(w http.ResponseWriter, r *http.Request) {
 			"the compatibility facade is not the "+f.profile.DisplayName+" engine")
 		return
 	}
+	// PAIR's own session API is answered here and never forwarded. Being on
+	// the plaintext personality makes it loopback-only, like inference.
+	if f.serveSessionsAPI(w, r) {
+		return
+	}
 	f.handleHTTP(w, r)
 }
 

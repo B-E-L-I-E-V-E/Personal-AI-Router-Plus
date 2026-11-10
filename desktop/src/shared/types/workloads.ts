@@ -29,5 +29,13 @@ export interface Workload {
     startedAt: number | null
     completedAt: number | null
     error: string | null
+    /** Agent that owns the request (`X-PAIR-Agent-ID`), when it named one. */
     requesterId: string | null
+    /**
+     * Caller-facing `X-Request-ID` the proxy stamped on the request (client
+     * supplied or minted). Optional/additive: absent from older producers.
+     */
+    requestId?: string
+    /** Conversation the request belongs to (`X-PAIR-Session-ID`), when named. */
+    sessionId?: string
 }

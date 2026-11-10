@@ -77,6 +77,8 @@ Tracks inference workloads cluster-wide as they are queued, executed, and retire
   completedAt: number | null
   error: string | null
   requesterId: string | null
+  sessionId?: string      // X-PAIR-Session-ID the request named, if any. Optional/additive (§7.3). Passed through opaquely; not a key. The owning agent (X-PAIR-Agent-ID) rides requesterId.
+  requestId?: string      // Caller-facing X-Request-ID the proxy stamped on the request (client supplied or minted). Optional/additive (§7.3). Passed through opaquely and never part of a key: it is not guaranteed unique.
 }
 ```
 

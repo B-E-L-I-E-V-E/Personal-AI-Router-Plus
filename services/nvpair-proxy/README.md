@@ -67,6 +67,9 @@ parameter, because one flag cannot carry multiple engines' plans.
 | `--ipc` | *(empty — use stdio)* | Path to a Unix domain socket or Windows named pipe for IPC |
 | `--cluster-dir` | *(empty)* | Cluster trust directory (`node.crt`/`node.key` plus trusted pins). Enables the LAN mTLS inference ingress while this node is a cluster member; empty means no ingress and no peer candidates. |
 | `--log-level` | *(`$NVPAIR_LOG_LEVEL`, else `info`)* | Initial log level: `debug`, `info`, `warn`, or `error`. Changeable at runtime with `log/set-level`. |
+| `--session-idle-timeout` | `10m` | Default sliding idle timeout for sessions, from `1m` to `60m`. Changeable at runtime with `sessions/configure`. |
+| `--session-max-lifetime` | `0` *(off)* | Maximum total length of a session, even while it is kept alive. |
+| `--max-sessions` | `4096` | Maximum number of live sessions. |
 | `--version` | | Print version and exit |
 
 ### `facade/enable` parameters
@@ -137,6 +140,39 @@ matches one of this node's pins is forwarded straight to the local engine
 reported by `node/set-local-backend`, and is never re-routed onward to another
 node. Membership and pins are re-derived per request, so joining or leaving a
 cluster needs no restart.
+
+**Request ID.** Every response carries exactly one `X-Request-ID`. Send your
+own (1–128 characters of letters, digits, `.`, `_`, `:`, `-`) to correlate a
+request with your logs; otherwise PAIR mints a version 4 UUID. The same value is
+forwarded upstream and recorded on `proxy/request*` events (`request_id`),
+workload events (`requestId`), and request log lines. Because PAIR adds no CORS
+headers of its own, a browser script can read it only when the engine's CORS
+policy exposes `X-Request-ID`. See `spec.md` §5.9.
+
+**Sessions and agents.** Send `X-PAIR-Session-ID` on every turn of a
+conversation, and optionally `X-PAIR-Agent-ID` to name the agent that owns it.
+PAIR sends each turn back to the node that served the previous one, so the
+engine can reuse its cached prompt. The agent named on the first turn owns the
+session; a turn naming a different agent gets `409`, and a malformed header gets
+`400`. See `spec.md` §5.10.
+
+**Session lifetime.** A session ends after 10 idle minutes by default. Any
+request for it, or `POST /pair/v1/sessions/{id}/keepalive`, restarts the clock,
+and a session never expires while one of its requests is running. Ending or
+expiring a session removes it completely; reusing the ID afterwards returns
+`410 Gone`. Manage sessions on any facade port, from loopback only:
+
+| Call | Effect |
+|------|--------|
+| `POST /pair/v1/sessions` | Create. Optional body `{"sessionId","agentId","idleTimeoutSeconds"}`; a missing ID is minted. |
+| `GET /pair/v1/sessions[?agentId=]` | List live sessions. |
+| `GET /pair/v1/sessions/{id}` | Read one, including `expiresAt` and `keepaliveIntervalSeconds`. |
+| `POST /pair/v1/sessions/{id}/keepalive` | Restart the idle clock. |
+| `PATCH /pair/v1/sessions/{id}` | Change `idleTimeoutSeconds` (60–3600). |
+| `DELETE /pair/v1/sessions/{id}` | End now, cancelling any request still running. |
+
+Calls that change a session must send the owner's `X-PAIR-Agent-ID`. Inference
+responses carry `X-PAIR-Session-Expires-At`. See `spec.md` §5.11.
 
 **Persisted port.** A port chosen at runtime via `set-port` is saved to the
 per-user data dir (`%LocalAppData%\Nvidia Corporation\Personal AI Router` on

@@ -19,6 +19,32 @@ func TestParseLifecycleValid(t *testing.T) {
 	}
 }
 
+// The caller-facing request ID must survive the workload-manager's typed
+// decode and re-encode, or peers and the desktop would never see it.
+func TestParseLifecyclePreservesRequestID(t *testing.T) {
+	params := json.RawMessage(`{"workloadInfo":{"id":"wl-1","model":"m","engine":"ollama","state":"queued","originatedFrom":"node-A","createdAt":1,"requestId":"agent-7:turn-12"}}`)
+	w, err := parseLifecycle(params)
+	if err != nil {
+		t.Fatalf("parseLifecycle: %v", err)
+	}
+	if w.RequestID != "agent-7:turn-12" {
+		t.Fatalf("RequestID = %q, want %q", w.RequestID, "agent-7:turn-12")
+	}
+	out, err := json.Marshal(w)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var round struct {
+		RequestID string `json:"requestId"`
+	}
+	if err := json.Unmarshal(out, &round); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if round.RequestID != "agent-7:turn-12" {
+		t.Fatalf("re-encoded requestId = %q, want %q", round.RequestID, "agent-7:turn-12")
+	}
+}
+
 func TestParseLifecycleRejectsMissingFields(t *testing.T) {
 	cases := map[string]string{
 		"no workloadInfo":      `{}`,

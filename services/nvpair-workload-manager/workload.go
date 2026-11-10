@@ -78,6 +78,12 @@ type Workload struct {
 	CompletedAt    *int64        `json:"completedAt"`
 	Error          *string       `json:"error"`
 	RequesterID    *string       `json:"requesterId"`
+	// RequestID is the caller-facing X-Request-ID the proxy stamped on the
+	// request. Passed through opaquely; not part of any key.
+	RequestID string `json:"requestId,omitempty"`
+	// SessionID is the X-PAIR-Session-ID the request named, if any. The owning
+	// agent rides RequesterID. Both pass through opaquely; neither is a key.
+	SessionID string `json:"sessionId,omitempty"`
 	// Seq numbers a workload's events in emission order, assigned by the
 	// producer. It exists so dedup can tell a new event from a redelivery even
 	// when the two carry the same state and placement — see keyLifecycle.
