@@ -305,6 +305,66 @@ paths:
                 $ref: "#/components/schemas/Session"
         default:
           $ref: "#/components/responses/ErrorResponse"
+  /pair/v1/capacity:
+    get:
+      tags:
+        - Sessions
+      operationId: getCapacity
+      summary: Report context capacity on this node
+      responses:
+        "200":
+          description: Every model with a setting, a detection, or live sessions here.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [models]
+                properties:
+                  models:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ModelCapacity"
+    put:
+      tags:
+        - Sessions
+      operationId: setCapacity
+      summary: Set or clear a model's context capacity on this node
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [engine, model]
+              properties:
+                engine:
+                  type: string
+                  enum: [ollama, lmstudio, llamacpp]
+                model:
+                  type: string
+                contextTokens:
+                  type: integer
+                  minimum: 1024
+                  description: Total context the model can hold across its sessions.
+                maxSessions:
+                  type: integer
+                  minimum: 1
+                  maximum: 1024
+                clear:
+                  type: boolean
+                  description: Remove the setting and fall back to detection.
+      responses:
+        "200":
+          description: The model's capacity with the new setting.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelCapacity"
+        "204":
+          description: The setting was cleared and nothing else is known about the model.
+        default:
+          $ref: "#/components/responses/ErrorResponse"
   /v1/node-info:
     get:
       tags:
@@ -460,6 +520,76 @@ components:
           description: Node that served the session's last turn, per engine.
           additionalProperties:
             type: string
+        context:
+          type: object
+          description: >
+            The conversation's size after its last completed turn, per engine,
+            as the engine counted it. Absent for an engine until a turn reports
+            usage.
+          additionalProperties:
+            type: object
+            required: [model, tokens, promptTokens, completionTokens, updatedAt]
+            properties:
+              model:
+                type: string
+              tokens:
+                type: integer
+                description: promptTokens plus completionTokens.
+              promptTokens:
+                type: integer
+              completionTokens:
+                type: integer
+              updatedAt:
+                type: string
+                format: date-time
+    ModelCapacity:
+      type: object
+      required: [engine, model, configured, detected, contextTokens, maxSessions, sessionContextTokens, source, activeSessions, usedContextTokens]
+      properties:
+        engine:
+          type: string
+        model:
+          type: string
+        configured:
+          nullable: true
+          type: object
+          properties:
+            contextTokens:
+              type: integer
+            maxSessions:
+              type: integer
+        detected:
+          nullable: true
+          type: object
+          description: What the local engine reports for the loaded model. Omitted fields are unknown.
+          properties:
+            windowTokens:
+              type: integer
+            slots:
+              type: integer
+            poolTokens:
+              type: integer
+            basis:
+              type: string
+        contextTokens:
+          type: integer
+          description: Effective pool; 0 when unknown.
+        maxSessions:
+          type: integer
+          description: Effective session count; 0 when unknown.
+        sessionContextTokens:
+          type: integer
+          description: Each session's share, contextTokens ÷ maxSessions rounded down to 1024; 0 when unknown.
+        source:
+          type: string
+          enum: [configured, detected, unknown]
+        activeSessions:
+          type: integer
+          description: Live sessions whose last turn on this engine ran on this node.
+        usedContextTokens:
+          type: integer
+        warning:
+          type: string
     ChatRole:
       type: string
       enum:

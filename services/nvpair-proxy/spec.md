@@ -65,7 +65,9 @@ is the only party that can decide what to do with it, which is what the
 retrying harness above this layer is for. And the proxy genuinely cannot tell a
 truncated stream from a complete one: a streaming response carries no
 `Content-Length`, and the end-of-turn marker is engine-specific, so recognising
-it would mean parsing response bodies, which §9 forbids.
+it would mean interpreting response content, which §9 forbids. (Reading a
+session's token counts, §5.12, is narrower: it reads only the numeric usage
+fields and never decides anything about the content.)
 
 **A non-streaming request is the weakest case.** Its headers arrive only when
 the response is complete, so "queued inside the engine" and "generating right
@@ -600,6 +602,60 @@ suggested `keepaliveIntervalSeconds` of one third of its window.
 their value and the result is the policy in force. A lower limit refuses new
 sessions without evicting live ones.
 
+### 5.12 Context accounting and capacity
+
+PAIR tracks how much of a model's context each session occupies, and how much
+each model on this node can hold, so it can later decide how many sessions fit.
+This section reports and configures; it does not yet refuse or queue work.
+
+**A session's context** is the token count its engine reported for the last
+completed turn: prompt plus completion. The client resends the whole
+conversation each turn, so that is what the next turn starts from. Counts are
+read from the reply as it streams through, in every routed dialect:
+
+| Dialect | Fields |
+| --- | --- |
+| Ollama native | `prompt_eval_count`, `eval_count` on the final object |
+| OpenAI-compatible | `usage.prompt_tokens`, `usage.completion_tokens` |
+| Anthropic Messages | `usage.input_tokens` (plus any `cache_read_input_tokens` and `cache_creation_input_tokens`), `usage.output_tokens`, possibly spread across `message_start` and `message_delta` |
+
+All three engines count the full prompt, cached prefix included. An
+OpenAI-compatible stream reports usage only when asked, so for a **session**
+request that streams and sets neither way, the proxy adds
+`stream_options.include_usage: true`. The engine then appends one standard
+usage chunk with empty `choices`. Requests outside a session, and session
+requests that chose either way, are forwarded as sent. A reply cut short, one
+that reports no usage, or a non-streamed body over 4 MiB leaves the previous
+count in place. The count is per engine, and exposed as `context` on the
+session object.
+
+**Capacity** is configured per engine and model on this node, through
+`PUT /pair/v1/capacity`, and saved in `context-capacity.json` beside the port
+files:
+
+- `contextTokens` — the pool: total context the model can hold across all of
+  its sessions at once.
+- `maxSessions` — how many sessions may share it (1–1024).
+- The **session share** is `contextTokens ÷ maxSessions`, rounded down to a
+  multiple of 1024. For example 262144 ÷ 6 = 43008.
+
+The setting is authoritative. Where it is absent, the local engine's report
+fills in what it reliably can, cached for 15 seconds:
+
+| Engine | Source | What is known |
+| --- | --- | --- |
+| Ollama | `/api/ps` `context_length` | The per-request window. Ollama allocates it once per `OLLAMA_NUM_PARALLEL` slot but does not report the slot count, so the pool stays unknown. |
+| LM Studio | `/api/v1/models` `loaded_instances[].config` | `context_length` and `parallel`. The default unified KV cache shares one `context_length` pool. |
+| llama.cpp | `/props` `default_generation_settings.n_ctx`, `total_slots` | Per-slot window and slot count; the pool as their product, an upper bound when the cache is unified. A router reports no model of its own, so each loaded model is asked with `?model=`. |
+
+A value the engine does not report is reported as unknown, never guessed.
+Detection covers this node's own engines only; capacity on other nodes is
+theirs to report. `GET /pair/v1/capacity` lists every model with a setting, a
+detection, or live sessions here, with the effective pool, sessions and share,
+the live sessions this node serves for it and the context they hold, and a
+warning when the share is below 4096 tokens, exceeds the engine's own window,
+or cannot be computed.
+
 ## 6. Reservations
 
 A reservation is one in-flight dispatch this process has made since the last
@@ -673,6 +729,11 @@ Never log prompts, chat messages, request bodies, stream chunks, full responses,
 credentials, or pairing data. Operational metadata only — engine, model, job id,
 request id, node id, path, stream flag, normalized error text — and keep per-request routing
 detail below info level.
+
+The one place the proxy reads response bytes is session token accounting
+(§5.12). It holds at most one bounded frame at a time, extracts only the
+engine's numeric token counts, and discards the frame; no text is stored,
+logged, emitted, or used to make a decision.
 
 The log component is the **process** (`nvpair-proxy`), because at process init
 there is no engine to name. Facade-scoped records carry an `engine` field, which

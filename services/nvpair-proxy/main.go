@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"nvpair-shared/appdir"
 	"nvpair-shared/applog"
 	"nvpair-shared/clustertrust"
 	"nvpair-shared/engines"
@@ -80,6 +81,17 @@ func main() {
 		MaxSessions: *maxSessions,
 	}); err != nil {
 		log.Fatalf("invalid session flags: %v", err)
+	}
+	// Context capacity settings persist beside the proxy's port files. A file
+	// that cannot be read leaves the settings empty, and so detection-only,
+	// rather than stopping the router.
+	if path, err := appdir.Path(capacityFileName); err != nil {
+		slog.Warn("context capacity settings will not persist", "err", err)
+	} else {
+		proxy.capacity.path = path
+		if err := proxy.capacity.load(); err != nil {
+			slog.Warn("ignoring unreadable context capacity settings", "path", path, "err", err)
+		}
 	}
 	// Open a live view of this node's cluster mTLS trust fabric. While unclustered
 	// the proxy serves only the loopback plaintext personality; once this node is

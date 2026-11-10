@@ -65,8 +65,8 @@ func TestSessionStore_CountsInFlightRequests(t *testing.T) {
 func TestSessionStore_PinsPerEngine(t *testing.T) {
 	s := newSessionStore()
 	beginT(t, s, "conv-1", "")
-	s.pin("conv-1", "ollama", "node-a")
-	s.pin("conv-1", "lmstudio", "node-b")
+	s.pin("conv-1", "ollama", "node-a", false)
+	s.pin("conv-1", "lmstudio", "node-b", false)
 	v, err := s.get("conv-1")
 	if err != nil {
 		t.Fatalf("get after begin: %v", err)

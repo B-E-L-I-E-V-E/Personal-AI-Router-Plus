@@ -424,6 +424,10 @@ type Proxy struct {
 	// for the same reason as reservations: a session may use more than one
 	// engine, and its ID must mean one conversation whichever facade sees it.
 	sessions *sessionStore
+
+	// capacity holds the user's per-model context settings for this node and
+	// caches what the local engines report.
+	capacity *capacityStore
 }
 
 // NewProxy builds a facade-less process host. Facades arrive via
@@ -434,6 +438,7 @@ func NewProxy(codec *Codec) *Proxy {
 		runID:    newRunID(),
 		activity: nodeactivity.NewReporter(activityReportInterval),
 		sessions: newSessionStore(),
+		capacity: newCapacityStore(),
 	}
 }
 
@@ -840,6 +845,10 @@ type candidate struct {
 	id       string
 	url      *url.URL
 	peerUUID string
+	// local is this node's own engine, reached through its local backend.
+	// Context capacity is reported per node, so a session served here counts
+	// against this node's capacity.
+	local bool
 }
 
 // candidateTransport returns the reverse-proxy / model-list transport for a
@@ -1255,6 +1264,17 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+	}
+
+	// A session's context size comes from the engine's own token counts. An
+	// OpenAI-compatible stream reports them only when asked, so a streamed
+	// session request that did not choose either way is asked to. The engine
+	// then appends one standard usage chunk with empty choices. Requests outside
+	// a session are forwarded exactly as sent.
+	if sessionID != "" && isOpenAIInferencePath(r.URL.Path) && requestStreamsOpenAI(bodyBytes) {
+		bodyBytes = withStreamUsage(bodyBytes)
+		r.ContentLength = int64(len(bodyBytes))
+		r.Header.Del("Content-Length")
 	}
 
 	candidates := f.resolveCandidates(routingModel)
@@ -1872,6 +1892,14 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				if peeked != nil {
 					resp.Body = peeked
 				}
+				// Read the engine's token counts as the reply streams through,
+				// for the session's context size. Only the numbers are kept.
+				if sessionID != "" && isInf {
+					engine := f.profile.Name
+					resp.Body = newUsageReader(resp.Body, resp.Header.Get("Content-Type"), func(u tokenUsage) {
+						p.sessions.recordUsage(sessionID, engine, model, u)
+					})
+				}
 				// Committing to this candidate — body stream is about to begin.
 				ttfbMs = time.Since(start).Milliseconds()
 				servedNodeID = cand.id
@@ -1904,7 +1932,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 					// The node that committed is the one holding this turn in
 					// its KV cache, so the session's next turn goes there.
 					if sessionID != "" {
-						p.sessions.pin(sessionID, f.profile.Name, cand.id)
+						p.sessions.pin(sessionID, f.profile.Name, cand.id, cand.local)
 					}
 					// Record the commit here, not just after the loop: a copy
 					// error aborts this handler by panic, and finalize needs to
@@ -2108,8 +2136,10 @@ func (f *facade) resolveCandidates(model string) []candidate {
 			return
 		}
 		peerUUID := ""
+		local := false
 		switch {
 		case isSelfTarget(u, selfPort) || isAnyAliasSelfTarget(u, aliasBoundAddresses):
+			local = true
 			// Our own advertised endpoint (ol now points at this proxy). Serve
 			// it from the explicit local backend — the loopback engine — rather
 			// than dialing our own mTLS ingress, which would recurse. Ranking
@@ -2157,6 +2187,7 @@ func (f *facade) resolveCandidates(model string) []candidate {
 			id:       n.ID,
 			url:      u,
 			peerUUID: peerUUID,
+			local:    local,
 		})
 	}
 

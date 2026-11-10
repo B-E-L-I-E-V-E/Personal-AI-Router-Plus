@@ -174,6 +174,21 @@ expiring a session removes it completely; reusing the ID afterwards returns
 Calls that change a session must send the owner's `X-PAIR-Agent-ID`. Inference
 responses carry `X-PAIR-Session-Expires-At`. See `spec.md` §5.11.
 
+**Context capacity.** PAIR records how many tokens each session occupies, from
+the counts the engine returns, and reports each model's capacity on this node:
+
+```bash
+curl -s http://127.0.0.1:11434/pair/v1/capacity
+curl -s -X PUT http://127.0.0.1:11434/pair/v1/capacity \
+  -d '{"engine":"ollama","model":"qwen3:0.6b","contextTokens":262144,"maxSessions":6}'
+```
+
+The setting divides the pool among sessions (262144 ÷ 6 gives each 43008
+tokens) and is saved in `context-capacity.json`. Where nothing is set, the
+local engine's own report fills in what it can. For streamed OpenAI-compatible
+session requests the proxy adds `stream_options.include_usage` so the engine
+reports counts. See `spec.md` §5.12.
+
 **Persisted port.** A port chosen at runtime via `set-port` is saved to the
 per-user data dir (`%LocalAppData%\Nvidia Corporation\Personal AI Router` on
 Windows, `~/.config/Nvidia Corporation/Personal AI Router` on Linux) and

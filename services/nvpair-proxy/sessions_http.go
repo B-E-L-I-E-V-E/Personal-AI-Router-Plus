@@ -34,6 +34,17 @@ type sessionJSON struct {
 	InFlight           int               `json:"inFlight"`
 	Requests           uint64            `json:"requests"`
 	Nodes              map[string]string `json:"nodes"`
+	// Context is the conversation's size after its last completed turn, per
+	// engine, as the engine counted it. Absent until a turn reports usage.
+	Context map[string]sessionContextJSON `json:"context"`
+}
+
+type sessionContextJSON struct {
+	Model            string `json:"model"`
+	Tokens           int64  `json:"tokens"`
+	PromptTokens     int64  `json:"promptTokens"`
+	CompletionTokens int64  `json:"completionTokens"`
+	UpdatedAt        string `json:"updatedAt"`
 }
 
 func toSessionJSON(v sessionView) sessionJSON {
@@ -41,6 +52,13 @@ func toSessionJSON(v sessionView) sessionJSON {
 	keepalive := int(v.IdleTimeout.Seconds()) / 3
 	if keepalive < 1 {
 		keepalive = 1
+	}
+	ctxs := make(map[string]sessionContextJSON, len(v.Context))
+	for engine, c := range v.Context {
+		ctxs[engine] = sessionContextJSON{
+			Model: c.Model, Tokens: c.Tokens, PromptTokens: c.Prompt, CompletionTokens: c.Completion,
+			UpdatedAt: c.Updated.UTC().Format(time.RFC3339Nano),
+		}
 	}
 	return sessionJSON{
 		SessionID:          v.ID,
@@ -53,6 +71,7 @@ func toSessionJSON(v sessionView) sessionJSON {
 		InFlight:           v.InFlight,
 		Requests:           v.Requests,
 		Nodes:              v.Nodes,
+		Context:            ctxs,
 	}
 }
 

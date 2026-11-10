@@ -137,10 +137,27 @@ type session struct {
 	// nodes is the node that last served this session, per engine facade. A
 	// session can use more than one engine; each engine's KV cache is its own.
 	nodes map[string]string
+	// local records, per engine, whether that node is this one.
+	local map[string]bool
+	// context is the conversation's size after its last completed turn, per
+	// engine, as the engine itself counted it.
+	context map[string]sessionContext
 	// inFlight holds a cancel function per request being served. Its size is
 	// what keeps the session alive while it waits on the model, and ending the
 	// session cancels every entry.
 	inFlight map[uint64]context.CancelFunc
+}
+
+// sessionContext is how much of a model's context window a session occupied
+// after its last completed turn on one engine. Tokens is prompt plus
+// completion: the client resends the whole conversation each turn, so that is
+// what the next turn starts from.
+type sessionContext struct {
+	Model      string
+	Tokens     int64
+	Prompt     int64
+	Completion int64
+	Updated    time.Time
 }
 
 // sessionView is a copy of a session's fields, safe to read without the lock.
@@ -154,6 +171,7 @@ type sessionView struct {
 	InFlight    int
 	Requests    uint64
 	Nodes       map[string]string
+	Context     map[string]sessionContext
 }
 
 type sessionStore struct {
@@ -304,7 +322,8 @@ func (s *sessionStore) createLocked(id, agentID string, idle time.Duration, now 
 	}
 	sess := &session{
 		id: id, agentID: agentID, created: now, lastActive: now, idleTimeout: idle,
-		nodes: make(map[string]string), inFlight: make(map[uint64]context.CancelFunc),
+		nodes: make(map[string]string), local: make(map[string]bool), context: make(map[string]sessionContext),
+		inFlight: make(map[uint64]context.CancelFunc),
 	}
 	s.sessions[id] = sess
 	return sess, nil
@@ -430,8 +449,9 @@ func (s *sessionStore) remove(id, agentID string) error {
 	return nil
 }
 
-// pin records the node that served a session on one engine.
-func (s *sessionStore) pin(id, engine, nodeID string) {
+// pin records the node that served a session on one engine, and whether that
+// node is this one.
+func (s *sessionStore) pin(id, engine, nodeID string, local bool) {
 	if nodeID == "" {
 		return
 	}
@@ -439,6 +459,51 @@ func (s *sessionStore) pin(id, engine, nodeID string) {
 	defer s.mu.Unlock()
 	if sess, ok := s.sessions[id]; ok {
 		sess.nodes[engine] = nodeID
+		sess.local[engine] = local
+	}
+}
+
+// localUsage is the live sessions this node serves for one engine and model,
+// with the context they occupy.
+type localUsage struct {
+	Sessions int
+	Tokens   int64
+}
+
+// localUsageByModel sums, per engine and model, the live sessions whose last
+// turn on that engine ran on this node.
+func (s *sessionStore) localUsageByModel() map[capacityKey]localUsage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	out := make(map[capacityKey]localUsage)
+	for _, sess := range s.sessions {
+		if s.expiredLocked(sess, now) {
+			continue
+		}
+		for engine, c := range sess.context {
+			if !sess.local[engine] {
+				continue
+			}
+			k := capacityKey{Engine: engine, Model: c.Model}
+			u := out[k]
+			u.Sessions++
+			u.Tokens += c.Tokens
+			out[k] = u
+		}
+	}
+	return out
+}
+
+// recordUsage stores the token counts an engine reported for a session's
+// completed turn. Counts are all the store keeps; never any text.
+func (s *sessionStore) recordUsage(id, engine, model string, u tokenUsage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sess, ok := s.sessions[id]; ok {
+		sess.context[engine] = sessionContext{
+			Model: model, Tokens: u.total(), Prompt: u.Prompt, Completion: u.Completion, Updated: s.now(),
+		}
 	}
 }
 
@@ -512,6 +577,10 @@ func (s *sessionStore) viewLocked(sess *session) sessionView {
 	for k, v := range sess.nodes {
 		nodes[k] = v
 	}
+	ctxs := make(map[string]sessionContext, len(sess.context))
+	for k, v := range sess.context {
+		ctxs[k] = v
+	}
 	idle := sess.idleTimeout
 	if idle == 0 {
 		idle = s.cfg.IdleTimeout
@@ -526,6 +595,7 @@ func (s *sessionStore) viewLocked(sess *session) sessionView {
 		InFlight:    len(sess.inFlight),
 		Requests:    sess.requests,
 		Nodes:       nodes,
+		Context:     ctxs,
 	}
 }
 
