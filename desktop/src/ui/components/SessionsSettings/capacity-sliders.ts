@@ -78,3 +78,42 @@ export function shortTokens(n: number): string {
     if (n >= 1024) return `${Math.round(n / 1024)}K`
     return String(n)
 }
+
+// Rough text sizes per token for modern tokenizers (Llama 3, Qwen, Gemma,
+// GPT-style BPE): English prose averages about 4 characters or 0.75 words a
+// token, source code about 3 characters. A single-spaced page is about 500
+// words.
+const CHARS_PER_TOKEN = 4
+const CODE_CHARS_PER_TOKEN = 3
+const WORDS_PER_TOKEN = 0.75
+const WORDS_PER_PAGE = 500
+
+/** Round to two significant figures, so estimates do not look exact. */
+function roughly(n: number): number {
+    if (n < 100) return Math.round(n)
+    const scale = 10 ** (Math.floor(Math.log10(n)) - 1)
+    return Math.round(n / scale) * scale
+}
+
+/** About how much text a window of tokens holds. */
+export function approxText(tokens: number): {
+    characters: number
+    words: number
+    pages: number
+    codeCharacters: number
+} {
+    return {
+        characters: roughly(tokens * CHARS_PER_TOKEN),
+        words: roughly(tokens * WORDS_PER_TOKEN),
+        pages: roughly((tokens * WORDS_PER_TOKEN) / WORDS_PER_PAGE),
+        codeCharacters: roughly(tokens * CODE_CHARS_PER_TOKEN)
+    }
+}
+
+/** One line describing approxText for people. */
+export function approxTextLine(tokens: number): string {
+    if (tokens <= 0) return ''
+    const t = approxText(tokens)
+    const pages = t.pages >= 1 ? `, ${t.pages.toLocaleString()} pages` : ''
+    return `About ${t.characters.toLocaleString()} characters of English (${t.words.toLocaleString()} words${pages}) or ${t.codeCharacters.toLocaleString()} characters of code per conversation, counting the model's replies.`
+}

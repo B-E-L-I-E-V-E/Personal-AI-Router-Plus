@@ -4,6 +4,8 @@
 import { describe, expect, it } from 'vitest'
 import type { CapacityPlan } from '@/shared/types/sessions'
 import {
+    approxText,
+    approxTextLine,
     memoryUse,
     nearestStop,
     sessionsSliderMax,
@@ -105,5 +107,22 @@ describe('memory calculator', () => {
 
     it('treats Apple silicon memory as one shared pool', () => {
         expect(memoryUse(plan({ unified: true }), 1).shared).toBe(true)
+    })
+})
+
+describe('text estimate', () => {
+    it('turns a window into rough characters, words and pages', () => {
+        expect(approxText(40960)).toEqual({
+            characters: 160000,
+            words: 31000,
+            pages: 61,
+            codeCharacters: 120000
+        })
+        expect(approxText(2048).pages).toBe(3)
+    })
+
+    it('describes it in one line', () => {
+        expect(approxTextLine(40960)).toContain('160,000 characters of English')
+        expect(approxTextLine(0)).toBe('')
     })
 })

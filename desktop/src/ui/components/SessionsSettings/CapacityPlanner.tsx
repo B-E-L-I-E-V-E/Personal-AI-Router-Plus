@@ -20,6 +20,7 @@ import type {
 } from '@/shared/types/sessions'
 import getErrorString from '@/shared/utils/get-error-string'
 import {
+    approxTextLine,
     MAX_SESSIONS,
     memoryUse,
     MIN_WINDOW_TOKENS,
@@ -291,6 +292,9 @@ export default function CapacityPlanner({
                         attributes={{ SliderInput: { 'aria-label': 'Context window per session' } }}
                     />
                 </SliderTone>
+                <Text kind="body/regular/sm" className="text-subtle-color">
+                    {approxTextLine(stops[windowIndex])}
+                </Text>
             </Stack>
 
             <Stack gap="1">
