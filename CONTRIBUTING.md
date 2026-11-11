@@ -289,9 +289,11 @@ clear description is what makes a change show up there correctly.
 Anyone may submit a pull request. Follow this checklist:
 
 1. Fork the repository.
-2. Create a focused branch from `develop` in your fork, and open the pull
-   request against `develop`. That is the integration branch; `main` receives
-   `develop` periodically as a release cut.
+2. Create a focused branch from `main`, and open the pull request against
+   `main`. In PAIR Plus, `main` is both the integration and the release branch.
+   Upstream NVIDIA PAIR uses `develop` for integration and cuts releases to
+   `main`. Merge pull requests one at a time, so each merge applies exactly one
+   release-intent block.
 3. Explain the problem and observable desired outcome.
 4. State what is intentionally in and out of scope.
 5. Add or update tests and documentation.
@@ -373,7 +375,7 @@ sign-off is rejected. It usually means the commit was authored under a
 different name or address than the one configured now.
 
 If you forget the flag, `git commit --amend -s` fixes the most recent commit and
-`git rebase --signoff develop` fixes every commit on your branch. Both rewrite
+`git rebase --signoff main` fixes every commit on your branch. Both rewrite
 history, so force-push the branch in your fork afterward.
 
 This requirement is `--signoff`, which records the certification below. It is

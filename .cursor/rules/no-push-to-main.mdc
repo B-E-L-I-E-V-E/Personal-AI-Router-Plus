@@ -10,7 +10,8 @@ SPDX-License-Identifier: Apache-2.0
 # Never push to a shared branch
 
 Agents must **never** push directly to `develop` or `main` on `origin`.
-`develop` is the integration branch; `main` carries released source.
+In PAIR Plus, `main` is both the integration and the release branch (upstream
+NVIDIA PAIR integrates on `develop` and releases from `main`).
 
 ## Required workflow
 
@@ -20,7 +21,7 @@ Agents must **never** push directly to `develop` or `main` on `origin`.
    sign-off trailer (see `commit-sign-off.mdc`).
 3. Push the **feature branch** only: `git push -u origin HEAD` or
    `git push -u origin <branch-name>`.
-4. Open a **pull request** into `develop`. Do not merge unless the user
+4. Open a **pull request** into `main`. Do not merge unless the user
    explicitly asks.
 
 ## Explicit bans

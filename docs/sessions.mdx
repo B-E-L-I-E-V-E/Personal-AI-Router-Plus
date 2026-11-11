@@ -1,0 +1,168 @@
+---
+title: Sessions and Context Capacity
+description: Correlate requests, keep a conversation on one node, bound each session's context, and limit how many sessions a model serves at once in PAIR Plus.
+---
+
+{/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+*/}
+
+PAIR Plus adds four things to PAIR's routing: a **request ID** on every
+request, **sessions** that keep a conversation on one node, **agent
+ownership** of a session, and **context capacity**, which limits how many
+sessions a model serves at once and how much context each may use. Everything
+here is optional. A client that sends none of these headers is routed exactly
+as in PAIR 1.0.
+
+The engines PAIR fronts are stateless at the API level: the client resends the
+whole conversation every turn. PAIR Plus does not store conversations either. It
+holds only IDs, timestamps, the node serving each session, and the token counts
+the engine itself reports.
+
+## Request IDs
+
+Every response carries exactly one `X-Request-ID`.
+
+- Send your own (1–128 characters of letters, digits, `.`, `_`, `:`, `-`) to
+  match a response to your logs.
+- Otherwise PAIR creates a random ID.
+- A value outside that format is replaced, never refused.
+
+The same ID is forwarded to the engine and recorded on the job shown in
+**Jobs**, so one value ties together your client, PAIR, and the node that
+served the request.
+
+## Sessions and Agents
+
+Send the same `X-PAIR-Session-ID` on every turn of a conversation. Optionally
+name the agent that owns it with `X-PAIR-Agent-ID`.
+
+```bash
+curl http://127.0.0.1:11434/api/chat \
+  -H 'X-PAIR-Session-ID: research-42' \
+  -H 'X-PAIR-Agent-ID: planner' \
+  -d '{"model":"qwen3:0.6b","stream":false,"messages":[{"role":"user","content":"Hi"}]}'
+```
+
+With the OpenAI Python SDK, pass the headers once on the client:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:1234/v1",
+    api_key="unused",
+    default_headers={"X-PAIR-Session-ID": "research-42", "X-PAIR-Agent-ID": "planner"},
+)
+```
+
+- **The first request creates the session.** Its agent, or none, owns it.
+- **Each turn goes back to the node that served the last one**, so the engine
+  reuses the prompt it already evaluated instead of recomputing it. If that node
+  no longer has the model or fails, the turn goes elsewhere and the session
+  follows it. A manual node selection still wins.
+- **Ownership is checked.** A request naming a different agent, or none when an
+  owner exists, gets `409`. A malformed header gets `400`. Loopback has no
+  authentication, so this guards against two agents colliding on one ID, not
+  against a hostile program on the same machine.
+
+## How Long a Session Lasts
+
+A session ends after it has been **idle** for its timeout: **10 minutes** by
+default, adjustable from 1 to 60 minutes.
+
+These keep a session open:
+
+- any request for it;
+- `POST /pair/v1/sessions/{id}/keepalive`;
+- a request still running or waiting for a slot. A session never expires in the
+  middle of a long generation.
+
+When a session ends, by timeout or by `DELETE`, PAIR removes it completely,
+cancels any of its requests still running, and frees its capacity. Reusing its
+ID afterwards returns `410 Gone`, so an agent knows its session is over instead
+of silently starting a new one under the same name. Each response carries
+`X-PAIR-Session-Expires-At`.
+
+## Context Capacity
+
+PAIR Plus reads the token counts each engine reports (Ollama's
+`prompt_eval_count` and `eval_count`, OpenAI-style `usage`, Anthropic `usage`)
+and records each session's size: prompt plus completion after its last turn.
+For a streamed OpenAI-compatible **session** request, PAIR asks the engine to
+include usage (`stream_options.include_usage`), which adds one standard usage
+chunk at the end of the stream. Requests outside a session are forwarded
+exactly as sent.
+
+For each model on a node you can set:
+
+| Setting | Meaning |
+| --- | --- |
+| **Context pool** | Total context the model can hold across all its sessions at once |
+| **Max sessions** | How many sessions may share it |
+| **Share per session** | Pool ÷ sessions, rounded down to a multiple of 1024. For example 262,144 ÷ 6 = 43,008 |
+
+Where you set nothing, PAIR fills in what the local engine reports: Ollama's
+per-request window, LM Studio's context length and parallel count, llama.cpp's
+per-slot context and slot count. A value the engine does not report stays
+unknown rather than guessed.
+
+### When Capacity Runs Out
+
+A session takes one of a model's slots on the node serving it and keeps it until
+it ends, expires, or moves.
+
+- **Every slot held.** A new session's request goes to another node with the
+  model. With no other node, it waits in line for a slot (60 seconds by default,
+  up to 5 minutes), then gets `503` with `Retry-After`.
+- **Session too large.** When a session's measured context has reached its share
+  and the next request is not shorter, it gets `400`, naming both numbers.
+  Shorten or summarize the conversation and send it again; a shorter request is
+  accepted and measured afresh.
+
+Responses carry `X-PAIR-Context-Session-Tokens` (the session's size before this
+turn), `X-PAIR-Context-Session-Limit` (its share, when this node served it), and
+`X-PAIR-Queue-Wait-Ms` (time spent waiting for a slot).
+
+## Settings → Sessions
+
+The desktop app's **Settings → Sessions** tab shows and changes all of this:
+
+- **Session policy:** idle timeout, and how long a request may wait for a slot.
+- **Context capacity on this node:** each model's pool and session count, with
+  each session's share shown as you type, and how many slots are held or waited
+  for.
+- **Active sessions:** with an **End** button.
+
+The router saves these itself, so they survive restarts.
+
+## Session API
+
+Every PAIR endpoint port answers these, from this machine only:
+
+| Call | Effect |
+| --- | --- |
+| `POST /pair/v1/sessions` | Create. Optional body `{"sessionId","agentId","idleTimeoutSeconds"}` |
+| `GET /pair/v1/sessions[?agentId=]` | List live sessions |
+| `GET /pair/v1/sessions/{id}` | Read one, including `expiresAt`, `context`, and a suggested `keepaliveIntervalSeconds` |
+| `POST /pair/v1/sessions/{id}/keepalive` | Restart the idle clock |
+| `PATCH /pair/v1/sessions/{id}` | Change `idleTimeoutSeconds` (60–3600) |
+| `DELETE /pair/v1/sessions/{id}` | End now |
+| `GET /pair/v1/capacity` | Each model's capacity and usage on this node |
+| `PUT /pair/v1/capacity` | `{"engine","model","contextTokens","maxSessions"}`, or `{"engine","model","clear":true}` |
+
+Calls that change a session must send the owner's `X-PAIR-Agent-ID`. The
+OpenAPI reference lists the full request and response shapes.
+
+## Across Nodes
+
+Every PAIR Plus node enforces its own capacity, including for sessions other
+nodes send it. A full node waits briefly for a slot, then answers `503`, and the
+sending node tries the next one. When a session moves to another node or ends,
+the node it left frees the slot at once.
+
+PAIR Plus and PAIR 1.0 nodes work together in one cluster. The extra headers
+pass through a 1.0 node to its engine, which ignores them, so requests are
+served normally. A 1.0 node does not enforce capacity, and a client that talks
+to a 1.0 node directly gets 1.0 behavior.

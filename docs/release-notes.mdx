@@ -12,6 +12,40 @@ steps some machines need.
 Notes for releases before 1.0.0 are on
 [GitHub Releases](https://github.com/NVIDIA/Personal-AI-Router/releases).
 
+## PAIR Plus 1.1.0
+
+The first release of PAIR Plus, an independent fork of PAIR 1.0.0. Download it
+from the
+[PAIR Plus releases page](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Pluss/releases).
+
+### What's New
+
+- **Request IDs.** Every response carries an `X-Request-ID`, yours or one PAIR
+  creates, also recorded on the job and the logs.
+- **Sessions and agents.** Send `X-PAIR-Session-ID` on each turn and each one
+  goes back to the node that served the last, so the engine reuses its cached
+  prompt. `X-PAIR-Agent-ID` names the agent that owns the session.
+- **Session lifetime.** A session ends after 10 idle minutes by default (1 to
+  60), stays open for any request, a keepalive, or a request still running, and
+  can be ended at once. Ending it cancels its running requests.
+- **Context capacity.** Divide a model's context among a set number of sessions.
+  New sessions go to another node or wait when a model is full, and a session
+  that outgrows its share is asked to shorten its conversation. Each node
+  enforces its own capacity.
+- **Settings → Sessions.** Edit the session policy and each model's capacity,
+  and see or end live sessions.
+- **Signed macOS builds and PAIR Plus updates.** macOS builds are signed with a
+  Developer ID and notarized, and every build updates from PAIR Plus releases.
+
+Refer to [Sessions and Context Capacity](sessions.mdx) for details.
+
+### Compatibility
+
+PAIR Plus nodes and PAIR 1.0 nodes work together in one cluster. A 1.0 node
+serves requests from a PAIR Plus node normally but does not enforce context
+capacity. Moving a machine to PAIR Plus is covered in the
+[Upgrade Guide](upgrade-guide.mdx#moving-a-machine-to-pair-plus).
+
 ## 1.0.0
 
 This release brings llama.cpp and RTX Spark support to PAIR, and establishes
