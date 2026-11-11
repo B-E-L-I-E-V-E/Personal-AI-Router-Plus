@@ -12,7 +12,7 @@ import { resolveShellView } from '@/ui/utils/shell-view'
 import { useClusterInvitationsStore } from '@/ui/stores/cluster-invitations.store'
 import { useOverviewNodes } from '@/ui/hooks/useOverviewNodes'
 import TrayNodeRow from './TrayNodeRow'
-import { APP_DISPLAY_NAME } from '@/shared/constants/app'
+import { APP_TITLE } from '@/shared/constants/app'
 
 export default function TrayApp() {
     const nodes = useOverviewNodes()
@@ -75,7 +75,7 @@ export default function TrayApp() {
                 style={{ borderBottom: '1px solid var(--color-translucent-white-100)' }}
             >
                 <Text kind="body/bold/md" className="truncate mt-1">
-                    {APP_DISPLAY_NAME}
+                    {APP_TITLE}
                 </Text>
                 <Button
                     kind="tertiary"
@@ -103,7 +103,7 @@ export default function TrayApp() {
                             className="cursor-pointer"
                             onClick={() => void window.windowApi.window.openOverview()}
                         >
-                            Open {APP_DISPLAY_NAME}
+                            Open {APP_TITLE}
                         </Button>
                     </Flex>
                 ) : shellView === 'loading' ? (

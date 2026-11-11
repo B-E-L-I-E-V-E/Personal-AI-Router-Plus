@@ -23,7 +23,7 @@ import ServiceStoppedNotice from './ServiceStoppedNotice'
 import { useServiceStatusStore } from '@/ui/stores/service-status.store'
 import { resolveShellView } from '@/ui/utils/shell-view'
 import { useOverviewCommands } from '@/ui/hooks/useOverviewCommands'
-import { APP_DISPLAY_NAME } from '@/shared/constants/app'
+import { APP_TITLE } from '@/shared/constants/app'
 import { getWelcomeEngineCandidates } from '@/ui/constants/welcome'
 import { hasWelcomeEngineStatuses } from '@/ui/utils/welcome-install'
 import { useOverviewUiStore } from '@/ui/stores/overview-ui.store'
@@ -104,7 +104,7 @@ function MainApp() {
     return (
         <Stack className="overflow-hidden bg-black h-full w-full">
             <div className="absolute top-0 right-0 w-full h-full app-bg"></div>
-            <AppBar title={APP_DISPLAY_NAME} />
+            <AppBar title={APP_TITLE} />
             <ErrorModal />
 
             <Stack className="flex-1 min-h-0 min-w-0 grow px-4 relative">
