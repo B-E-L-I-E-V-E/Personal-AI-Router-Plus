@@ -82,8 +82,11 @@ export function shortTokens(n: number): string {
 // Rough text sizes per token for modern tokenizers (Llama 3, Qwen, Gemma,
 // GPT-style BPE): English prose averages about 4 characters or 0.75 words a
 // token, source code about 3 characters. A single-spaced page is about 500
-// words.
+// words. The worst case is about one character per token: measured with
+// qwen3, UUIDs and hashes take 1.2 characters a token, base64 1.3 and
+// Chinese 1.7 (emoji 0.9, more than a token each).
 const CHARS_PER_TOKEN = 4
+const WORST_CHARS_PER_TOKEN = 1
 const CODE_CHARS_PER_TOKEN = 3
 const WORDS_PER_TOKEN = 0.75
 const WORDS_PER_PAGE = 500
@@ -95,18 +98,28 @@ function roughly(n: number): number {
     return Math.round(n / scale) * scale
 }
 
+/** Two significant figures, rounded down: a worst case must not overstate. */
+function roughlyDown(n: number): number {
+    if (n < 100) return Math.floor(n)
+    const scale = 10 ** (Math.floor(Math.log10(n)) - 1)
+    return Math.floor(n / scale) * scale
+}
+
 /** About how much text a window of tokens holds. */
 export function approxText(tokens: number): {
     characters: number
     words: number
     pages: number
     codeCharacters: number
+    /** Hashes, IDs, encoded data: about a character per token. */
+    worstCharacters: number
 } {
     return {
         characters: roughly(tokens * CHARS_PER_TOKEN),
         words: roughly(tokens * WORDS_PER_TOKEN),
         pages: roughly((tokens * WORDS_PER_TOKEN) / WORDS_PER_PAGE),
-        codeCharacters: roughly(tokens * CODE_CHARS_PER_TOKEN)
+        codeCharacters: roughly(tokens * CODE_CHARS_PER_TOKEN),
+        worstCharacters: roughlyDown(tokens * WORST_CHARS_PER_TOKEN)
     }
 }
 
@@ -115,5 +128,5 @@ export function approxTextLine(tokens: number): string {
     if (tokens <= 0) return ''
     const t = approxText(tokens)
     const pages = t.pages >= 1 ? `, ${t.pages.toLocaleString()} pages` : ''
-    return `About ${t.characters.toLocaleString()} characters of English (${t.words.toLocaleString()} words${pages}) or ${t.codeCharacters.toLocaleString()} characters of code per conversation, counting the model's replies.`
+    return `About ${t.characters.toLocaleString()} characters of English (${t.words.toLocaleString()} words${pages}) or ${t.codeCharacters.toLocaleString()} characters of code per conversation, counting the model's replies. Worst case ${t.worstCharacters.toLocaleString()} characters: hashes, IDs, encoded data and Chinese or Japanese take about a token per character, emoji more.`
 }

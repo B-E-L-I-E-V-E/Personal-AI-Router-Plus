@@ -116,13 +116,15 @@ describe('text estimate', () => {
             characters: 160000,
             words: 31000,
             pages: 61,
-            codeCharacters: 120000
+            codeCharacters: 120000,
+            worstCharacters: 40000
         })
         expect(approxText(2048).pages).toBe(3)
     })
 
     it('describes it in one line', () => {
         expect(approxTextLine(40960)).toContain('160,000 characters of English')
+        expect(approxTextLine(40960)).toContain('Worst case 40,000 characters')
         expect(approxTextLine(0)).toBe('')
     })
 })
