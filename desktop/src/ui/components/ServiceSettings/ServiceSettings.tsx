@@ -23,7 +23,12 @@ import getErrorString from '@/shared/utils/get-error-string'
 import { DismissibleTooltip } from '@/ui/components/DismissibleTooltip/DismissibleTooltip'
 import { isElectron } from '@/ui/api/bootstrap'
 import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
-import ApplicationUpdatesCard from './UpdatesSettings'
+// TODO(updates): PAIR Plus has no update feed yet, so the updates card is
+// hidden. Restore this import and <ApplicationUpdatesCard /> below once the
+// fork publishes signed releases with an electron-builder update feed (GitHub
+// Releases on B-E-L-I-E-V-E/Personal-AI-Router-Pluss, as NVIDIA does on its
+// own repository). See dead-code-omissions.json.
+// import ApplicationUpdatesCard from './UpdatesSettings'
 import VersionsCard from './VersionsCard'
 import WipeAppDataCard from './WipeAppDataCard'
 import { useOverviewUiStore } from '@/ui/stores/overview-ui.store'
@@ -378,7 +383,8 @@ export default function ServiceSettings() {
                     </Stack>
                 </div>
 
-                <ApplicationUpdatesCard />
+                {/* TODO(updates): restore when PAIR Plus has an update feed. */}
+                {/* <ApplicationUpdatesCard /> */}
             </Flex>
 
             <VersionsCard />
