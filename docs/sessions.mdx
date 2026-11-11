@@ -139,8 +139,8 @@ unknown rather than guessed.
 
 PAIR works out how many sessions fit in this node's GPU memory. On the
 **Overview**, open a model's menu (**…**) in its engine's model list and select
-**Context & sessions…**; **Change…** on **Settings → Sessions** opens the same
-dialog. It is offered for this node's models, since PAIR measures the memory of
+**Context & sessions…**. This dialog is the one place a model's capacity is
+set. It is offered for this node's models, since PAIR measures the memory of
 the node it runs on. For Ollama, the window and session count apply to every
 model Ollama runs, so planning one Ollama model replaces another's plan.
 
@@ -217,7 +217,11 @@ engine it did not install, such as your own Ollama; it says so instead.
 
 **Reload automatically when idle** (on by default) applies a saved plan by
 itself once the node has had no sessions and no requests for two checks in a
-row, about a minute. Turn it off to apply plans only when you press **Apply**.
+row, about a minute. Turn it off to apply plans only when you press **Save and
+apply now** or **Apply now**. The switch is in the dialog and covers every model
+on the node. A saved plan's status shows at the top of the dialog, with **Apply
+now** while it is pending and **Remove plan**, which also lifts the limit the
+plan set.
 
 ### When Capacity Runs Out
 
@@ -239,14 +243,14 @@ turn), `X-PAIR-Context-Session-Limit` (its share, when this node served it), and
 
 ## Settings → Sessions
 
-The desktop app's **Settings → Sessions** tab shows and changes all of this:
+The desktop app's **Settings → Sessions** tab holds what is not per model:
 
 - **Session policy:** idle timeout, and how long a request may wait for a slot.
-- **Context capacity on this node:** every model PAIR limits or has a plan
-  for: its sessions and window now, its plan, how many slots are held or waited
-  for, and **Change…**, **Apply**, **Remove plan** and **Clear limit**. The
-  **Reload automatically when idle** switch is here too.
-- **Active sessions:** with an **End** button.
+- **Active sessions:** each with its size, the room its next post has, and an
+  **End** button.
+
+Each model's context window, room for the reply and sessions at once are set
+in its menu, as described in Plan from GPU Memory.
 
 The router saves these itself, so they survive restarts.
 
