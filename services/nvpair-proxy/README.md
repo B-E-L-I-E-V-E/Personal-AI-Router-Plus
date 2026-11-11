@@ -70,6 +70,8 @@ parameter, because one flag cannot carry multiple engines' plans.
 | `--session-idle-timeout` | `10m` | Default sliding idle timeout for sessions, from `1m` to `60m`. Changeable at runtime with `sessions/configure`. |
 | `--session-max-lifetime` | `0` *(off)* | Maximum total length of a session, even while it is kept alive. |
 | `--max-sessions` | `4096` | Maximum number of live sessions. |
+| `--session-queue-timeout` | `1m` | How long a session request may wait for a context slot on this node, `0` to `5m`; `0` refuses at once. Changeable at runtime with `sessions/configure`. |
+| `--session-max-queued` | `64` | Maximum session requests waiting for context slots, per model. |
 | `--version` | | Print version and exit |
 
 ### `facade/enable` parameters
@@ -188,6 +190,14 @@ tokens) and is saved in `context-capacity.json`. Where nothing is set, the
 local engine's own report fills in what it can. For streamed OpenAI-compatible
 session requests the proxy adds `stream_options.include_usage` so the engine
 reports counts. See `spec.md` §5.12.
+
+**Admission.** With a session count set for a model, each session holds one of
+its slots on this node. When they are all held, a new session's request goes to
+another node with the model, or waits here up to 60 seconds for a slot (`503`
+with `Retry-After` after that). A session whose measured context has reached
+its share gets `400` until it sends a shorter, compacted conversation.
+Responses carry `X-PAIR-Context-Session-Tokens`, `X-PAIR-Context-Session-Limit`
+and `X-PAIR-Queue-Wait-Ms`. See `spec.md` §5.13.
 
 **Persisted port.** A port chosen at runtime via `set-port` is saved to the
 per-user data dir (`%LocalAppData%\Nvidia Corporation\Personal AI Router` on

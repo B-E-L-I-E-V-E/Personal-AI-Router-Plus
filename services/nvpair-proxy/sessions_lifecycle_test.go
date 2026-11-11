@@ -6,6 +6,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -226,8 +227,10 @@ func TestApplySessionConfigParams(t *testing.T) {
 	five := base
 	five.IdleTimeout = 5 * time.Minute
 	apply("changes only the idle timeout", `{"idleTimeoutSeconds":300}`, five, false)
-	all := sessionConfig{IdleTimeout: 20 * time.Minute, MaxLifetime: 2 * time.Hour, MaxSessions: 12}
-	apply("changes every field", `{"idleTimeoutSeconds":1200,"maxLifetimeSeconds":7200,"maxSessions":12}`, all, false)
+	all := sessionConfig{IdleTimeout: 20 * time.Minute, MaxLifetime: 2 * time.Hour, MaxSessions: 12,
+		QueueTimeout: 30 * time.Second, MaxQueued: 8}
+	apply("changes every field", `{"idleTimeoutSeconds":1200,"maxLifetimeSeconds":7200,"maxSessions":12,"queueTimeoutSeconds":30,"maxQueued":8}`, all, false)
+	apply("rejects a queue timeout beyond the maximum", `{"queueTimeoutSeconds":3600}`, sessionConfig{}, true)
 	apply("empty params keep the policy", `{}`, base, false)
 	apply("rejects an idle timeout out of range", `{"idleTimeoutSeconds":10}`, sessionConfig{}, true)
 	apply("rejects zero sessions", `{"maxSessions":0}`, sessionConfig{}, true)
@@ -478,4 +481,29 @@ func TestSessionsAPI_DeleteCancelsInFlightInference(t *testing.T) {
 			t.Fatal("the ended session's request was not reported as cancelled")
 		}
 	})
+}
+
+// The proxy's startup policy must keep every default its flags do not set.
+// Building it field by field once left the context-slot queue at zero, so
+// every full node refused at once instead of queueing.
+func TestRegisterSessionFlags(t *testing.T) {
+	parse := func(name string, args []string, want sessionConfig) {
+		t.Run(name, func(t *testing.T) {
+			fs := flag.NewFlagSet("proxy", flag.ContinueOnError)
+			cfg := registerSessionFlags(fs)
+			if err := fs.Parse(args); err != nil {
+				t.Fatalf("parse %v: %v", args, err)
+			}
+			if got := cfg(); got != want {
+				t.Fatalf("config = %+v, want %+v", got, want)
+			}
+		})
+	}
+	parse("no flags is the default policy", nil, defaultSessionConfig())
+	tuned := defaultSessionConfig()
+	tuned.IdleTimeout = 5 * time.Minute
+	tuned.QueueTimeout = 2 * time.Minute
+	tuned.MaxQueued = 8
+	parse("flags override only what they name",
+		[]string{"-session-idle-timeout=5m", "-session-queue-timeout=2m", "-session-max-queued=8"}, tuned)
 }

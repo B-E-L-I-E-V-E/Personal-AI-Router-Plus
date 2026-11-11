@@ -275,7 +275,7 @@ func TestLocalUsageByModel(t *testing.T) {
 		t.Helper()
 		s.end(id, beginT(t, s, id, ""))
 		s.pin(id, "ollama", node, local)
-		s.recordUsage(id, "ollama", "qwen3:0.6b", tokenUsage{Prompt: tokens - 100, Completion: 100})
+		s.recordUsage(id, "ollama", "qwen3:0.6b", tokenUsage{Prompt: tokens - 100, Completion: 100}, 0)
 	}
 	record("here-1", "self", true, 80000)
 	record("here-2", "self", true, 20000)

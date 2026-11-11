@@ -430,7 +430,12 @@ components:
         previous one so the engine can reuse its cached prompt. The first
         request creates the session. A malformed value is refused with `400`;
         an ended or expired session with `410`; a full session table with `503`.
-        The response carries `X-PAIR-Session-Expires-At`.
+        When this node's context slots for the model are all held and no other
+        node can serve, the request waits for a slot, then gets `503` with
+        `Retry-After`. A session whose measured context has reached its share
+        gets `400` until it sends a shorter conversation. The response carries
+        `X-PAIR-Session-Expires-At`, `X-PAIR-Context-Session-Tokens`,
+        `X-PAIR-Context-Session-Limit` and `X-PAIR-Queue-Wait-Ms` as they apply.
       schema:
         type: string
         maxLength: 128
@@ -544,7 +549,7 @@ components:
                 format: date-time
     ModelCapacity:
       type: object
-      required: [engine, model, configured, detected, contextTokens, maxSessions, sessionContextTokens, source, activeSessions, usedContextTokens]
+      required: [engine, model, configured, detected, contextTokens, maxSessions, sessionContextTokens, source, activeSessions, usedContextTokens, heldSlots, queued]
       properties:
         engine:
           type: string
@@ -588,6 +593,12 @@ components:
           description: Live sessions whose last turn on this engine ran on this node.
         usedContextTokens:
           type: integer
+        heldSlots:
+          type: integer
+          description: Sessions holding one of the model's context slots on this node.
+        queued:
+          type: integer
+          description: Session requests waiting for a slot.
         warning:
           type: string
     ChatRole:

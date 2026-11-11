@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"net/http"
 	"sort"
@@ -101,10 +102,21 @@ type sessionConfig struct {
 	MaxLifetime time.Duration
 	// MaxSessions bounds the number of live sessions.
 	MaxSessions int
+	// QueueTimeout is how long a session request may wait for a context slot
+	// on this node before it is refused with 503. Zero refuses at once.
+	QueueTimeout time.Duration
+	// MaxQueued bounds how many session requests may wait for slots at once,
+	// per model.
+	MaxQueued int
 }
 
 func defaultSessionConfig() sessionConfig {
-	return sessionConfig{IdleTimeout: defaultSessionIdleTimeout, MaxSessions: defaultMaxSessions}
+	return sessionConfig{
+		IdleTimeout:  defaultSessionIdleTimeout,
+		MaxSessions:  defaultMaxSessions,
+		QueueTimeout: defaultQueueTimeout,
+		MaxQueued:    defaultMaxQueued,
+	}
 }
 
 func (c sessionConfig) validate() error {
@@ -116,6 +128,12 @@ func (c sessionConfig) validate() error {
 	}
 	if c.MaxSessions < 1 {
 		return errors.New("maxSessions must be at least 1")
+	}
+	if c.QueueTimeout < 0 || c.QueueTimeout > maxQueueTimeout {
+		return fmt.Errorf("queueTimeoutSeconds must be between 0 and %d", int(maxQueueTimeout.Seconds()))
+	}
+	if c.MaxQueued < 0 {
+		return errors.New("maxQueued must not be negative")
 	}
 	return nil
 }
@@ -139,6 +157,9 @@ type session struct {
 	nodes map[string]string
 	// local records, per engine, whether that node is this one.
 	local map[string]bool
+	// slots is the model whose context slot on this node the session holds,
+	// per engine. See slots.go.
+	slots map[string]string
 	// context is the conversation's size after its last completed turn, per
 	// engine, as the engine itself counted it.
 	context map[string]sessionContext
@@ -157,7 +178,9 @@ type sessionContext struct {
 	Tokens     int64
 	Prompt     int64
 	Completion int64
-	Updated    time.Time
+	// BodyBytes is the size of the request that produced these counts.
+	BodyBytes int
+	Updated   time.Time
 }
 
 // sessionView is a copy of a session's fields, safe to read without the lock.
@@ -181,6 +204,10 @@ type sessionStore struct {
 	tombstones map[string]time.Time
 	nextToken  uint64
 	now        func() time.Time
+	// queues holds the requests waiting for a context slot, per model, in
+	// arrival order. changed is closed and replaced whenever a slot frees.
+	queues  map[capacityKey][]*slotWaiter
+	changed chan struct{}
 }
 
 func newSessionStore() *sessionStore {
@@ -189,6 +216,8 @@ func newSessionStore() *sessionStore {
 		sessions:   make(map[string]*session),
 		tombstones: make(map[string]time.Time),
 		now:        time.Now,
+		queues:     make(map[capacityKey][]*slotWaiter),
+		changed:    make(chan struct{}),
 	}
 }
 
@@ -265,6 +294,7 @@ func (s *sessionStore) removeLocked(sess *session, now time.Time) {
 	for _, cancel := range sess.inFlight {
 		cancel()
 	}
+	s.releaseSlotsLocked(sess)
 	delete(s.sessions, sess.id)
 	s.tombstones[sess.id] = now
 	if len(s.tombstones) > maxSessionTombstones {
@@ -322,7 +352,8 @@ func (s *sessionStore) createLocked(id, agentID string, idle time.Duration, now 
 	}
 	sess := &session{
 		id: id, agentID: agentID, created: now, lastActive: now, idleTimeout: idle,
-		nodes: make(map[string]string), local: make(map[string]bool), context: make(map[string]sessionContext),
+		nodes: make(map[string]string), local: make(map[string]bool), slots: make(map[string]string),
+		context:  make(map[string]sessionContext),
 		inFlight: make(map[uint64]context.CancelFunc),
 	}
 	s.sessions[id] = sess
@@ -460,6 +491,10 @@ func (s *sessionStore) pin(id, engine, nodeID string, local bool) {
 	if sess, ok := s.sessions[id]; ok {
 		sess.nodes[engine] = nodeID
 		sess.local[engine] = local
+		// A session that moved to another node no longer occupies a slot here.
+		if !local {
+			s.releaseSlotLocked(sess, engine)
+		}
 	}
 }
 
@@ -497,12 +532,15 @@ func (s *sessionStore) localUsageByModel() map[capacityKey]localUsage {
 
 // recordUsage stores the token counts an engine reported for a session's
 // completed turn. Counts are all the store keeps; never any text.
-func (s *sessionStore) recordUsage(id, engine, model string, u tokenUsage) {
+// bodyBytes is the size of the request that produced the counts, so a later
+// request can be recognised as shorter (a compacted conversation).
+func (s *sessionStore) recordUsage(id, engine, model string, u tokenUsage, bodyBytes int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if sess, ok := s.sessions[id]; ok {
 		sess.context[engine] = sessionContext{
-			Model: model, Tokens: u.total(), Prompt: u.Prompt, Completion: u.Completion, Updated: s.now(),
+			Model: model, Tokens: u.total(), Prompt: u.Prompt, Completion: u.Completion,
+			BodyBytes: bodyBytes, Updated: s.now(),
 		}
 	}
 }
@@ -631,6 +669,8 @@ type sessionConfigParams struct {
 	IdleTimeoutSeconds *int `json:"idleTimeoutSeconds"`
 	MaxLifetimeSeconds *int `json:"maxLifetimeSeconds"`
 	MaxSessions        *int `json:"maxSessions"`
+	QueueTimeoutSecs   *int `json:"queueTimeoutSeconds"`
+	MaxQueued          *int `json:"maxQueued"`
 }
 
 // applySessionConfigParams overlays a sessions/configure payload on cfg.
@@ -640,7 +680,7 @@ func applySessionConfigParams(cfg sessionConfig, raw json.RawMessage) (sessionCo
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&params); err != nil {
-			return cfg, errors.New(`expected {"idleTimeoutSeconds","maxLifetimeSeconds","maxSessions"}`)
+			return cfg, errors.New(`expected {"idleTimeoutSeconds","maxLifetimeSeconds","maxSessions","queueTimeoutSeconds","maxQueued"}`)
 		}
 	}
 	if params.IdleTimeoutSeconds != nil {
@@ -652,14 +692,44 @@ func applySessionConfigParams(cfg sessionConfig, raw json.RawMessage) (sessionCo
 	if params.MaxSessions != nil {
 		cfg.MaxSessions = *params.MaxSessions
 	}
+	if params.QueueTimeoutSecs != nil {
+		cfg.QueueTimeout = time.Duration(*params.QueueTimeoutSecs) * time.Second
+	}
+	if params.MaxQueued != nil {
+		cfg.MaxQueued = *params.MaxQueued
+	}
 	return cfg, cfg.validate()
 }
 
 // sessionConfigResult is the wire form of the policy in force.
 func sessionConfigResult(cfg sessionConfig) map[string]int {
 	return map[string]int{
-		"idleTimeoutSeconds": int(cfg.IdleTimeout.Seconds()),
-		"maxLifetimeSeconds": int(cfg.MaxLifetime.Seconds()),
-		"maxSessions":        cfg.MaxSessions,
+		"idleTimeoutSeconds":  int(cfg.IdleTimeout.Seconds()),
+		"maxLifetimeSeconds":  int(cfg.MaxLifetime.Seconds()),
+		"maxSessions":         cfg.MaxSessions,
+		"queueTimeoutSeconds": int(cfg.QueueTimeout.Seconds()),
+		"maxQueued":           cfg.MaxQueued,
+	}
+}
+
+// registerSessionFlags declares the session policy flags on fs and returns a
+// function that yields the configured policy after parsing. Every field starts
+// from defaultSessionConfig, so a field without a flag keeps its default
+// rather than its zero value.
+func registerSessionFlags(fs *flag.FlagSet) func() sessionConfig {
+	d := defaultSessionConfig()
+	idle := fs.Duration("session-idle-timeout", d.IdleTimeout, "default sliding idle timeout for sessions (1m to 60m); adjustable at runtime via sessions/configure")
+	lifetime := fs.Duration("session-max-lifetime", d.MaxLifetime, "maximum total length of a session even while it is kept alive; 0 disables the cap")
+	maxSessions := fs.Int("max-sessions", d.MaxSessions, "maximum number of live sessions")
+	queueTimeout := fs.Duration("session-queue-timeout", d.QueueTimeout, "how long a session request may wait for a context slot on this node (0 to 5m; 0 refuses at once)")
+	maxQueued := fs.Int("session-max-queued", d.MaxQueued, "maximum session requests waiting for context slots, per model")
+	return func() sessionConfig {
+		cfg := d
+		cfg.IdleTimeout = *idle
+		cfg.MaxLifetime = *lifetime
+		cfg.MaxSessions = *maxSessions
+		cfg.QueueTimeout = *queueTimeout
+		cfg.MaxQueued = *maxQueued
+		return cfg
 	}
 }

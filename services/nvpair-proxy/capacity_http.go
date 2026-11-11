@@ -97,6 +97,9 @@ func (p *Proxy) capacityReport(ctx context.Context) []modelCapacity {
 	for k := range usage {
 		keys[k] = true
 	}
+	for k := range p.sessions.slotKeys() {
+		keys[k] = true
+	}
 	rows := make([]modelCapacity, 0, len(keys))
 	for k := range keys {
 		var set *capacitySetting
@@ -107,7 +110,10 @@ func (p *Proxy) capacityReport(ctx context.Context) []modelCapacity {
 		if v, ok := detected[k]; ok {
 			det = &v
 		}
-		rows = append(rows, effective(k, set, det, usage[k]))
+		row := effective(k, set, det, usage[k])
+		st := p.sessions.slotStatus(k)
+		row.HeldSlots, row.Queued = st.Held, st.Queued
+		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool {
 		if rows[i].Engine != rows[j].Engine {

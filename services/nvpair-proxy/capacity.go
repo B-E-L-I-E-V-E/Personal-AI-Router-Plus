@@ -82,8 +82,10 @@ type capacityStore struct {
 
 	detectMu sync.Mutex
 	detected map[string]detectionEntry // by engine
-	client   *http.Client
-	now      func() time.Time
+	// refreshing marks engines with a background detection in progress.
+	refreshing map[string]bool
+	client     *http.Client
+	now        func() time.Time
 }
 
 type detectionEntry struct {
@@ -426,9 +428,13 @@ type modelCapacity struct {
 	SessionShare  int64  `json:"sessionContextTokens"`
 	Source        string `json:"source"`
 	// Live sessions this node serves for the model, and the context they hold.
-	ActiveSessions int    `json:"activeSessions"`
-	UsedTokens     int64  `json:"usedContextTokens"`
-	Warning        string `json:"warning,omitempty"`
+	ActiveSessions int   `json:"activeSessions"`
+	UsedTokens     int64 `json:"usedContextTokens"`
+	// HeldSlots is how many sessions hold one of the model's context slots
+	// here; Queued is how many requests are waiting for one.
+	HeldSlots int    `json:"heldSlots"`
+	Queued    int    `json:"queued"`
+	Warning   string `json:"warning,omitempty"`
 }
 
 type detectedJSON struct {
@@ -465,4 +471,48 @@ func effective(k capacityKey, set *capacitySetting, det *detectedCapacity, use l
 		row.Warning = fmt.Sprintf("each session gets %d tokens, below the %d useful minimum; allow fewer sessions or a larger pool", row.SessionShare, minUsefulShare)
 	}
 	return row
+}
+
+// cachedDetection returns the last detection for an engine without waiting
+// for the engine. When it is stale or missing, a refresh starts in the
+// background, so the request path never blocks on an engine query.
+func (s *capacityStore) cachedDetection(engine string, base *url.URL) map[string]detectedCapacity {
+	s.detectMu.Lock()
+	e, ok := s.detected[engine]
+	stale := !ok || s.now().Sub(e.at) >= detectionTTL
+	refreshing := s.refreshing[engine]
+	if stale && !refreshing && base != nil {
+		if s.refreshing == nil {
+			s.refreshing = make(map[string]bool)
+		}
+		s.refreshing[engine] = true
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), detectionTimeout)
+			defer cancel()
+			_, _ = s.detect(ctx, engine, base)
+			s.detectMu.Lock()
+			delete(s.refreshing, engine)
+			s.detectMu.Unlock()
+		}()
+	}
+	s.detectMu.Unlock()
+	return e.models
+}
+
+// limitFor returns the effective capacity for one model on this node, from
+// the setting and the cached detection.
+func (p *Proxy) limitFor(f *facade, k capacityKey) modelCapacity {
+	var base *url.URL
+	if b, ok := f.localBackendTarget(); ok {
+		base = b
+	}
+	var set *capacitySetting
+	if v, ok := p.capacity.settingsSnapshot()[k]; ok {
+		set = &v
+	}
+	var det *detectedCapacity
+	if v, ok := p.capacity.cachedDetection(k.Engine, base)[k.Model]; ok {
+		det = &v
+	}
+	return effective(k, set, det, localUsage{})
 }

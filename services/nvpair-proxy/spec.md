@@ -606,7 +606,7 @@ sessions without evicting live ones.
 
 PAIR tracks how much of a model's context each session occupies, and how much
 each model on this node can hold, so it can later decide how many sessions fit.
-This section reports and configures; it does not yet refuse or queue work.
+Admission on these numbers is §5.13.
 
 **A session's context** is the token count its engine reported for the last
 completed turn: prompt plus completion. The client resends the whole
@@ -654,7 +654,45 @@ theirs to report. `GET /pair/v1/capacity` lists every model with a setting, a
 detection, or live sessions here, with the effective pool, sessions and share,
 the live sessions this node serves for it and the context they hold, and a
 warning when the share is below 4096 tokens, exceeds the engine's own window,
-or cannot be computed.
+or cannot be computed. Each row also reports `heldSlots` and `queued` (§5.13).
+
+### 5.13 Context admission
+
+Admission applies to a **session** inference request whose model has a known
+capacity on **this** node: a session count, a share, or both (§5.12). Only this
+node's own candidate is gated; other nodes enforce their own capacity, and
+until they share it (a later change) they are not gated here. Requests outside
+a session are never gated.
+
+- **Slots.** A model configured for N sessions has N context slots here. A
+  session takes one when first admitted for that model and keeps it across
+  turns until it ends, expires (§5.11), moves to another node at a commit
+  (§5.10), or switches model on that engine.
+- **Full.** When every slot is held, this node drops out of the request's
+  candidates and the request goes to another node that has the model. Only
+  when no other node can serve does it wait here, in arrival order, for a slot.
+  A newcomer cannot take a slot while earlier arrivals wait. The wait is bounded
+  by `queueTimeoutSeconds` (default 60, at most 300, 0 refuses at once) and
+  `maxQueued` per model (default 64), both set with `sessions/configure`; past
+  either the request gets `503` with `Retry-After`. A waiting request is in
+  flight, so its session cannot expire; ending the session ends the wait.
+- **Outgrown.** When the session's last measured context is at or above its
+  share and this request is not shorter than the one that produced that
+  measurement, this node drops out. With no other node left the request gets
+  `400` naming the measured size and the share, and is not queued, because
+  waiting would not shrink it. A shorter request is a compacted conversation:
+  it is admitted and measured again. The turn that first crosses the share is
+  admitted, since PAIR learns a turn's size only from the engine. Estimating
+  tokens from request bytes is avoided because it would refuse image-heavy
+  requests that fit.
+- **Headers.** `X-PAIR-Context-Session-Tokens` carries the session's measured
+  context before this turn, on every reply including refusals.
+  `X-PAIR-Context-Session-Limit` carries the share when this node served the
+  turn. `X-PAIR-Queue-Wait-Ms` reports a wait for a slot.
+
+Admission runs before a reservation is taken or a workload is submitted, so a
+request waiting for a slot does not yet appear as a job. A slot taken when this
+node was a candidate is released at the commit if another node served instead.
 
 ## 6. Reservations
 

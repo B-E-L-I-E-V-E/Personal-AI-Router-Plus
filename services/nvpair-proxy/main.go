@@ -24,9 +24,7 @@ func main() {
 	ipcPath := flag.String("ipc", "", "IPC endpoint: Unix domain socket path or Windows named pipe (default: stdin/stdout)")
 	clusterDir := flag.String("cluster-dir", "", "cluster trust directory (node.crt/key + trusted pins); enables the LAN mTLS inference ingress when this node is clustered")
 	showVersion := flag.Bool("version", false, "print version and exit")
-	sessionIdle := flag.Duration("session-idle-timeout", defaultSessionIdleTimeout, "default sliding idle timeout for sessions (1m to 60m); adjustable at runtime via sessions/configure")
-	sessionLifetime := flag.Duration("session-max-lifetime", 0, "maximum total length of a session even while it is kept alive; 0 disables the cap")
-	maxSessions := flag.Int("max-sessions", defaultMaxSessions, "maximum number of live sessions")
+	sessionFlags := registerSessionFlags(flag.CommandLine)
 	resolveLevel := applog.RegisterFlag(nil, slog.LevelInfo)
 	flag.Parse()
 
@@ -75,11 +73,7 @@ func main() {
 
 	codec := NewCodec(transport)
 	proxy := NewProxy(codec)
-	if err := proxy.sessions.configure(sessionConfig{
-		IdleTimeout: *sessionIdle,
-		MaxLifetime: *sessionLifetime,
-		MaxSessions: *maxSessions,
-	}); err != nil {
+	if err := proxy.sessions.configure(sessionFlags()); err != nil {
 		log.Fatalf("invalid session flags: %v", err)
 	}
 	// Context capacity settings persist beside the proxy's port files. A file

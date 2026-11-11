@@ -1276,6 +1276,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		r.ContentLength = int64(len(bodyBytes))
 		r.Header.Del("Content-Length")
 	}
+	bodyLen := len(bodyBytes)
 
 	candidates := f.resolveCandidates(routingModel)
 	if cors.IsPreflight(r) {
@@ -1287,6 +1288,45 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		cors.ServePreflight(sc, r, targets)
 		f.notify("proxy/request", RequestEvent{ID: reqID, RequestID: requestID, SessionID: sessionID, AgentID: agentID, Method: r.Method, Path: r.URL.Path, Target: "cluster", Status: sc.status, Duration: time.Since(start).Milliseconds()})
 		return
+	}
+	// Context admission (slots.go): a session request may use this node's
+	// engine only if the session holds, or can take, one of the model's
+	// context slots here, and has not outgrown its share. Otherwise this node
+	// drops out of the candidates; with no other node left, the request waits
+	// for a slot or is refused.
+	var sessionLimit modelCapacity
+	if sessionID != "" && model != "" {
+		// The session's measured size goes out on every reply, refusals
+		// included, so an agent can see it is near or past its share.
+		if c, ok := sess.Context[f.profile.Name]; ok && c.Model == model {
+			w.Header().Set(contextTokensHeader, strconv.FormatInt(c.Tokens, 10))
+		}
+		var admitErr error
+		var waited time.Duration
+		candidates, sessionLimit, waited, admitErr = f.admitSession(r.Context(), sessionID, sess, model, bodyLen, candidates)
+		if waited > 0 {
+			w.Header().Set(queueWaitHeader, strconv.FormatInt(waited.Milliseconds(), 10))
+		}
+		if admitErr != nil {
+			status := admissionStatus(admitErr)
+			slog.Debug("proxy request refused by context admission",
+				"id", reqID, "request_id", requestID, "session_id", sessionID,
+				"model", model, "status", status, "reason", admitErr)
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			if status == http.StatusServiceUnavailable {
+				w.Header().Set("Retry-After", "5")
+			}
+			w.WriteHeader(status)
+			if body, mErr := json.Marshal(map[string]string{"error": admitErr.Error()}); mErr == nil {
+				_, _ = w.Write(body)
+			}
+			_ = f.notify("proxy/request", RequestEvent{
+				ID: reqID, RequestID: requestID, SessionID: sessionID, AgentID: agentID, Method: r.Method, Path: r.URL.Path,
+				Status: status, Duration: time.Since(start).Milliseconds(), Error: admitErr.Error(),
+			})
+			return
+		}
 	}
 	// held is this request's claim on a node's capacity while it is in flight.
 	// resMu guards it because failover re-points it from the ReverseProxy's
@@ -1892,12 +1932,17 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				if peeked != nil {
 					resp.Body = peeked
 				}
+				// The share applies on this node only, so report it only when
+				// this node is the one serving.
+				if cand.local && sessionLimit.SessionShare > 0 {
+					w.Header().Set(contextLimitHeader, strconv.FormatInt(sessionLimit.SessionShare, 10))
+				}
 				// Read the engine's token counts as the reply streams through,
 				// for the session's context size. Only the numbers are kept.
 				if sessionID != "" && isInf {
 					engine := f.profile.Name
 					resp.Body = newUsageReader(resp.Body, resp.Header.Get("Content-Type"), func(u tokenUsage) {
-						p.sessions.recordUsage(sessionID, engine, model, u)
+						p.sessions.recordUsage(sessionID, engine, model, u, bodyLen)
 					})
 				}
 				// Committing to this candidate — body stream is about to begin.
