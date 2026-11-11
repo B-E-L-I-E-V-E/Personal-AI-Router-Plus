@@ -72,7 +72,7 @@ function parseSpec(value: JsonValue | undefined): ModelSpec {
     }
 }
 
-export function parsePlan(value: JsonValue | undefined, error = ''): CapacityPlan {
+function parsePlan(value: JsonValue | undefined, error = ''): CapacityPlan {
     const obj = objectValue(value)
     return {
         spec: parseSpec(obj?.spec),
