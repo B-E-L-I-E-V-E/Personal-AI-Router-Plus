@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { app, BrowserWindow } from 'electron'
 import log from 'electron-log'
 import electronUpdater from 'electron-updater'
@@ -77,6 +79,11 @@ function broadcastStatus(): void {
     }
 }
 
+/** Whether this packaged build carries electron-builder's update feed file. */
+function hasUpdateFeed(): boolean {
+    return existsSync(join(process.resourcesPath, 'app-update.yml'))
+}
+
 export function getUpdateStatus(): UpdateStatus {
     return status
 }
@@ -136,6 +143,15 @@ export function initializeUpdater(): void {
         return
     }
     if (!app.isPackaged) return
+
+    // electron-builder writes app-update.yml only for a build that publishes an
+    // update feed. A source build has none, so checking could only fail; say so
+    // once and never check, rather than reporting an error every few hours.
+    if (!hasUpdateFeed()) {
+        log.info('[updater] no update feed in this build; update checks are off')
+        setStatus({ phase: 'unavailable', error: null })
+        return
+    }
 
     loadPendingDownloadedVersion()
 
@@ -201,7 +217,7 @@ export async function checkForUpdates(): Promise<void> {
         await devMockCheckForUpdates(setStatus, pendingDownloadedVersion)
         return
     }
-    if (!app.isPackaged) return
+    if (!app.isPackaged || status.phase === 'unavailable') return
     activeUpdateOperation = 'check'
     try {
         await autoUpdater.checkForUpdates()

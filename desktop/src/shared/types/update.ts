@@ -9,6 +9,8 @@ type UpdatePhase =
     | 'downloading'
     | 'downloaded'
     | 'error'
+    /** The build carries no update feed (a source build), so there is nothing to check. */
+    | 'unavailable'
 
 export interface UpdateStatus {
     phase: UpdatePhase

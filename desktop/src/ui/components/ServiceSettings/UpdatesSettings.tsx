@@ -26,6 +26,8 @@ function phaseLabel(status: UpdateStatus): string {
             return `Ready to install ${status.latestVersion ?? ''}`
         case 'error':
             return status.error ?? 'Update failed'
+        case 'unavailable':
+            return 'This build was made from source, so it has no update feed. Rebuild it to update.'
     }
 }
 
