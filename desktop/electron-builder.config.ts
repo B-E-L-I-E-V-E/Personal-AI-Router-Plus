@@ -195,6 +195,11 @@ function assertVcRedistPackagingInput(): void {
 // Narrow the packaged architectures based on CLI flags / env. Without this,
 // declaring `arch: ['x64', 'arm64']` on a target builds both installers even
 // when the user passes only `--arm64`.
+// PAIR Plus releases. The owner and repository the update feed points at.
+const PAIR_PLUS_RELEASE_OWNER = 'B-E-L-I-E-V-E'
+const PAIR_PLUS_RELEASE_REPO = 'Personal-AI-Router-Pluss'
+const signMac = process.env.PAIR_MAC_SIGN === '1'
+
 const argvHasX64 = argv.includes('--x64')
 const argvHasArm64 = argv.includes('--arm64')
 type PkgArch = 'x64' | 'arm64'
@@ -239,9 +244,18 @@ const config: Configuration = {
     directories: {
         output
     },
-    // The public build never publishes. NVIDIA's update-feed publishing is
-    // layered on by internal-build/electron-builder.config.ts.
-    publish: null,
+    // PAIR Plus updates from GitHub Releases on its own repository, the way
+    // NVIDIA's signed builds update from NVIDIA/Personal-AI-Router. Naming the
+    // provider makes every build carry app-update.yml pointing there. Nothing is
+    // uploaded unless a release is built with `--publish always` and a GH_TOKEN;
+    // every npm build script passes `--publish never`.
+    publish: [
+        {
+            provider: 'github',
+            owner: PAIR_PLUS_RELEASE_OWNER,
+            repo: PAIR_PLUS_RELEASE_REPO
+        }
+    ],
     /**
      * Positive whitelist. The main/preload bundles inline every npm dep they
      * touch (electron.vite.config.ts does not externalize anything), so the
@@ -414,10 +428,20 @@ const config: Configuration = {
                 arch: selectedArchs
             }
         ],
-        // The public build is unsigned (`identity: null`); electron-builder
-        // performs no code signing. NVIDIA 3S signing + notarization (hardened
-        // runtime + entitlements) is layered on by internal-build.
-        identity: null,
+        // Unsigned unless PAIR_MAC_SIGN=1. Signing uses the Developer ID
+        // Application certificate in the login keychain (or CSC_LINK /
+        // CSC_KEY_PASSWORD), with the hardened runtime and the entitlements
+        // Electron needs, then notarizes with the credentials in the
+        // environment (APPLE_KEYCHAIN_PROFILE, or APPLE_API_KEY /
+        // APPLE_API_KEY_ID / APPLE_API_ISSUER). @electron/osx-sign signs every
+        // nested Mach-O, including the Go services in Resources/cli-bin and the
+        // privileged helper in Contents/MacOS. macOS installs an update only
+        // into a signed app, so a release meant to auto-update must be signed.
+        identity: signMac ? undefined : null,
+        hardenedRuntime: signMac,
+        entitlements: 'scripts/build/macos/entitlements.mac.plist',
+        entitlementsInherit: 'scripts/build/macos/entitlements.mac.plist',
+        notarize: signMac,
         extraResources: [
             {
                 from: 'scripts/build/macos/uninstall.sh',

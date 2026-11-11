@@ -55,4 +55,28 @@ describe('updater without an update feed', () => {
         expect(updater.getUpdateStatus().phase).not.toBe('unavailable')
         expect(checkForUpdates).toHaveBeenCalledTimes(1)
     })
+
+    // The PAIR Plus feed repository may have no releases yet. That is "nothing
+    // newer", not a failure to report.
+    it('reads a feed with no releases as up to date', async () => {
+        hasFeed.value = true
+        checkForUpdates.mockRejectedValueOnce(
+            Object.assign(new Error('No published versions on GitHub'), {
+                code: 'ERR_UPDATER_NO_PUBLISHED_VERSIONS'
+            })
+        )
+        const updater = await import('@/electron/updater')
+        updater.initializeUpdater()
+        await updater.checkForUpdates()
+        expect(updater.getUpdateStatus()).toMatchObject({ phase: 'not-available', error: null })
+    })
+
+    it('still reports any other check failure', async () => {
+        hasFeed.value = true
+        checkForUpdates.mockRejectedValueOnce(new Error('network down'))
+        const updater = await import('@/electron/updater')
+        updater.initializeUpdater()
+        await updater.checkForUpdates()
+        expect(updater.getUpdateStatus().phase).toBe('error')
+    })
 })

@@ -48,9 +48,28 @@ let activeUpdateOperation: UpdateOperation | null = null
  */
 let pendingDownloadedVersion: string | null = null
 
+/**
+ * A feed repository with no releases yet is not a failure: there is simply
+ * nothing newer than the running build. electron-updater's GitHub provider
+ * reports it with this code.
+ */
+function isNoPublishedVersions(err: unknown): boolean {
+    return (
+        typeof err === 'object' &&
+        err !== null &&
+        'code' in err &&
+        err.code === 'ERR_UPDATER_NO_PUBLISHED_VERSIONS'
+    )
+}
+
 function failUpdate(err: unknown, operation: UpdateOperation): void {
-    log.error(`[updater] ${userFacingUpdateError(operation)}: ${getErrorString(err)}`)
     activeUpdateOperation = null
+    if (operation === 'check' && isNoPublishedVersions(err)) {
+        log.info('[updater] the update feed has no published releases yet')
+        setStatus({ phase: 'not-available', latestVersion: null, error: null })
+        return
+    }
+    log.error(`[updater] ${userFacingUpdateError(operation)}: ${getErrorString(err)}`)
     setStatus({
         phase: 'error',
         error: userFacingUpdateError(operation)
