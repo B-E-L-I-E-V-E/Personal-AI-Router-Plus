@@ -144,6 +144,8 @@ set. It is offered for this node's models, since PAIR measures the memory of
 the node it runs on. For Ollama, the window and session count apply to every
 model Ollama runs, so planning one Ollama model replaces another's plan.
 
+![An engine's model list with a model's menu open: Load, Eject, Context & sessions…, and Delete.](assets/onboarding/sessions/01-model-menu.png)
+
 Each model row then shows its plan and whether it is applied. In the dialog:
 
 1. Drag **Context window per session**. It stops at 2K, 4K, 8K and so on up
@@ -155,7 +157,7 @@ Each model row then shows its plan and whether it is applied. In the dialog:
    history may use. Changing only this takes effect at once, without
    restarting the engine.
 
-![The Context & sessions dialog for qwen3:0.6b: the Reload automatically when idle switch, the context window and room-for-the-reply sliders, and a table of how much text fits in one post, the response and the whole window.](assets/onboarding/sessions/01-context-window-and-reply.png)
+![The Context & sessions dialog for qwen3:0.6b: the Reload automatically when idle switch, the context window and room-for-the-reply sliders, and a table of how much text fits in one post, the response and the whole window.](assets/onboarding/sessions/02-context-window-and-reply.png)
 
 The table under the sliders follows them. For each kind of text it shows the
 characters each token holds and, in three groups, how much fits in **one
@@ -183,7 +185,7 @@ As you drag, the memory bars show what the settings need:
 | GPU memory | The model's weights on the GPU, sessions × one session's context, and the reserve |
 | System memory | Expert weights kept there (see below), and a quarter of it (at least 4 GB) kept free for the system |
 
-![The lower half of the dialog: the sessions-at-once and keep-free sliders, the cache precision buttons, and the memory bar showing 124.4 GB of 128 GB for 21 sessions of 40,960 tokens.](assets/onboarding/sessions/02-sessions-and-memory.png)
+![The lower half of the dialog: the sessions-at-once and keep-free sliders, the cache precision buttons, and the memory bar showing 124.4 GB of 128 GB for 21 sessions of 40,960 tokens.](assets/onboarding/sessions/03-sessions-and-memory.png)
 
 On Apple silicon the GPU and the system share one memory, shown as a single
 bar.
@@ -192,7 +194,7 @@ When the settings need more than the node has, the sliders and the bar turn
 red. You can still save and apply such a plan; the engine may then spill onto
 the CPU and run slowly, or fail to load the model.
 
-![The same dialog with 30 sessions where 21 fit: the sliders, the session count and the memory bar are red, reading 163.7 GB of 128 GB, too much.](assets/onboarding/sessions/03-over-capacity.png)
+![The same dialog with 30 sessions where 21 fit: the sliders, the session count and the memory bar are red, reading 163.7 GB of 128 GB, too much.](assets/onboarding/sessions/04-over-capacity.png)
 
 #### Mixture-of-Experts Models
 
@@ -243,7 +245,7 @@ on the node. A saved plan's status shows at the top of the dialog, with **Apply
 now** while it is pending and **Remove plan**, which also lifts the limit the
 plan set.
 
-![The top of the dialog with a saved plan: 21 × 40,960 tokens, 8,192 for replies, will apply when this node is idle, with Apply now and Remove plan buttons.](assets/onboarding/sessions/04-saved-plan.png)
+![The top of the dialog with a saved plan: 21 × 40,960 tokens, 8,192 for replies, will apply when this node is idle, with Apply now and Remove plan buttons.](assets/onboarding/sessions/05-saved-plan.png)
 
 ### When Capacity Runs Out
 
@@ -274,7 +276,7 @@ The desktop app's **Settings → Sessions** tab holds what is not per model:
 Each model's context window, room for the reply and sessions at once are set
 in its menu, as described in Plan from GPU Memory.
 
-![Settings > Sessions: the session policy, and an active session for agent docs-writer with 2,220 tokens and room for 30,548 more.](assets/onboarding/sessions/05-sessions-settings.png)
+![Settings > Sessions: the session policy, and an active session for agent docs-writer with 2,220 tokens and room for 30,548 more.](assets/onboarding/sessions/06-sessions-settings.png)
 
 The router saves these itself, so they survive restarts.
 
