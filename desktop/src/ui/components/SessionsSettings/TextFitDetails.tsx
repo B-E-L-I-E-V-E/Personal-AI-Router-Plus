@@ -50,7 +50,7 @@ export default function TextFitDetails({
         <Stack gap="1">
             <Text kind="body/regular/sm" className="text-subtle-color">
                 A post can use {postTokens.toLocaleString()} tokens of the{' '}
-                {windowTokens.toLocaleString()}-token window, and a reply up to{' '}
+                {windowTokens.toLocaleString()}-token window, and the response up to{' '}
                 {replyTokens.toLocaleString()}. That is about:
             </Text>
             <div
@@ -66,20 +66,20 @@ export default function TextFitDetails({
             >
                 <span />
                 <span />
-                {group('Post', 2)}
-                {group('Reply', 2)}
+                {group('One post', 2)}
+                {group('The response', 2)}
                 {group('Whole window', 3)}
                 <Text kind="body/semibold/sm" role="columnheader">
                     Text
                 </Text>
                 {head('Chars/token')}
-                {head('Words')}
-                {head('Pages')}
-                {head('Words')}
-                {head('Pages')}
-                {head('Characters')}
-                {head('Words')}
-                {head('Pages')}
+                {head('Post words')}
+                {head('Post pages')}
+                {head('Response words')}
+                {head('Response pages')}
+                {head('Total characters')}
+                {head('Total words')}
+                {head('Total pages')}
                 {posts.map((k, i) => (
                     <Fragment key={k.label}>
                         <Text kind="body/regular/sm" role="cell">
