@@ -10,8 +10,10 @@ version files.
 
 **PAIR Plus** runs both workflows on `main`, its single integration and release
 branch; read `develop` below as `main`. Upstream NVIDIA PAIR integrates on
-`develop` and cuts releases to `main`. Without the release-intent GitHub App,
-the apply job falls back to the built-in `GITHUB_TOKEN`.
+`develop` and cuts releases to `main`. PAIR Plus's apply job signs in as the
+**PAIR Plus Release Intent BELIEVE** GitHub App (see [Credential](#credential));
+without the App configured it falls back to the built-in `GITHUB_TOKEN`, which
+the `main` ruleset blocks.
 
 SemVer meaning for each number lives in [`services/VERSIONING.md`](../../services/VERSIONING.md).
 
@@ -110,6 +112,13 @@ and expiring in an hour.
 - Add the app as a bypass actor on `develop`, the only branch it writes.
 - Configure `RELEASE_INTENT_APP_ID` as a repository variable and
   `RELEASE_INTENT_APP_PRIVATE_KEY` as a secret.
+
+On PAIR Plus the App is installed on this repository only, with Contents:
+read and write and Metadata: read-only. The **Protect main** ruleset (required
+checks, no force push, no deletion) lists it, and repository admins, as bypass
+actors, so its version-bump commit can land on `main` without a pull request.
+To rotate the key, generate a new one on the App's settings page and upload it
+as `RELEASE_INTENT_APP_PRIVATE_KEY`, then delete the old key there.
 
 **The app and both settings must exist before the first push to `develop`.**
 If the credential is missing, `apply_pr.py` exits 2 and says so rather than
