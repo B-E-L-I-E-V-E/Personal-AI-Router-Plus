@@ -51,14 +51,19 @@ let pendingDownloadedVersion: string | null = null
 /**
  * A feed repository with no releases yet is not a failure: there is simply
  * nothing newer than the running build. electron-updater's GitHub provider
- * reports it with this code.
+ * reports it two ways: ERR_UPDATER_NO_PUBLISHED_VERSIONS when the release list
+ * is empty, and ERR_XML_MISSED_ELEMENT, carrying the same message, when the
+ * releases feed has no entries at all.
  */
+const NO_PUBLISHED_VERSIONS_MESSAGE = 'No published versions on GitHub'
+
 function isNoPublishedVersions(err: unknown): boolean {
+    if (typeof err !== 'object' || err === null || !('code' in err)) return false
+    if (err.code === 'ERR_UPDATER_NO_PUBLISHED_VERSIONS') return true
     return (
-        typeof err === 'object' &&
-        err !== null &&
-        'code' in err &&
-        err.code === 'ERR_UPDATER_NO_PUBLISHED_VERSIONS'
+        err.code === 'ERR_XML_MISSED_ELEMENT' &&
+        err instanceof Error &&
+        err.message.includes(NO_PUBLISHED_VERSIONS_MESSAGE)
     )
 }
 

@@ -58,17 +58,34 @@ describe('updater without an update feed', () => {
 
     // The PAIR Plus feed repository may have no releases yet. That is "nothing
     // newer", not a failure to report.
-    it('reads a feed with no releases as up to date', async () => {
+    // Both codes electron-updater's GitHub provider uses for an empty feed; the
+    // second is what a repository with no releases at all produced live.
+    it.each(['ERR_UPDATER_NO_PUBLISHED_VERSIONS', 'ERR_XML_MISSED_ELEMENT'])(
+        'reads a feed with no releases (%s) as up to date',
+        async code => {
+            hasFeed.value = true
+            checkForUpdates.mockRejectedValueOnce(
+                Object.assign(new Error('No published versions on GitHub'), { code })
+            )
+            const updater = await import('@/electron/updater')
+            updater.initializeUpdater()
+            await updater.checkForUpdates()
+            expect(updater.getUpdateStatus()).toMatchObject({
+                phase: 'not-available',
+                error: null
+            })
+        }
+    )
+
+    it('still reports a different missing-element error', async () => {
         hasFeed.value = true
         checkForUpdates.mockRejectedValueOnce(
-            Object.assign(new Error('No published versions on GitHub'), {
-                code: 'ERR_UPDATER_NO_PUBLISHED_VERSIONS'
-            })
+            Object.assign(new Error('Cannot find link in feed'), { code: 'ERR_XML_MISSED_ELEMENT' })
         )
         const updater = await import('@/electron/updater')
         updater.initializeUpdater()
         await updater.checkForUpdates()
-        expect(updater.getUpdateStatus()).toMatchObject({ phase: 'not-available', error: null })
+        expect(updater.getUpdateStatus().phase).toBe('error')
     })
 
     it('still reports any other check failure', async () => {
