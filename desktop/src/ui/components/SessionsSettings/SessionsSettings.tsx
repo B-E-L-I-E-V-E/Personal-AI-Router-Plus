@@ -6,7 +6,6 @@ import {
     Button,
     Flex,
     FormField,
-    Slider,
     Stack,
     Switch,
     Text,
@@ -21,10 +20,8 @@ import type {
 } from '@/shared/types/sessions'
 import getErrorString from '@/shared/utils/get-error-string'
 import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
-import CapacityPlanner from './CapacityPlanner'
-import { nearestStop, shortTokens, windowStops } from './capacity-sliders'
-import TextFitDetails from './TextFitDetails'
-import InstalledModelPicker from './InstalledModelPicker'
+import { CapacityPlannerDialog } from '@/ui/components/ModelManager/CapacityPlannerDialog'
+import { useCapacityPlannerStore } from '@/ui/stores/capacity-planner.store'
 import { planStatus } from './plan-status'
 
 // The proxy owns these settings and their saved state; this panel only reads
@@ -32,9 +29,6 @@ import { planStatus } from './plan-status'
 // slots change with every request and the proxy pushes no events for them.
 const REFRESH_MS = 5000
 const SHARE_GRANULARITY = 1024
-const MIN_USEFUL_SHARE = 4096
-// The manual editor's sessions slider; the GPU planner sizes beyond this.
-const MANUAL_SESSIONS_MAX = 64
 
 // The proxy stores a model's capacity as window × sessions; the page shows
 // the window each session gets, since a window belongs to one conversation.
@@ -120,228 +114,130 @@ function PolicyCard({
     )
 }
 
-function CapacityRow({
-    row,
-    saved,
+/** One model in the capacity summary: what PAIR enforces now and its plan. */
+interface SummaryEntry {
+    engine: string
+    model: string
+    capacity?: ModelCapacity
+    plan?: SavedCapacityPlan
+}
+
+function CapacitySummaryRow({
+    entry,
     autoReload,
+    onChange,
     onChanged,
     onPlanner,
     onError
 }: {
-    row: ModelCapacity
-    saved: SavedCapacityPlan | undefined
+    entry: SummaryEntry
     autoReload: boolean
+    onChange: () => void
     onChanged: () => void
     onPlanner: (state: PlannerState | null, message?: string) => void
     onError: (message: string) => void
 }) {
-    const [planning, setPlanning] = useState(false)
-    const initialPool = row.configured?.contextTokens ?? row.contextTokens
-    const initialSessions = row.configured?.maxSessions ?? row.maxSessions
-    const initialWindow = sessionWindow(initialPool, initialSessions)
-    // Stops up to the engine's own window, keeping a saved window that is not
-    // a power of two selectable.
-    const stops = useMemo(() => {
-        const base = windowStops(Math.max(row.detectedWindowTokens, initialWindow))
-        if (initialWindow > 0 && !base.includes(initialWindow)) base.push(initialWindow)
-        return base.sort((a, b) => a - b)
-    }, [row.detectedWindowTokens, initialWindow])
-    const sessionsMax = Math.max(MANUAL_SESSIONS_MAX, initialSessions)
-    const [windowN, setWindowN] = useState(
-        initialWindow > 0 ? initialWindow : stops[stops.length - 1]
-    )
-    const [sessionsN, setSessionsN] = useState(Math.max(1, initialSessions))
-    const [saving, setSaving] = useState(false)
-
-    const valid =
-        windowN >= SHARE_GRANULARITY &&
-        windowN % SHARE_GRANULARITY === 0 &&
-        sessionsN >= 1 &&
-        sessionsN <= 1024
-
-    const run = (change: Promise<null>) => {
-        setSaving(true)
-        change
-            .then(onChanged)
-            .catch(err => onError(getErrorString(err) ?? 'Could not change the capacity'))
-            .finally(() => setSaving(false))
+    const [busy, setBusy] = useState(false)
+    const { capacity: row, plan } = entry
+    const run = (work: Promise<unknown>, failure: string) => {
+        setBusy(true)
+        work.catch(err => onError(getErrorString(err) ?? failure)).finally(() => setBusy(false))
     }
-
+    const perSession = row ? sessionWindow(row.contextTokens, row.maxSessions) : 0
     return (
         <Stack gap="2" className="pair-paper p-3">
             <Flex justify="between" align="center" gap="2" wrap="wrap">
                 <Text kind="body/semibold/sm">
-                    {row.model} <span className="text-subtle-color">· {row.engine}</span>
+                    {entry.model} <span className="text-subtle-color">· {entry.engine}</span>
                 </Text>
-                <Text kind="body/regular/sm" className="text-subtle-color">
-                    {row.heldSlots} of {row.maxSessions || '—'} sessions · {row.queued} waiting ·{' '}
-                    {formatTokens(row.usedContextTokens)} tokens in use
-                </Text>
-            </Flex>
-            <Stack gap="1">
-                <Flex justify="between" gap="3">
-                    <Text kind="body/semibold/sm">Context window per session</Text>
-                    <Text kind="body/semibold/sm">{formatTokens(windowN)} tokens</Text>
-                </Flex>
-                <Slider
-                    min={0}
-                    max={stops.length - 1}
-                    step={1}
-                    value={nearestStop(stops, windowN)}
-                    onValueChange={i => setWindowN(stops[i])}
-                    customSteps={stops.map((_, i) => i)}
-                    stepFormatFn={i => shortTokens(stops[i] ?? 0)}
-                    attributes={{ SliderInput: { 'aria-label': 'Context window per session' } }}
-                />
-                <TextFitDetails tokens={windowN} />
-            </Stack>
-            <Stack gap="1">
-                <Flex justify="between" gap="3">
-                    <Text kind="body/semibold/sm">Sessions at once</Text>
-                    <Text kind="body/semibold/sm">{sessionsN}</Text>
-                </Flex>
-                <Slider
-                    min={1}
-                    max={sessionsMax}
-                    step={1}
-                    value={sessionsN}
-                    onValueChange={setSessionsN}
-                    customSteps={[1, Math.round(sessionsMax / 2), sessionsMax]}
-                    attributes={{ SliderInput: { 'aria-label': 'Sessions at once' } }}
-                />
-            </Stack>
-            <Flex align="end" gap="3" wrap="wrap">
-                <Stack gap="1">
+                {row && (
                     <Text kind="body/regular/sm" className="text-subtle-color">
-                        Context held in memory
+                        {row.heldSlots} of {row.maxSessions || '—'} sessions · {row.queued} waiting
+                        · {formatTokens(row.usedContextTokens)} tokens in use
                     </Text>
-                    <Text kind="body/semibold/sm">
-                        {formatTokens(valid ? windowN * sessionsN : 0)} tokens
-                    </Text>
-                </Stack>
-                <Button
-                    kind="primary"
-                    color="brand"
-                    disabled={!valid || saving}
-                    onClick={() =>
-                        run(
-                            window.pairApi.sessions.setCapacity({
-                                engine: row.engine,
-                                model: row.model,
-                                contextTokens: windowN * sessionsN,
-                                maxSessions: sessionsN
-                            })
-                        )
-                    }
-                >
-                    Save
-                </Button>
-                {row.configured && (
-                    <Button
-                        kind="secondary"
-                        disabled={saving}
-                        onClick={() =>
-                            run(
-                                window.pairApi.sessions.setCapacity({
-                                    engine: row.engine,
-                                    model: row.model,
-                                    clear: true
-                                })
-                            )
-                        }
-                    >
-                        Clear
-                    </Button>
                 )}
             </Flex>
-            {row.detectedWindowTokens > 0 && (
-                <Text kind="body/regular/sm" className="text-subtle-color">
-                    The engine reports a {formatTokens(row.detectedWindowTokens)}-token window per
-                    request.
+            {row && row.maxSessions > 0 && (
+                <Text kind="body/regular/sm">
+                    Now: {row.maxSessions} session{row.maxSessions === 1 ? '' : 's'} of{' '}
+                    {formatTokens(perSession)} tokens
+                    {row.configured ? '' : ' (reported by the engine)'}
                 </Text>
             )}
-            {valid && windowN < MIN_USEFUL_SHARE && (
-                <Text kind="body/regular/sm" className="text-subtle-color">
-                    Below {formatTokens(MIN_USEFUL_SHARE)} tokens per session is too little to be
-                    useful.
-                </Text>
-            )}
-            {row.warning && (
+            {plan && <Text kind="body/regular/sm">{planStatus(plan, autoReload)}</Text>}
+            {row?.warning && (
                 <Text kind="body/regular/sm" className="text-subtle-color">
                     {row.warning}
                 </Text>
             )}
-            {saved && (
-                <Flex justify="between" align="center" gap="2" wrap="wrap">
-                    <Text kind="body/regular/sm">{planStatus(saved, autoReload)}</Text>
-                    <Flex gap="2">
-                        {!saved.applied && (
-                            <Button
-                                size="small"
-                                kind="primary"
-                                color="brand"
-                                disabled={saving}
-                                onClick={() => {
-                                    setSaving(true)
-                                    window.pairApi.sessions
-                                        .applyPlan(row.engine, row.model)
-                                        .then(async result =>
-                                            onPlanner(
-                                                await window.pairApi.sessions.getPlanner(),
-                                                result.message
-                                            )
-                                        )
-                                        .catch(err =>
-                                            onError(
-                                                getErrorString(err) ?? 'Could not apply the plan'
-                                            )
-                                        )
-                                        .finally(() => setSaving(false))
-                                }}
-                            >
-                                Apply
-                            </Button>
-                        )}
-                        <Button
-                            size="small"
-                            kind="secondary"
-                            disabled={saving}
-                            onClick={() =>
+            <Flex gap="2" wrap="wrap">
+                <Button size="small" kind="secondary" disabled={busy} onClick={onChange}>
+                    Change…
+                </Button>
+                {plan && !plan.applied && (
+                    <Button
+                        size="small"
+                        kind="primary"
+                        color="brand"
+                        disabled={busy}
+                        onClick={() =>
+                            run(applySavedPlan(entry, onPlanner), 'Could not apply the plan')
+                        }
+                    >
+                        Apply
+                    </Button>
+                )}
+                {plan && (
+                    <Button
+                        size="small"
+                        kind="secondary"
+                        disabled={busy}
+                        onClick={() =>
+                            run(
                                 window.pairApi.sessions
                                     .setPlanner({
-                                        remove: { engine: row.engine, model: row.model }
+                                        remove: { engine: entry.engine, model: entry.model }
                                     })
-                                    .then(state => onPlanner(state))
-                                    .catch(err =>
-                                        onError(getErrorString(err) ?? 'Could not remove the plan')
-                                    )
-                            }
-                        >
-                            Remove plan
-                        </Button>
-                    </Flex>
-                </Flex>
-            )}
-            {planning ? (
-                <CapacityPlanner
-                    engine={row.engine}
-                    model={row.model}
-                    saved={saved}
-                    onDone={(state, message) => {
-                        setPlanning(false)
-                        onPlanner(state, message)
-                    }}
-                    onError={onError}
-                />
-            ) : (
-                <div>
-                    <Button size="small" kind="secondary" onClick={() => setPlanning(true)}>
-                        Plan from GPU memory
+                                    .then(state => onPlanner(state)),
+                                'Could not remove the plan'
+                            )
+                        }
+                    >
+                        Remove plan
                     </Button>
-                </div>
-            )}
+                )}
+                {row?.configured && (
+                    <Button
+                        size="small"
+                        kind="secondary"
+                        disabled={busy}
+                        onClick={() =>
+                            run(
+                                window.pairApi.sessions
+                                    .setCapacity({
+                                        engine: entry.engine,
+                                        model: entry.model,
+                                        clear: true
+                                    })
+                                    .then(onChanged),
+                                'Could not clear the limit'
+                            )
+                        }
+                    >
+                        Clear limit
+                    </Button>
+                )}
+            </Flex>
         </Stack>
     )
+}
+
+async function applySavedPlan(
+    entry: SummaryEntry,
+    onPlanner: (state: PlannerState | null, message?: string) => void
+) {
+    const result = await window.pairApi.sessions.applyPlan(entry.engine, entry.model)
+    onPlanner(await window.pairApi.sessions.getPlanner(), result.message)
 }
 
 function SessionRow({
@@ -392,7 +288,9 @@ export default function SessionsSettings() {
     const [policy, setPolicy] = useState<SessionPolicy | null>(null)
     const [capacity, setCapacity] = useState<ModelCapacity[]>([])
     const [sessions, setSessions] = useState<SessionSummary[]>([])
-    const [planner, setPlanner] = useState<PlannerState | null>(null)
+    const planner = useCapacityPlannerStore(st => st.planner)
+    const setPlanner = useCapacityPlannerStore(st => st.setPlanner)
+    const [changing, setChanging] = useState<SummaryEntry | null>(null)
     const [notice, setNotice] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
 
@@ -410,7 +308,7 @@ export default function SessionsSettings() {
                 setPlanner(pl)
             })
             .catch(err => setError(getErrorString(err) ?? 'The router is not reachable'))
-    }, [])
+    }, [setPlanner])
 
     useEffect(() => {
         refresh()
@@ -424,15 +322,25 @@ export default function SessionsSettings() {
             if (message) setNotice(message)
             refresh()
         },
-        [refresh]
+        [refresh, setPlanner]
     )
     const autoReload = planner?.autoReload ?? true
-    const listed = useMemo(
-        () => new Set(capacity.map(row => `${row.engine}/${row.model}`)),
-        [capacity]
-    )
-    const savedFor = (row: ModelCapacity) =>
-        planner?.plans.find(p => p.engine === row.engine && p.model === row.model)
+    // Every model PAIR limits or has a plan for, loaded or not.
+    const entries = useMemo(() => {
+        const byKey = new Map<string, SummaryEntry>()
+        for (const row of capacity)
+            byKey.set(`${row.engine}/${row.model}`, {
+                engine: row.engine,
+                model: row.model,
+                capacity: row
+            })
+        for (const plan of planner?.plans ?? []) {
+            const key = `${plan.engine}/${plan.model}`
+            const found = byKey.get(key)
+            byKey.set(key, { engine: plan.engine, model: plan.model, ...found, plan })
+        }
+        return [...byKey.values()].sort((a, b) => a.model.localeCompare(b.model))
+    }, [capacity, planner])
 
     return (
         <Stack gap="4" className="py-4">
@@ -455,9 +363,10 @@ export default function SessionsSettings() {
             )}
             <Card title="Context capacity on this node">
                 <Text kind="body/regular/sm" className="text-subtle-color">
-                    Each session gets a model’s full context window; this sets how many sessions it
-                    runs at once. When every session slot is held, new sessions go to another node
-                    or wait.
+                    Each session gets a model’s full context window, and each model runs a set
+                    number of sessions at once. Set them per model with Context &amp; sessions in
+                    the model’s menu on the Overview, or with Change… here. When every session slot
+                    is held, new sessions go to another node or wait.
                 </Text>
                 <Flex align="center" gap="3" wrap="wrap">
                     <Switch
@@ -484,29 +393,34 @@ export default function SessionsSettings() {
                         </Text>
                     </Stack>
                 </Flex>
-                {capacity.length === 0 ? (
+                {entries.length === 0 ? (
                     <Text kind="body/regular/sm" className="text-subtle-color">
-                        No models are loaded on this node.
+                        No models are loaded or planned on this node.
                     </Text>
                 ) : (
-                    capacity.map(row => (
-                        <CapacityRow
-                            key={`${row.engine}/${row.model}/${row.configured?.contextTokens ?? 0}/${row.configured?.maxSessions ?? 0}`}
-                            row={row}
-                            saved={savedFor(row)}
+                    entries.map(entry => (
+                        <CapacitySummaryRow
+                            key={`${entry.engine}/${entry.model}`}
+                            entry={entry}
                             autoReload={autoReload}
+                            onChange={() => setChanging(entry)}
                             onChanged={refresh}
                             onPlanner={onPlanner}
                             onError={setError}
                         />
                     ))
                 )}
-                <InstalledModelPicker
-                    listed={listed}
-                    planner={planner}
-                    onPlanner={onPlanner}
-                    onError={setError}
-                />
+                {changing && (
+                    <CapacityPlannerDialog
+                        engine={changing.engine}
+                        model={changing.model}
+                        displayName={changing.model}
+                        onClose={() => {
+                            setChanging(null)
+                            refresh()
+                        }}
+                    />
+                )}
             </Card>
             <Card title="Active sessions">
                 {sessions.length === 0 ? (

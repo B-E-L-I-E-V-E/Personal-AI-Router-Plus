@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button, Flex, Stack, Text } from '@nvidia/foundations-react-core'
 import type { BackendInfo } from '@/ui/types/engine-info'
 import { EngineCapabilities } from '@/ui/constants/engine-capabilities'
@@ -13,6 +13,11 @@ import { ModelHubModal } from '@/ui/components/ModelHub/ModelHubModal'
 import { useEngineProgressStore } from '@/ui/stores/engine-progress.store'
 import { usePendingActionsStore } from '@/ui/stores/pending-actions.store'
 import { isEnginePullInProgress } from '@/shared/utils/engine-progress'
+import { engineManagerName } from '@/shared/utils/engines'
+import { useConnectionStore } from '@/ui/stores/connection.store'
+import { findPlan, useCapacityPlannerStore } from '@/ui/stores/capacity-planner.store'
+import { planStatus } from '@/ui/components/SessionsSettings/plan-status'
+import { CapacityPlannerDialog } from './CapacityPlannerDialog'
 
 import ModelRow from './ModelRow'
 import { IncomingSyncPullRow } from './IncomingSyncPullRow'
@@ -23,6 +28,15 @@ import type { ModelEntry } from '@/ui/types/model-hub'
 export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId: string }) {
     const [openModelHubModal, setOpenModelHubModal] = useState(false)
     const [modelPendingDelete, setModelPendingDelete] = useState<string | null>(null)
+    const [planningModel, setPlanningModel] = useState<string | null>(null)
+    // The planner measures this node's memory, so only its own models offer it.
+    const isSelf = useConnectionStore(s => s.selfId) === nodeId
+    const planner = useCapacityPlannerStore(s => s.planner)
+    const refreshPlanner = useCapacityPlannerStore(s => s.refresh)
+    const plannerEngine = engineManagerName(backend.type)
+    useEffect(() => {
+        if (isSelf) void refreshPlanner()
+    }, [isSelf, refreshPlanner])
     const models = (backend.models ?? []).sort((a, b) =>
         formatModelDisplayName(a.name, backend.type).localeCompare(
             formatModelDisplayName(b.name, backend.type)
@@ -121,6 +135,9 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
                     break
                 case 'eject':
                     window.pairApi.engines.unloadModel(backendType, nodeId, modelName)
+                    break
+                case 'capacity':
+                    setPlanningModel(modelName)
                     break
                 case 'delete':
                     if (confirmBeforeDelete) {
@@ -229,6 +246,15 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
                                         .getState()
                                         .getModelPending(nodeId, backendType, model.name)}
                                     displayName={displayName}
+                                    canPlan={isSelf}
+                                    planLine={(() => {
+                                        const saved = isSelf
+                                            ? findPlan(planner, plannerEngine, model.name)
+                                            : undefined
+                                        return saved
+                                            ? planStatus(saved, planner?.autoReload ?? true)
+                                            : undefined
+                                    })()}
                                     onAction={handleAction}
                                     onExpiryChange={handleExpiryChange}
                                 />
@@ -236,6 +262,15 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
                         </Stack>
                     )}
                 </>
+            )}
+
+            {planningModel && (
+                <CapacityPlannerDialog
+                    engine={plannerEngine}
+                    model={planningModel}
+                    displayName={displayName(planningModel)}
+                    onClose={() => setPlanningModel(null)}
+                />
             )}
 
             <ConfirmModal

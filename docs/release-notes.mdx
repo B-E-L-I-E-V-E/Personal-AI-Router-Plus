@@ -29,16 +29,16 @@ from the
   60), stays open for any request, a keepalive, or a request still running, and
   can be ended at once. Ending it cancels its running requests.
 - **Context capacity.** Each session gets a model's full context window; set how
-  many sessions each model runs at once.
-- **Plan from GPU memory.** Sliders for the window and the number of sessions,
-  with GPU and system memory bars. The sliders turn red when the settings need
-  more than the node has, and such a plan can still be saved. Mixture-of-experts models can keep their expert weights
-  in system memory on llama.cpp.
-  New sessions go to another node or wait when a model is full, and a session
-  that outgrows its share is asked to shorten its conversation. Each node
-  enforces its own capacity.
-- **Settings → Sessions.** Edit the session policy and each model's capacity,
-  and see or end live sessions.
+  many sessions each model runs at once. New sessions go to another node or
+  wait when a model is full, and a session that outgrows its window is asked to
+  shorten its conversation. Each node enforces its own capacity.
+- **Context & sessions per model.** In each model's menu: sliders for the
+  window and the number of sessions, GPU and system memory bars, and a table of
+  how much text the window holds. The sliders turn red when the settings need
+  more than the node has, and such a plan can still be saved. Mixture-of-experts
+  models can keep their expert weights in system memory on llama.cpp.
+- **Settings → Sessions.** Edit the session policy, see each model's capacity
+  and plan, and see or end live sessions.
 - **Signed macOS builds and PAIR Plus updates.** macOS builds are signed with a
   Developer ID and notarized, and every build updates from PAIR Plus releases.
 

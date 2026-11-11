@@ -96,16 +96,9 @@ chunk at the end of the stream. Requests outside a session are forwarded
 exactly as sent.
 
 A context window belongs to one conversation: every session gets the model's
-whole window, and the node's memory decides how many sessions run at once. For
-each model on a node you can set:
-
-| Setting | Meaning |
-| --- | --- |
-| **Context window per session** | The tokens each session may use, a multiple of 1024 |
-| **Sessions at once** | How many sessions the model serves at the same time |
-
-PAIR shows the context held in memory, window × sessions; for example six
-sessions of 43,008 tokens hold 258,048.
+whole window, and the node's memory decides how many sessions run at once. Each
+model has its own **context window per session** and **sessions at once**, set
+from GPU memory as described below.
 
 Where you set nothing, PAIR fills in what the local engine reports: Ollama's
 per-request window, LM Studio's context length and parallel count, llama.cpp's
@@ -114,9 +107,14 @@ unknown rather than guessed.
 
 ### Plan from GPU Memory
 
-Instead of entering a window and a session count yourself, let PAIR work out
-how many sessions fit in this node's GPU memory. In **Settings → Sessions**,
-select **Plan from GPU memory** on a model:
+PAIR works out how many sessions fit in this node's GPU memory. On the
+**Overview**, open a model's menu (**…**) in its engine's model list and select
+**Context & sessions…**; **Change…** on **Settings → Sessions** opens the same
+dialog. It is offered for this node's models, since PAIR measures the memory of
+the node it runs on. For Ollama, the window and session count apply to every
+model Ollama runs, so planning one Ollama model replaces another's plan.
+
+Each model row then shows its plan and whether it is applied. In the dialog:
 
 1. Drag **Context window per session**. It stops at 2K, 4K, 8K and so on up
    to the model's maximum, which is the last stop. Every session gets this
@@ -209,9 +207,10 @@ turn), `X-PAIR-Context-Session-Limit` (its share, when this node served it), and
 The desktop app's **Settings → Sessions** tab shows and changes all of this:
 
 - **Session policy:** idle timeout, and how long a request may wait for a slot.
-- **Context capacity on this node:** each model's pool and session count, with
-  each session's share shown as you type, and how many slots are held or waited
-  for.
+- **Context capacity on this node:** every model PAIR limits or has a plan
+  for: its sessions and window now, its plan, how many slots are held or waited
+  for, and **Change…**, **Apply**, **Remove plan** and **Clear limit**. The
+  **Reload automatically when idle** switch is here too.
 - **Active sessions:** with an **End** button.
 
 The router saves these itself, so they survive restarts.
