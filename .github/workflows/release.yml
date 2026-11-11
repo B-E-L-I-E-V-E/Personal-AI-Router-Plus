@@ -1,0 +1,122 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# PAIR Plus release builds.
+#
+# The public counterpart of NVIDIA's internal signed-release pipeline: builds
+# every installer from a version tag, signs and notarizes the macOS builds with
+# the repository's Developer ID secrets, and uploads the installers and their
+# update feeds (latest-mac.yml, latest-arm64-mac.yml, latest.yml, ...) to a
+# DRAFT GitHub release. Nothing reaches users until the draft is published by
+# hand on GitHub.
+#
+# Start it by pushing a tag that matches desktop/package.json, e.g. v1.1.0, or
+# run it manually from the Actions tab on such a tag. Each matrix job uploads
+# to the same draft, named after the version.
+#
+# Secrets (Settings > Secrets and variables > Actions):
+#   MAC_CERTIFICATE_P12_BASE64    Developer ID Application certificate and
+#                                 private key, exported as .p12, base64-encoded
+#   MAC_CERTIFICATE_PASSWORD      the .p12 export password
+#   APPLE_ID                      Apple ID used for notarization
+#   APPLE_APP_SPECIFIC_PASSWORD   an app-specific password for that Apple ID
+# Variable:
+#   APPLE_TEAM_ID                 TCDFRMWB65
+name: Release
+
+on:
+    push:
+        tags: ['v*']
+    workflow_dispatch:
+
+# contents: write lets electron-builder create the draft release and upload to
+# it with the built-in token.
+permissions:
+    contents: write
+
+concurrency:
+    group: release-${{ github.ref }}
+    cancel-in-progress: false
+
+jobs:
+    check-version:
+        name: Check tag matches the app version
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+            - name: Compare
+              shell: bash
+              run: |
+                  version="$(node -p "require('./desktop/package.json').version")"
+                  if [ "${GITHUB_REF_TYPE}" != "tag" ] || [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+                      echo "::error::Run this workflow on tag v${version} (got ${GITHUB_REF_TYPE} ${GITHUB_REF_NAME})."
+                      exit 1
+                  fi
+
+    release:
+        name: ${{ matrix.name }}
+        needs: check-version
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 90
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - name: linux-x64
+                      os: ubuntu-latest
+                      script: release:linux:x64
+                    - name: linux-arm64
+                      os: ubuntu-latest
+                      script: release:linux:arm64
+                    - name: win-x64
+                      os: windows-latest
+                      script: release:win:x64
+                    - name: win-arm64
+                      os: windows-latest
+                      script: release:win:arm64
+                    - name: mac-arm64
+                      os: macos-latest
+                      script: release:mac:arm64
+                    - name: mac-x64
+                      os: macos-15-intel
+                      script: release:mac:x64
+        steps:
+            - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+            - uses: ./.github/actions/setup
+              with:
+                  go: 'true'
+
+            - name: Install Linux packaging tools
+              if: runner.os == 'Linux'
+              run: sudo apt-get update -qq && sudo apt-get install -y -qq fakeroot rpm
+
+            - run: npm --prefix desktop ci --prefer-offline
+
+            # macOS: electron-builder imports CSC_LINK into a temporary keychain,
+            # the afterPack hook signs the nested executables, electron-builder
+            # signs the bundle and notarizes it with the APPLE_* variables.
+            - name: Build, sign and publish ${{ matrix.name }}
+              shell: bash
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  PAIR_MAC_SIGN: ${{ runner.os == 'macOS' && '1' || '' }}
+                  CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CERTIFICATE_P12_BASE64 || '' }}
+                  CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CERTIFICATE_PASSWORD || '' }}
+                  APPLE_ID: ${{ secrets.APPLE_ID }}
+                  APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+                  APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+              run: |
+                  if [ "${RUNNER_OS}" = "macOS" ] && [ -z "${CSC_LINK}" ]; then
+                      echo "::error::MAC_CERTIFICATE_P12_BASE64 is not set; macOS releases must be signed to auto-update."
+                      exit 1
+                  fi
+                  npm --prefix desktop run ${{ matrix.script }}
+
+            - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+              if: always()
+              with:
+                  name: release-${{ matrix.name }}
+                  path: desktop/release/**
+                  retention-days: 14
+                  if-no-files-found: warn

@@ -15,17 +15,13 @@
 # pull requests from forks like every other check.
 name: Release intent check
 
-# `develop` only, deliberately. release-intent-apply.yml runs on pushes to
-# `develop`, so gating pull requests into `main` would demand an intent block
-# and then discard it: a release cut is one push covering many pull requests,
-# and the Applies-PR trailer assumes one merge produces one apply.
-#
-# Leaving `main` out also keeps the cut itself mergeable. A develop -> main pull
-# request carries the bot's own edits to services/versions.json and
-# CHANGELOG.md, which are exactly the paths check_forbidden_paths rejects.
+# `main` only. PAIR Plus integrates and releases from `main`, where
+# release-intent-apply.yml applies each merged block; upstream NVIDIA PAIR gates
+# `develop` and cuts releases to `main` instead. One merge must produce one
+# apply, which the Applies-PR trailer assumes.
 on:
     pull_request:
-        branches: [develop]
+        branches: [main]
         types: [opened, synchronize, reopened, edited]
 
 permissions:

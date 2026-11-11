@@ -5,8 +5,13 @@
 
 Contributors declare version bumps and changelog text in the
 `pair-release-intent:v1` block in a pull request description. CI validates the
-block on the pull request, and after the merge lands on `develop` a bot applies
-it to the version files.
+block on the pull request, and after the merge lands a bot applies it to the
+version files.
+
+**PAIR Plus** runs both workflows on `main`, its single integration and release
+branch; read `develop` below as `main`. Upstream NVIDIA PAIR integrates on
+`develop` and cuts releases to `main`. Without the release-intent GitHub App,
+the apply job falls back to the built-in `GITHUB_TOKEN`.
 
 SemVer meaning for each number lives in [`services/VERSIONING.md`](../../services/VERSIONING.md).
 

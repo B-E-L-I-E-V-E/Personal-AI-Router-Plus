@@ -8,8 +8,20 @@ SPDX-License-Identifier: Apache-2.0
 Release history for Personal AI Router, newest first. Entries match the
 published releases on GitHub.
 
-Builds from this repository are unsigned and configure no update feed, so
-automatic updates are unavailable in them.
+PAIR Plus releases are published on GitHub by the B-E-L-I-E-V-E/Personal-AI-Router-Pluss
+release workflow, with macOS builds signed and notarized; the app updates from
+those releases. A build made locally from source is unsigned unless built with
+`PAIR_MAC_SIGN=1`, and updates only once a release exists.
+
+## 1.1.0 — PAIR Plus: sessions, agents and context capacity
+
+- Every request carries an `X-Request-ID`: yours if you send one, otherwise PAIR makes one, and it appears on the response, job and logs.
+- Conversations can be sessions (`X-PAIR-Session-ID`) owned by an agent (`X-PAIR-Agent-ID`). Each turn goes back to the node that served the last one, so the engine reuses its cached prompt. Another agent using the session is refused.
+- Sessions end after an idle timeout (10 minutes by default, 1 to 60), kept open by any request, a keepalive, or a request still running. Ending a session cancels its running requests, and reusing its ID is refused.
+- PAIR tracks how much context each session uses from the engine's own token counts, and reports each model's context capacity.
+- Set a model's context pool and number of sessions; each session gets an equal share. When every slot is taken, new sessions go to another node or wait in line, and a session that outgrows its share is asked to shorten its conversation. Every node enforces its own capacity.
+- New **Settings → Sessions** tab for the session policy, per-model capacity, and live sessions.
+- The window title reads NVIDIA PAIR Plus, and updates come from PAIR Plus releases. macOS builds are signed with a Developer ID and notarized.
 
 ## 1.0.0 — Personal AI Router 1.0.0
 

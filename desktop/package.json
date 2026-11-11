@@ -1,6 +1,6 @@
 {
     "name": "nvpair",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "NVIDIA PAIR",
     "engines": {
         "node": ">=25.5.0"
@@ -75,6 +75,12 @@
         "build:mac": "npm run build && npm run build:electron:mac:x64 && npm run build:electron:mac:arm64",
         "build:mac:x64": "npm run build && npm run build:electron:mac:x64",
         "build:mac:arm64": "npm run build && npm run build:electron:mac:arm64",
+        "release:win:x64": "npm run build && npm run stage:vc-redist && npm run licenses && npm run build:modular-binaries:win:x64 -- --force && npm run build:collect-logs:win:x64 && electron-builder -c electron-builder.config.ts --win --x64 --publish always",
+        "release:win:arm64": "npm run build && npm run stage:vc-redist && npm run licenses && npm run build:modular-binaries:win:arm64 -- --force && npm run build:collect-logs:win:arm64 && electron-builder -c electron-builder.config.ts --win --arm64 --publish always",
+        "release:linux:x64": "npm run build && npm run licenses && npm run build:modular-binaries:linux:x64 -- --force && npm run build:collect-logs:linux:x64 && electron-builder -c electron-builder.config.ts --linux --x64 --publish always",
+        "release:linux:arm64": "npm run build && npm run licenses && npm run build:modular-binaries:linux:arm64 -- --force && npm run build:collect-logs:linux:arm64 && electron-builder -c electron-builder.config.ts --linux --arm64 --publish always",
+        "release:mac:x64": "npm run build && npm run licenses && npm run build:modular-binaries:mac:x64 -- --force && npm run build:collect-logs:mac:x64 && npm run build:helper:mac && electron-builder -c electron-builder.config.ts --mac --x64 --publish always",
+        "release:mac:arm64": "npm run build && npm run licenses && npm run build:modular-binaries:mac:arm64 -- --force && npm run build:collect-logs:mac:arm64 && npm run build:helper:mac && electron-builder -c electron-builder.config.ts --mac --arm64 --publish always",
         "dead-code": "tsx scripts/analyze-dead-code.ts",
         "dead-code:check": "tsx scripts/analyze-dead-code.ts --check",
         "licenses": "tsx scripts/generate-licenses.ts",

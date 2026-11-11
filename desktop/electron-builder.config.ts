@@ -253,7 +253,17 @@ const config: Configuration = {
         {
             provider: 'github',
             owner: PAIR_PLUS_RELEASE_OWNER,
-            repo: PAIR_PLUS_RELEASE_REPO
+            repo: PAIR_PLUS_RELEASE_REPO,
+            // One feed per architecture, as NVIDIA's releases publish them
+            // (latest-mac.yml and latest-arm64-mac.yml, latest.yml and
+            // latest-arm64.yml, ...): each architecture is built separately, so
+            // a shared feed would be overwritten by whichever built last. The
+            // channel is also written into the app, which reads its own feed.
+            channel:
+                selectedArchs.length === 1 && selectedArchs[0] === 'arm64'
+                    ? 'latest-arm64'
+                    : 'latest',
+            releaseType: 'draft'
         }
     ],
     /**

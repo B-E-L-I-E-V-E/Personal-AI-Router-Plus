@@ -9,19 +9,20 @@
 # branch, which requires write access. Do not add a pull_request or
 # pull_request_target trigger here.
 #
-# Runs on `develop`, not `main`: one merge produces one apply, and the
-# Applies-PR trailer assumes exactly that. A release cut merges an accumulated
-# range into `main`, which this would see as a single push covering many pull
-# requests — and the script cannot aggregate them. The cut carries the already
-# applied bumps forward instead.
+# PAIR Plus integrates and releases from one branch, `main`; upstream NVIDIA
+# PAIR integrates on `develop` and cuts releases to `main`. Either way one
+# merge produces one apply, which the Applies-PR trailer assumes. Merge pull
+# requests one at a time (no batched merges of several into one push).
 name: Release intent
 
 on:
     push:
-        branches: [develop]
+        branches: [main]
 
+# contents: write is used only when no release-intent GitHub App is set up and
+# the job falls back to the built-in token.
 permissions:
-    contents: read
+    contents: write
 
 # Concurrent applies are handled by the script, not here: it commits with
 # `force: false` and re-reads the ref when the branch moved underneath it.
@@ -43,8 +44,14 @@ jobs:
             # scoped to this repository. Granted `contents: write` and
             # deliberately NOT the Workflows permission, so a compromise of this
             # job cannot rewrite .github/workflows.
+            #
+            # Optional on PAIR Plus: without RELEASE_INTENT_APP_ID the job uses
+            # the built-in GITHUB_TOKEN. Its commit does not start further
+            # workflow runs, and it cannot push past branch protection, so keep
+            # `main` open to it or configure the App.
             - name: Mint an app token
               id: app-token
+              if: ${{ vars.RELEASE_INTENT_APP_ID != '' }}
               uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
               with:
                   app-id: ${{ vars.RELEASE_INTENT_APP_ID }}
@@ -52,5 +59,5 @@ jobs:
 
             - name: Apply release intent
               env:
-                  RELEASE_INTENT_TOKEN: ${{ steps.app-token.outputs.token }}
+                  RELEASE_INTENT_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
               run: python3 scripts/release-intent/apply_pr.py
