@@ -79,54 +79,44 @@ export function shortTokens(n: number): string {
     return String(n)
 }
 
-// Rough text sizes per token for modern tokenizers (Llama 3, Qwen, Gemma,
-// GPT-style BPE): English prose averages about 4 characters or 0.75 words a
-// token, source code about 3 characters. A single-spaced page is about 500
-// words. The worst case is about one character per token: measured with
-// qwen3, UUIDs and hashes take 1.2 characters a token, base64 1.3 and
-// Chinese 1.7 (emoji 0.9, more than a token each).
-const CHARS_PER_TOKEN = 4
-const WORST_CHARS_PER_TOKEN = 1
-const CODE_CHARS_PER_TOKEN = 3
-const WORDS_PER_TOKEN = 0.75
-const WORDS_PER_PAGE = 500
-
-/** Round to two significant figures, so estimates do not look exact. */
-function roughly(n: number): number {
-    if (n < 100) return Math.round(n)
-    const scale = 10 ** (Math.floor(Math.log10(n)) - 1)
-    return Math.round(n / scale) * scale
-}
-
-/** Two significant figures, rounded down: a worst case must not overstate. */
+/** Two significant figures, rounded down, so estimates never overstate. */
 function roughlyDown(n: number): number {
     if (n < 100) return Math.floor(n)
     const scale = 10 ** (Math.floor(Math.log10(n)) - 1)
     return Math.floor(n / scale) * scale
 }
 
-/** About how much text a window of tokens holds. */
-export function approxText(tokens: number): {
+/**
+ * Text per token for kinds of text, measured with qwen3's tokenizer on
+ * samples of each. Other modern tokenizers (Llama 3, Gemma, GPT-style BPE)
+ * give similar numbers for English and code and differ more for other
+ * languages. Words are counted only where text has words.
+ */
+const TEXT_KINDS: { label: string; charsPerToken: number; wordsPerToken?: number }[] = [
+    { label: 'English prose', charsPerToken: 4.1, wordsPerToken: 0.67 },
+    { label: 'Code', charsPerToken: 3.6, wordsPerToken: 0.47 },
+    { label: 'Minified JSON', charsPerToken: 3.4 },
+    { label: 'Chinese', charsPerToken: 1.7 },
+    { label: 'Base64', charsPerToken: 1.3 },
+    { label: 'UUIDs and hashes', charsPerToken: 1.2 },
+    { label: 'Emoji', charsPerToken: 0.9 }
+]
+
+interface TextKindFit {
+    label: string
+    charsPerToken: number
+    /** Characters that fit, rounded down. */
     characters: number
+    /** Words that fit, rounded down; 0 where the text has no words. */
     words: number
-    pages: number
-    codeCharacters: number
-    /** Hashes, IDs, encoded data: about a character per token. */
-    worstCharacters: number
-} {
-    return {
-        characters: roughly(tokens * CHARS_PER_TOKEN),
-        words: roughly(tokens * WORDS_PER_TOKEN),
-        pages: roughly((tokens * WORDS_PER_TOKEN) / WORDS_PER_PAGE),
-        codeCharacters: roughly(tokens * CODE_CHARS_PER_TOKEN),
-        worstCharacters: roughlyDown(tokens * WORST_CHARS_PER_TOKEN)
-    }
 }
 
-/** One line describing approxText for people. */
-export function approxTextLine(tokens: number): string {
-    if (tokens <= 0) return ''
-    const t = approxText(tokens)
-    const pages = t.pages >= 1 ? `, ${t.pages.toLocaleString()} pages` : ''
-    return `About ${t.characters.toLocaleString()} characters of English (${t.words.toLocaleString()} words${pages}) or ${t.codeCharacters.toLocaleString()} characters of code per conversation, counting the model's replies. Worst case ${t.worstCharacters.toLocaleString()} characters: hashes, IDs, encoded data and Chinese or Japanese take about a token per character, emoji more.`
+/** How much of each kind of text fits in a window of tokens. */
+export function textKindFits(tokens: number): TextKindFit[] {
+    return TEXT_KINDS.map(k => ({
+        label: k.label,
+        charsPerToken: k.charsPerToken,
+        characters: roughlyDown(tokens * k.charsPerToken),
+        words: k.wordsPerToken ? roughlyDown(tokens * k.wordsPerToken) : 0
+    }))
 }

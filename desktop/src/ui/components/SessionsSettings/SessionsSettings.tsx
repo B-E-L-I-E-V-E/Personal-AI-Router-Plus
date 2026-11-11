@@ -22,7 +22,8 @@ import type {
 import getErrorString from '@/shared/utils/get-error-string'
 import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
 import CapacityPlanner from './CapacityPlanner'
-import { approxTextLine, nearestStop, shortTokens, windowStops } from './capacity-sliders'
+import { nearestStop, shortTokens, windowStops } from './capacity-sliders'
+import TextFitDetails from './TextFitDetails'
 import InstalledModelPicker from './InstalledModelPicker'
 import { planStatus } from './plan-status'
 
@@ -192,9 +193,7 @@ function CapacityRow({
                     stepFormatFn={i => shortTokens(stops[i] ?? 0)}
                     attributes={{ SliderInput: { 'aria-label': 'Context window per session' } }}
                 />
-                <Text kind="body/regular/sm" className="text-subtle-color">
-                    {approxTextLine(windowN)}
-                </Text>
+                <TextFitDetails tokens={windowN} />
             </Stack>
             <Stack gap="1">
                 <Flex justify="between" gap="3">

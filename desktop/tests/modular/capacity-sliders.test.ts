@@ -4,12 +4,11 @@
 import { describe, expect, it } from 'vitest'
 import type { CapacityPlan } from '@/shared/types/sessions'
 import {
-    approxText,
-    approxTextLine,
     memoryUse,
     nearestStop,
     sessionsSliderMax,
     shortTokens,
+    textKindFits,
     windowStops
 } from '@/ui/components/SessionsSettings/capacity-sliders'
 
@@ -110,21 +109,15 @@ describe('memory calculator', () => {
     })
 })
 
-describe('text estimate', () => {
-    it('turns a window into rough characters, words and pages', () => {
-        expect(approxText(40960)).toEqual({
-            characters: 160000,
-            words: 31000,
-            pages: 61,
-            codeCharacters: 120000,
-            worstCharacters: 40000
-        })
-        expect(approxText(2048).pages).toBe(3)
-    })
-
-    it('describes it in one line', () => {
-        expect(approxTextLine(40960)).toContain('160,000 characters of English')
-        expect(approxTextLine(40960)).toContain('Worst case 40,000 characters')
-        expect(approxTextLine(0)).toBe('')
+describe('text kinds', () => {
+    it('lists measured kinds from most to least text per token, rounded down', () => {
+        const fits = textKindFits(40960)
+        expect(fits.map(f => f.label)[0]).toBe('English prose')
+        expect(fits.find(f => f.label === 'English prose')?.characters).toBe(160000)
+        expect(fits.find(f => f.label === 'English prose')?.words).toBe(27000)
+        expect(fits.find(f => f.label === 'Chinese')?.words).toBe(0)
+        expect(fits.at(-1)?.characters).toBe(36000)
+        for (let i = 1; i < fits.length; i++)
+            expect(fits[i].charsPerToken).toBeLessThanOrEqual(fits[i - 1].charsPerToken)
     })
 })
