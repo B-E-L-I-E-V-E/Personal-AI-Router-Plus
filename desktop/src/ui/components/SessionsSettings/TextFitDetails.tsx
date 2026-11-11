@@ -8,12 +8,23 @@ import { textKindFits } from './capacity-sliders'
 const RIGHT = { textAlign: 'right' as const }
 
 /**
- * How much text fits in one session's context window, by kind of text. It
- * follows the window slider; More info says where the numbers come from.
+ * How much text fits in one session's context window, by kind of text, and
+ * when a reply budget is given, how long a reply can be. It follows the
+ * sliders; More info says where the numbers come from.
  */
-export default function TextFitDetails({ tokens, label }: { tokens: number; label?: string }) {
+export default function TextFitDetails({
+    tokens,
+    replyTokens = 0,
+    label
+}: {
+    tokens: number
+    /** The reply budget; adds reply words and pages columns when positive. */
+    replyTokens?: number
+    label?: string
+}) {
     const [open, setOpen] = useState(false)
     if (tokens <= 0) return null
+    const replies = replyTokens > 0 ? textKindFits(replyTokens) : null
     return (
         <Stack gap="1">
             <Text kind="body/regular/sm" className="text-subtle-color">
@@ -24,7 +35,9 @@ export default function TextFitDetails({ tokens, label }: { tokens: number; labe
                 aria-label="Text that fits in the context window"
                 style={{
                     display: 'grid',
-                    gridTemplateColumns: '1fr auto auto auto auto',
+                    gridTemplateColumns: replies
+                        ? '1fr auto auto auto auto auto auto'
+                        : '1fr auto auto auto auto',
                     columnGap: '0.75rem',
                     rowGap: '0.25rem',
                     alignItems: 'baseline'
@@ -45,7 +58,17 @@ export default function TextFitDetails({ tokens, label }: { tokens: number; labe
                 <Text kind="body/semibold/sm" role="columnheader" style={RIGHT}>
                     Pages
                 </Text>
-                {textKindFits(tokens).map(k => (
+                {replies && (
+                    <>
+                        <Text kind="body/semibold/sm" role="columnheader" style={RIGHT}>
+                            Reply words
+                        </Text>
+                        <Text kind="body/semibold/sm" role="columnheader" style={RIGHT}>
+                            Reply pages
+                        </Text>
+                    </>
+                )}
+                {textKindFits(tokens).map((k, i) => (
                     <Fragment key={k.label}>
                         <Text kind="body/regular/sm" role="cell">
                             {k.label}
@@ -62,6 +85,16 @@ export default function TextFitDetails({ tokens, label }: { tokens: number; labe
                         <Text kind="body/regular/sm" role="cell" style={RIGHT}>
                             {k.pages.toLocaleString()}
                         </Text>
+                        {replies && (
+                            <>
+                                <Text kind="body/regular/sm" role="cell" style={RIGHT}>
+                                    {replies[i].words.toLocaleString()}
+                                </Text>
+                                <Text kind="body/regular/sm" role="cell" style={RIGHT}>
+                                    {replies[i].pages.toLocaleString()}
+                                </Text>
+                            </>
+                        )}
                     </Fragment>
                 ))}
             </div>
@@ -87,7 +120,9 @@ export default function TextFitDetails({ tokens, label }: { tokens: number; labe
                     words (JSON, base64, IDs, emoji) is counted in standard words of five characters
                     and a space. A page is 500 words, single spaced. The window holds the whole
                     conversation: your messages, the model’s replies and the earlier turns it
-                    re-reads. Counts are rounded down.
+                    re-reads. The reply columns are the longest reply the reply budget allows; a
+                    thinking model spends part of that budget reasoning before it answers, so its
+                    visible answer is shorter. Counts are rounded down.
                 </Text>
             )}
         </Stack>

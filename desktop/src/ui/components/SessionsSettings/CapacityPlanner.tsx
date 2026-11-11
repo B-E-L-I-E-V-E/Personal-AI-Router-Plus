@@ -327,7 +327,8 @@ export default function CapacityPlanner({
                 </Text>
                 <TextFitDetails
                     tokens={messageTokens}
-                    label={`Messages and history can use ${tokens(messageTokens)} tokens, about:`}
+                    replyTokens={replyNow}
+                    label={`Messages and history can use ${tokens(messageTokens)} tokens, and a reply up to ${tokens(replyNow)}. That is about:`}
                 />
             </Stack>
 

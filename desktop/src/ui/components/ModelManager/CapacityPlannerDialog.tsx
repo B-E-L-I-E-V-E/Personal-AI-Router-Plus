@@ -45,7 +45,7 @@ export function CapacityPlannerDialog({
             <ModalDialog>
                 <ModalContent
                     className="no-drag-elements"
-                    style={{ width: 'min(640px, 92vw)', maxHeight: '88vh', overflowY: 'auto' }}
+                    style={{ width: 'min(880px, 94vw)', maxHeight: '88vh', overflowY: 'auto' }}
                 >
                     <ModalHeading>Context &amp; sessions · {displayName}</ModalHeading>
                     <Stack gap="3" className="-mt-2">
