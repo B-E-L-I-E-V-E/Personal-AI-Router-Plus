@@ -10,9 +10,11 @@
 # DRAFT GitHub release. Nothing reaches users until the draft is published by
 # hand on GitHub.
 #
-# Start it by pushing a tag that matches desktop/package.json, e.g. v1.1.0, or
-# run it manually from the Actions tab on such a tag. Each matrix job uploads
-# to the same draft, named after the version.
+# Start it by pushing a tag that matches desktop/package.json, e.g. v1.1.0.
+# Each matrix job uploads to the same draft, named after the app version (not
+# the git ref), so a manual run from `main` (Actions > Release > Run workflow)
+# rebuilds into the draft for the version `main` carries. Use that to retry
+# platforms that failed, e.g. platforms: mac.
 #
 # Secrets (Settings > Secrets and variables > Actions):
 #   MAC_CERTIFICATE_P12_BASE64    Developer ID Application certificate and
@@ -28,6 +30,12 @@ on:
     push:
         tags: ['v*']
     workflow_dispatch:
+        inputs:
+            platforms:
+                description: Which installers to build
+                type: choice
+                options: [all, mac, windows, linux]
+                default: all
 
 # contents: write lets electron-builder create the draft release and upload to
 # it with the built-in token.
@@ -40,18 +48,43 @@ concurrency:
 
 jobs:
     check-version:
-        name: Check tag matches the app version
+        name: Check the ref and pick platforms
         runs-on: ubuntu-latest
+        outputs:
+            matrix: ${{ steps.pick.outputs.matrix }}
         steps:
             - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
             - name: Compare
               shell: bash
               run: |
                   version="$(node -p "require('./desktop/package.json').version")"
-                  if [ "${GITHUB_REF_TYPE}" != "tag" ] || [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+                  if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+                      if [ "${GITHUB_REF_NAME}" != "main" ]; then
+                          echo "::error::Run a manual release from main (got ${GITHUB_REF_NAME})."
+                          exit 1
+                      fi
+                      echo "Manual run from main: building into the v${version} draft."
+                  elif [ "${GITHUB_REF_TYPE}" != "tag" ] || [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
                       echo "::error::Run this workflow on tag v${version} (got ${GITHUB_REF_TYPE} ${GITHUB_REF_NAME})."
                       exit 1
                   fi
+            - name: Pick platforms
+              id: pick
+              shell: bash
+              env:
+                  PLATFORMS: ${{ inputs.platforms || 'all' }}
+              run: |
+                  all='[
+                    {"name":"linux-x64","family":"linux","os":"ubuntu-latest","script":"release:linux:x64"},
+                    {"name":"linux-arm64","family":"linux","os":"ubuntu-latest","script":"release:linux:arm64"},
+                    {"name":"win-x64","family":"windows","os":"windows-latest","script":"release:win:x64"},
+                    {"name":"win-arm64","family":"windows","os":"windows-latest","script":"release:win:arm64"},
+                    {"name":"mac-arm64","family":"mac","os":"macos-latest","script":"release:mac:arm64"},
+                    {"name":"mac-x64","family":"mac","os":"macos-15-intel","script":"release:mac:x64"}
+                  ]'
+                  picked="$(jq -c --arg p "${PLATFORMS}" '[.[] | select($p == "all" or .family == $p)]' <<<"${all}")"
+                  echo "matrix={\"include\":${picked}}" >> "${GITHUB_OUTPUT}"
+                  echo "Building: $(jq -r '[.[].name] | join(", ")' <<<"${picked}")"
 
     release:
         name: ${{ matrix.name }}
@@ -60,26 +93,7 @@ jobs:
         timeout-minutes: 90
         strategy:
             fail-fast: false
-            matrix:
-                include:
-                    - name: linux-x64
-                      os: ubuntu-latest
-                      script: release:linux:x64
-                    - name: linux-arm64
-                      os: ubuntu-latest
-                      script: release:linux:arm64
-                    - name: win-x64
-                      os: windows-latest
-                      script: release:win:x64
-                    - name: win-arm64
-                      os: windows-latest
-                      script: release:win:arm64
-                    - name: mac-arm64
-                      os: macos-latest
-                      script: release:mac:arm64
-                    - name: mac-x64
-                      os: macos-15-intel
-                      script: release:mac:x64
+            matrix: ${{ fromJSON(needs.check-version.outputs.matrix) }}
         steps:
             - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
