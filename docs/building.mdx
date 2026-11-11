@@ -113,8 +113,92 @@ Refer to `desktop/package.json` for their names. The Go services use no cgo, so
 you can build any of those targets from any host.
 
 A local build produces an application you run on the machine that built it. Use
-the [releases page](https://github.com/NVIDIA/Personal-AI-Router/releases) for
-installable builds. This guide does not cover producing distributable artifacts.
+the [PAIR Plus releases page](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Pluss/releases)
+for installable builds, or read on to sign your own and to publish a release.
+
+To package an installer, use the per-platform scripts, for example
+`npm run build:mac:arm64`, `npm run build:win:x64` or `npm run build:linux:x64`.
+Output lands in `desktop/release/<version>/`. Every build includes an update feed
+that points at the PAIR Plus releases, but uploads nothing.
+
+## Signed macOS Builds
+
+A macOS build is unsigned unless you set `PAIR_MAC_SIGN=1`. Then:
+
+1. The build's `afterPack` hook signs every nested executable (the Go services
+   in `Resources/cli-bin` and the firewall helper pair in `Contents/MacOS`) with
+   the hardened runtime and a secure timestamp.
+2. electron-builder signs the app with the entitlements in
+   `scripts/build/macos/entitlements.mac.plist`.
+3. electron-builder submits the app to Apple for notarization and staples the
+   ticket.
+
+It needs a **Developer ID Application** certificate and its private key in your
+keychain, and notarization credentials. Save the credentials once:
+
+```bash
+xcrun notarytool store-credentials "pair-plus-notary" --apple-id "you@example.com" --team-id "YOURTEAMID"
+```
+
+Then build:
+
+```bash
+cd desktop
+PAIR_MAC_SIGN=1 APPLE_KEYCHAIN_PROFILE=pair-plus-notary npm run build:mac:arm64
+```
+
+Set `PAIR_MAC_SIGN_IDENTITY` when the keychain holds more than one Developer ID
+identity. Check the result:
+
+```bash
+spctl -a -vv "release/<version>/mac/mac-arm64/NVIDIA PAIR.app"
+```
+
+It should report `source=Notarized Developer ID`.
+
+The firewall helper only talks to apps signed by one Apple team, pinned as
+`teamIdentifier` in `desktop/native/Shared/HelperProtocol.swift`. If you sign
+with a different team, change it to yours, or the helper refuses the app.
+
+## Publishing a PAIR Plus Release
+
+PAIR Plus follows NVIDIA's release process, adapted to a single branch, `main`:
+
+1. **Changes reach `main` by pull request.** Each pull request declares its
+   version bumps and changelog text in a `pair-release-intent:v1` block. Refer
+   to [`scripts/release-intent/README.md`](../scripts/release-intent/README.md)
+   and [`services/VERSIONING.md`](../services/VERSIONING.md). CI checks the
+   block, and after the merge a bot applies it to `desktop/package.json`,
+   `services/versions.json` and `CHANGELOG.md`. A MINOR or MAJOR release
+   version is a manual edit, made with `npm version <version> --no-git-tag-version`
+   in `desktop/`.
+2. **A version tag starts a release.** Push `v<version>`, matching
+   `desktop/package.json`, for example `v1.1.0`. The
+   [Release workflow](../.github/workflows/release.yml) builds all six
+   installers on GitHub's runners and signs and notarizes macOS.
+3. **Everything lands in a draft.** Installers, blockmaps and one update feed
+   per architecture (`latest-mac.yml`, `latest-arm64-mac.yml`, `latest.yml`,
+   `latest-arm64.yml`, `latest-linux.yml`, `latest-arm64-linux-arm64.yml`) are
+   uploaded to a draft GitHub release.
+4. **Publish the draft** on GitHub. Installed PAIR Plus apps then see the update.
+
+To retry some platforms without a new tag, run the Release workflow by hand from
+`main` (**Actions → Release → Run workflow**) and choose `mac`, `windows` or
+`linux`. It builds into the draft for the version `main` carries.
+
+The workflow needs these repository settings:
+
+| Name | Kind | Value |
+| --- | --- | --- |
+| `MAC_CERTIFICATE_P12_BASE64` | secret | Developer ID certificate and key as a `.p12`, base64-encoded |
+| `MAC_CERTIFICATE_PASSWORD` | secret | The `.p12` password |
+| `APPLE_ID` | secret | Apple ID used for notarization |
+| `APPLE_APP_SPECIFIC_PASSWORD` | secret | An app-specific password for that Apple ID |
+| `APPLE_TEAM_ID` | variable | Your Apple Developer team ID |
+
+Create the `.p12` with macOS's own `/usr/bin/openssl`, or with OpenSSL 3's
+`-legacy` option. A `.p12` from OpenSSL 3's defaults fails to import on macOS,
+reporting "MAC verification failed".
 
 ## Build the Services Alone
 

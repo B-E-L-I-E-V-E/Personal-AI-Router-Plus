@@ -115,6 +115,11 @@ requests spreads out instead of waiting for workload reports to catch up.
 Because routing is a decision rather than a guarantee, use the **Jobs** view to
 confirm where work ran.
 
+PAIR Plus adds optional sessions to this model: a request that names a session
+goes back to the node that served its last turn, and each model's context can be
+divided among a set number of sessions. Refer to
+[Sessions and Context Capacity](sessions.mdx).
+
 ## Trust Between Nodes
 
 Discovery is deliberately not a trust decision. Every machine on the network is

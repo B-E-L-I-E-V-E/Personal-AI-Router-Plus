@@ -396,6 +396,33 @@ Where you put each model decides what routing can do with it:
 - **Where work actually ran is observable.** Use the **Jobs** view rather than
   inferring routing from inventory.
 
+### Sessions and Context Capacity (PAIR Plus)
+
+PAIR Plus adds three inputs to this decision, all in the proxy and all optional.
+Refer to [Sessions and Context Capacity](sessions.mdx) for the user-facing
+behavior and `services/nvpair-proxy/spec.md` §5.9–5.14 for the contract.
+
+- **Session affinity.** A request carrying `X-PAIR-Session-ID` puts the node
+  that served that session's last turn, for that engine, first in its first
+  round. Affinity ranks below a manual selection and cannot override the
+  capability gate. Failover re-pins the session to whichever node commits.
+- **Context admission.** For a model with known capacity, a session must hold or
+  take one of its slots on the serving node, and must not have outgrown its share
+  of the pool. A full node drops out of the candidates; with no other owner the
+  request waits in line for a slot, then gets `503`. An outgrown session gets
+  `400`.
+- **Enforced where it is served.** The originating node gates its own engine. A
+  peer's mTLS ingress gates sessions routed to it, tracking each under the
+  caller's cluster ID, and the originating node releases a peer's slot when a
+  session moves or ends. A full peer's `503` is an ordinary retryable failure, so
+  failover needs nothing new.
+
+Session state lives in memory on the node where requests originate: IDs, the
+owning agent, timestamps, the serving node per engine, and engine-reported token
+counts. The proxy reads those counts from each reply's numeric usage fields and
+holds no prompt or response text. Session policy and per-model capacity are
+saved by the proxy beside its port files.
+
 ### Scheduler Limitations
 
 There is one policy today and it combines job count with coarse GPU utilization.

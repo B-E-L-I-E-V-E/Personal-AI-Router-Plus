@@ -17,6 +17,7 @@ applies to, so you can skip the ones that do not:
 - [On macOS, tidy up the old app](#on-macos-tidy-up-the-old-app)
 - [If an earlier PAIR installed LM Studio for you](#if-an-earlier-pair-installed-lm-studio-for-you)
 - [If you use PAIR from a web page or browser extension](#if-you-use-pair-from-a-web-page-or-browser-extension)
+- [Moving a machine to PAIR Plus](#moving-a-machine-to-pair-plus)
 
 For everything that is new in this release, refer to
 [Release Notes](release-notes.mdx).
@@ -118,6 +119,31 @@ scheme, such as `https://`; a wildcard on its own (`*`) or a bare `localhost`
 is not accepted. If requests can be routed to other machines in your cluster,
 allow the address on each of them. [Engine Settings](engine-settings.mdx) has
 the details.
+
+## Moving a Machine to PAIR Plus
+
+PAIR Plus installs over NVIDIA PAIR 1.0 and keeps its settings, cluster
+membership, and models, because the installed app keeps the same name and data
+folder. Do not run the two side by side on one machine.
+
+1. Quit NVIDIA PAIR, then install PAIR Plus from the
+   [PAIR Plus releases page](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Pluss/releases),
+   replacing the old app.
+2. **On macOS,** PAIR Plus is signed by a different developer than NVIDIA PAIR,
+   so its firewall helper needs approving again. When PAIR Plus asks, enable
+   **NVIDIA PAIR** in **System Settings → General → Login Items & Extensions**.
+   The helper NVIDIA PAIR started keeps running until it restarts. Restart it
+   once, or restart the Mac:
+
+   ```bash
+   sudo launchctl kickstart -k system/com.nvidia.nvpair.helper
+   ```
+
+3. From then on PAIR Plus updates itself from PAIR Plus releases, under
+   **Settings → Service → Application updates**.
+
+Machines you leave on NVIDIA PAIR 1.0 stay in the cluster and keep serving
+requests. Only PAIR Plus machines enforce context capacity.
 
 ## Checking Everything Is Working
 

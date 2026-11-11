@@ -3,10 +3,38 @@ SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All 
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# NVIDIA Personal AI Router (PAIR)
+# PAIR Plus
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/security-policy-green.svg)](SECURITY.md)
+[![Latest release](https://img.shields.io/github/v/release/B-E-L-I-E-V-E/Personal-AI-Router-Pluss)](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Pluss/releases/latest)
+
+**PAIR Plus** is an independent fork of
+[NVIDIA Personal AI Router](https://github.com/NVIDIA/Personal-AI-Router)
+1.0.0, maintained at
+[B-E-L-I-E-V-E/Personal-AI-Router-Pluss](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Pluss).
+It is not an NVIDIA product and is not supported by NVIDIA. Its window title
+reads **NVIDIA PAIR Plus**; the installed app keeps the name NVIDIA PAIR, so an
+existing installation's settings, cluster membership, and models carry over.
+
+PAIR Plus adds to PAIR's routing:
+
+- **Request IDs** on every request (`X-Request-ID`), for matching a response to
+  your logs and to the job that ran it.
+- **Sessions** (`X-PAIR-Session-ID`) that send each turn of a conversation back
+  to the node that served the last one, owned by an **agent**
+  (`X-PAIR-Agent-ID`), with an idle timeout, a keepalive, and an end call.
+- **Context capacity**: each model's context pool divided among a fixed number of
+  sessions. New sessions go elsewhere or wait when a model is full, and a session
+  that outgrows its share is asked to shorten its conversation.
+- A **Settings → Sessions** tab for all of it, and signed, notarized macOS builds
+  that update from PAIR Plus releases.
+
+Read [Sessions and Context Capacity](docs/sessions.mdx). PAIR Plus nodes and
+NVIDIA PAIR 1.0 nodes work together in one cluster. The rest of this README is
+PAIR's own documentation and applies to PAIR Plus unchanged unless noted.
+
+## About PAIR
 
 NVIDIA Personal AI Router (PAIR), shown as **NVIDIA PAIR** once installed, is a
 local inference router for a group of compatible computers on the same network. It discovers participating nodes,
@@ -60,14 +88,19 @@ with no desktop — but neither is the ordinary way in. Those are covered in
 
 ### Download a release
 
-A released installer is signed, sets up the background services and the desktop
+A released installer sets up the background services and the desktop
 application together, and adds the firewall rules PAIR needs on Windows. It also
 tells you when a newer release exists and installs it on your say-so from
-**Settings → Service**. A build you make yourself is unsigned and checks no
-update feed, so you would upgrade it by pulling and rebuilding.
+**Settings → Service**. A build you make yourself is unsigned unless you sign it
+(see [Building and running](docs/building.mdx#signed-macos-builds)), so you would
+upgrade it by pulling and rebuilding.
 
-Download PAIR from the
-[GitHub releases page](https://github.com/NVIDIA/Personal-AI-Router/releases).
+Download PAIR Plus from its
+[GitHub releases page](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Pluss/releases).
+The macOS builds are signed with a Developer ID and notarized by Apple. The
+Windows and Linux builds are unsigned, so Windows SmartScreen may warn on first
+install. NVIDIA's own signed releases of PAIR are on
+[NVIDIA's releases page](https://github.com/NVIDIA/Personal-AI-Router/releases).
 Release downloads include:
 
 - a Windows installer;
@@ -237,7 +270,8 @@ Each entry assumes the ones before it.
    update, and uninstall engines; what PAIR restores after you quit or relaunch.
 4. **[Engine settings](docs/engine-settings.mdx)** — change an engine's ports and
    its launch command, on this machine or a paired one, and give a browser access
-   to your models.
+   to your models. Then **[Sessions and context capacity](docs/sessions.mdx)**
+   covers PAIR Plus's request IDs, sessions, agents, and per-model capacity.
 5. **[Terminal interface](docs/terminal-interface.mdx)** — the same tasks from a
    terminal, for a machine with no desktop environment. Skip it if every machine
    you run has a desktop.
@@ -266,8 +300,11 @@ Component references, for when you already know what you are looking for:
 
 ## Releases
 
-See the [releases page](https://github.com/NVIDIA/Personal-AI-Router/releases)
-for what changed in each release.
+See the [PAIR Plus releases page](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Pluss/releases)
+and [CHANGELOG.md](CHANGELOG.md) for what changed in each release. Releases are
+built from version tags on `main` by the
+[Release workflow](.github/workflows/release.yml); see
+[Building and running](docs/building.mdx#publishing-a-pair-plus-release).
 
 ## Roadmap
 
