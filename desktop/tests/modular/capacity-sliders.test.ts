@@ -78,9 +78,10 @@ describe('window slider stops', () => {
 })
 
 describe('sessions slider', () => {
-    it('reaches past what fits so overflow can be shown', () => {
+    it('reaches well past what fits, within the proxy limit', () => {
         expect(sessionsSliderMax(0)).toBe(8)
-        expect(sessionsSliderMax(21)).toBe(32)
+        expect(sessionsSliderMax(3)).toBe(11)
+        expect(sessionsSliderMax(21)).toBe(42)
         expect(sessionsSliderMax(250)).toBe(256)
     })
 })

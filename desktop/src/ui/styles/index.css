@@ -568,3 +568,11 @@ body .os-scrollbar {
     background-color: var(--background-color-interaction-primary-base);
     opacity: 0.42;
 }
+
+/* A capacity slider set past what the node's memory holds. */
+.pair-slider-over .nv-slider-root {
+    --slider-fill-color: var(--text-color-feedback-danger);
+}
+.pair-slider-over .nv-slider-input::-webkit-slider-thumb {
+    border-color: var(--text-color-feedback-danger);
+}

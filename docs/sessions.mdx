@@ -137,8 +137,9 @@ As you drag, the memory bars show what the settings need:
 | GPU memory | The model's weights on the GPU, sessions × one session's context, and the reserve |
 | System memory | Expert weights kept there (see below), and a quarter of it (at least 4 GB) kept free for the system |
 
-A bar turns red when the settings need more than the node has, and the plan
-cannot be saved until it fits again. On Apple silicon the GPU and the system
+When the settings need more than the node has, the sliders and the bar turn
+red. You can still save and apply such a plan; the engine may then spill onto
+the CPU and run slowly, or fail to load the model. On Apple silicon the GPU and the system
 share one memory, shown as a single bar.
 
 #### Mixture-of-Experts Models

@@ -20,6 +20,7 @@ import type {
 } from '@/shared/types/sessions'
 import getErrorString from '@/shared/utils/get-error-string'
 import {
+    MAX_SESSIONS,
     memoryUse,
     MIN_WINDOW_TOKENS,
     nearestStop,
@@ -85,6 +86,11 @@ function Choice<T extends string>({
             ))}
         </Flex>
     )
+}
+
+/** Turns the sliders inside red when the settings need more than the node has. */
+function SliderTone({ over, children }: { over: boolean; children: React.ReactNode }) {
+    return <div className={over ? 'pair-slider-over' : undefined}>{children}</div>
 }
 
 /** One labelled memory bar: what the settings need against what there is. */
@@ -220,15 +226,17 @@ export default function CapacityPlanner({
     )
     const windowIndex = nearestStop(stops, windowTokens ?? stops[stops.length - 1])
     const fit = plan && !plan.error ? plan.sessions : 0
-    const sessionsMax = sessionsSliderMax(fit)
+    // Reaches past what fits, and never below a saved count.
+    const sessionsMax = Math.max(sessionsSliderMax(fit), Math.min(sessions ?? 0, MAX_SESSIONS))
     const chosen = Math.min(sessions ?? 1, sessionsMax)
     const use = plan && !plan.error ? memoryUse(plan, chosen) : null
     const over = use ? use.gpuOver || use.ramOver : false
+    // Settings past the hardware can still be saved; the sliders and bars
+    // turn red to say so.
     const usable =
         plan !== null &&
         !plan.error &&
         use !== null &&
-        !over &&
         chosen >= 1 &&
         plan.windowTokens >= MIN_WINDOW_TOKENS
     const needsManual = plan?.error && /unknown/.test(plan.error)
@@ -271,16 +279,18 @@ export default function CapacityPlanner({
                     <Text kind="body/semibold/sm">Context window per session</Text>
                     <Text kind="body/semibold/sm">{tokens(stops[windowIndex])} tokens</Text>
                 </Flex>
-                <Slider
-                    min={0}
-                    max={stops.length - 1}
-                    step={1}
-                    value={windowIndex}
-                    onValueChange={i => setWindowTokens(stops[i])}
-                    customSteps={stops.map((_, i) => i)}
-                    stepFormatFn={i => shortTokens(stops[i] ?? 0)}
-                    attributes={{ SliderInput: { 'aria-label': 'Context window per session' } }}
-                />
+                <SliderTone over={over}>
+                    <Slider
+                        min={0}
+                        max={stops.length - 1}
+                        step={1}
+                        value={windowIndex}
+                        onValueChange={i => setWindowTokens(stops[i])}
+                        customSteps={stops.map((_, i) => i)}
+                        stepFormatFn={i => shortTokens(stops[i] ?? 0)}
+                        attributes={{ SliderInput: { 'aria-label': 'Context window per session' } }}
+                    />
+                </SliderTone>
             </Stack>
 
             <Stack gap="1">
@@ -293,18 +303,24 @@ export default function CapacityPlanner({
                         {chosen} {plan && !plan.error ? `(${fit} fit)` : ''}
                     </Text>
                 </Flex>
-                <Slider
-                    min={1}
-                    max={sessionsMax}
-                    step={1}
-                    value={chosen}
-                    onValueChange={n => {
-                        setSessions(n)
-                        setSessionsTouched(true)
-                    }}
-                    customSteps={[1, ...(fit > 1 && fit < sessionsMax ? [fit] : []), sessionsMax]}
-                    attributes={{ SliderInput: { 'aria-label': 'Sessions at once' } }}
-                />
+                <SliderTone over={over}>
+                    <Slider
+                        min={1}
+                        max={sessionsMax}
+                        step={1}
+                        value={chosen}
+                        onValueChange={n => {
+                            setSessions(n)
+                            setSessionsTouched(true)
+                        }}
+                        customSteps={[
+                            1,
+                            ...(fit > 1 && fit < sessionsMax ? [fit] : []),
+                            sessionsMax
+                        ]}
+                        attributes={{ SliderInput: { 'aria-label': 'Sessions at once' } }}
+                    />
+                </SliderTone>
             </Stack>
 
             <Stack gap="1">
@@ -312,16 +328,18 @@ export default function CapacityPlanner({
                     <Text kind="body/semibold/sm">Keep free</Text>
                     <Text kind="body/semibold/sm">{reserve}% of each GPU</Text>
                 </Flex>
-                <Slider
-                    min={0}
-                    max={50}
-                    step={5}
-                    value={reserve}
-                    onValueChange={setReserve}
-                    customSteps={[0, 10, 25, 50]}
-                    stepFormatFn={v => `${v}%`}
-                    attributes={{ SliderInput: { 'aria-label': 'Keep free' } }}
-                />
+                <SliderTone over={over}>
+                    <Slider
+                        min={0}
+                        max={50}
+                        step={5}
+                        value={reserve}
+                        onValueChange={setReserve}
+                        customSteps={[0, 10, 25, 50]}
+                        stepFormatFn={v => `${v}%`}
+                        attributes={{ SliderInput: { 'aria-label': 'Keep free' } }}
+                    />
+                </SliderTone>
             </Stack>
 
             <Stack gap="1">
@@ -381,9 +399,15 @@ export default function CapacityPlanner({
                 <Stack gap="2">
                     <Text kind="body/semibold/md" style={over ? DANGER_TEXT : undefined}>
                         {over
-                            ? `${chosen} session${chosen === 1 ? '' : 's'} of ${tokens(plan.windowTokens)} tokens do not fit`
+                            ? `${chosen} session${chosen === 1 ? '' : 's'} of ${tokens(plan.windowTokens)} tokens need more memory than this node has`
                             : `${chosen} session${chosen === 1 ? '' : 's'} of ${tokens(plan.windowTokens)} tokens`}
                     </Text>
+                    {over && (
+                        <Text kind="body/regular/sm" style={DANGER_TEXT}>
+                            You can still save this plan. The engine may then spill onto the CPU and
+                            run slowly, or fail to load the model.
+                        </Text>
+                    )}
                     <MemoryBar
                         label={gpuLabel}
                         needed={use.gpuNeeded}

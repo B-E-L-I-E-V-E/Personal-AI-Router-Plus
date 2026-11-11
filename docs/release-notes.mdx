@@ -31,8 +31,8 @@ from the
 - **Context capacity.** Each session gets a model's full context window; set how
   many sessions each model runs at once.
 - **Plan from GPU memory.** Sliders for the window and the number of sessions,
-  with GPU and system memory bars that turn red when the settings need more
-  than the node has. Mixture-of-experts models can keep their expert weights
+  with GPU and system memory bars. The sliders turn red when the settings need
+  more than the node has, and such a plan can still be saved. Mixture-of-experts models can keep their expert weights
   in system memory on llama.cpp.
   New sessions go to another node or wait when a model is full, and a session
   that outgrows its share is asked to shorten its conversation. Each node

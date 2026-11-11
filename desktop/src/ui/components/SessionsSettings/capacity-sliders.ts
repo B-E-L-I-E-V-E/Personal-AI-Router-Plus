@@ -8,7 +8,7 @@ export const MIN_WINDOW_TOKENS = 2048
 /** Window stops offered when the model does not report its maximum. */
 const UNKNOWN_MAX_WINDOW = 1 << 20
 /** The proxy plans at most this many sessions per model. */
-const MAX_SESSIONS = 256
+export const MAX_SESSIONS = 256
 
 /**
  * The context windows the window slider stops at: powers of two from 2K up to
@@ -33,11 +33,11 @@ export function nearestStop(stops: number[], tokens: number): number {
 }
 
 /**
- * The sessions slider's top: past what fits, so the calculator can show
- * settings that would run out of memory, but within the proxy's limit.
+ * The sessions slider's top: well past what fits, since plans may exceed the
+ * hardware (the sliders turn red), but within the proxy's limit.
  */
 export function sessionsSliderMax(fit: number): number {
-    return Math.min(MAX_SESSIONS, Math.max(8, fit + 4, Math.ceil(fit * 1.5)))
+    return Math.min(MAX_SESSIONS, Math.max(8, fit + 8, fit * 2))
 }
 
 interface MemoryUse {
