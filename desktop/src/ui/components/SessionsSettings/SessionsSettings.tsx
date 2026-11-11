@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
     Button,
     Flex,
@@ -21,6 +21,7 @@ import type {
 import getErrorString from '@/shared/utils/get-error-string'
 import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
 import CapacityPlanner from './CapacityPlanner'
+import InstalledModelPicker from './InstalledModelPicker'
 import { planStatus } from './plan-status'
 
 // The proxy owns these settings and their saved state; this panel only reads
@@ -379,6 +380,10 @@ export default function SessionsSettings() {
         [refresh]
     )
     const autoReload = planner?.autoReload ?? true
+    const listed = useMemo(
+        () => new Set(capacity.map(row => `${row.engine}/${row.model}`)),
+        [capacity]
+    )
     const savedFor = (row: ModelCapacity) =>
         planner?.plans.find(p => p.engine === row.engine && p.model === row.model)
 
@@ -433,7 +438,7 @@ export default function SessionsSettings() {
                 </Flex>
                 {capacity.length === 0 ? (
                     <Text kind="body/regular/sm" className="text-subtle-color">
-                        No models yet. Load a model or start a session to see it here.
+                        No models are loaded on this node.
                     </Text>
                 ) : (
                     capacity.map(row => (
@@ -448,6 +453,12 @@ export default function SessionsSettings() {
                         />
                     ))
                 )}
+                <InstalledModelPicker
+                    listed={listed}
+                    planner={planner}
+                    onPlanner={onPlanner}
+                    onError={setError}
+                />
             </Card>
             <Card title="Active sessions">
                 {sessions.length === 0 ? (
