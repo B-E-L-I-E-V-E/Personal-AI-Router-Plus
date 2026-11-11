@@ -16,8 +16,11 @@ enum HelperConstants {
     /// the `MachServices` key in the LaunchDaemon plist.
     static let machServiceName = "com.nvidia.nvpair.helper.xpc"
 
-    /// NVIDIA's Apple Developer Team ID and the host app's bundle id.
-    static let teamIdentifier = "6KR3T733EC"
+    /// The Apple Developer Team ID that signs PAIR Plus (Leo Creer, a Developer
+    /// ID build of the fork), and the host app's bundle id. Upstream NVIDIA PAIR
+    /// pins NVIDIA's team, 6KR3T733EC; the helper and control tool accept only
+    /// code signed by this team, so it must match the signing certificate.
+    static let teamIdentifier = "TCDFRMWB65"
     static let appBundleIdentifier = "com.nvidia.nvpair"
 
     /// Basenames `codesign` assigns as the signing identifier of the two loose

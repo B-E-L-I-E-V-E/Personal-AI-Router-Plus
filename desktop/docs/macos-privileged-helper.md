@@ -95,7 +95,9 @@ The set in `native/PrivilegedHelper/main.swift` must stay in sync with the
 ## Security
 
 Code-signing requirements are pinned (constants in `HelperProtocol.swift`, Team
-ID `6KR3T733EC`). Each shares a common `developerIdAnchor`: `anchor apple
+ID `TCDFRMWB65` for PAIR Plus; upstream NVIDIA PAIR pins `6KR3T733EC`). The Team
+ID must match the certificate that signs the build, or the control tool and
+daemon refuse each other. Each shares a common `developerIdAnchor`: `anchor apple
 generic` **plus** the Developer ID intermediate marker
 (`certificate 1[field.1.2.840.113635.100.6.2.6]`), the Developer ID Application
 leaf marker (`certificate leaf[field.1.2.840.113635.100.6.1.13]`), and the Team
