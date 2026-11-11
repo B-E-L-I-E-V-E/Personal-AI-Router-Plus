@@ -325,11 +325,7 @@ export default function CapacityPlanner({
                     reasoning included. PAIR refuses a conversation that outgrows its part, and caps
                     replies that set no length of their own.
                 </Text>
-                <TextFitDetails
-                    tokens={messageTokens}
-                    replyTokens={replyNow}
-                    label={`Messages and history can use ${tokens(messageTokens)} tokens, and a reply up to ${tokens(replyNow)}. That is about:`}
-                />
+                <TextFitDetails windowTokens={windowNow} replyTokens={replyNow} />
             </Stack>
 
             <Stack gap="1">
