@@ -107,6 +107,8 @@ func (f *facade) handlePlain(w http.ResponseWriter, r *http.Request) {
 // so the two personalities stay behaviorally identical toward the engine. It
 // never calls resolveCandidates, so a peer request cannot be re-routed onward.
 func (f *facade) handleClusterIngress(w http.ResponseWriter, r *http.Request) {
+	f.host.activeRequests.Add(1)
+	defer f.host.activeRequests.Add(-1)
 	// Re-derive membership and pins per request so a cluster left, or a peer
 	// paired or removed, after startup is reflected immediately without a proxy
 	// restart — a removed peer must stop being accepted right away, which is the

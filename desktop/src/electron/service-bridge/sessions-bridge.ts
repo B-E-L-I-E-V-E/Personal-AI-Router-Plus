@@ -18,7 +18,7 @@ import { PROXY_ENGINES } from './proxy-engines'
  * They are process-wide, so any enabled engine's relay reaches the same
  * store; the first engine whose proxy answers is used.
  */
-async function callSessionProxy(
+export async function callSessionProxy(
     method: string,
     params?: JsonObject
 ): Promise<JsonValue | undefined> {

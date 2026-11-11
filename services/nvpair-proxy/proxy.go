@@ -432,6 +432,14 @@ type Proxy struct {
 	// sessionPolicyPath saves the session policy; empty keeps it in memory
 	// only (tests).
 	sessionPolicyPath string
+
+	// planner holds the capacity plans saved for this node and whether PAIR
+	// may reload a model by itself once the node is idle.
+	planner *plannerStore
+
+	// activeRequests counts requests in progress on any facade or on the
+	// cluster ingress; the idle check reads it.
+	activeRequests atomic.Int64
 }
 
 // NewProxy builds a facade-less process host. Facades arrive via
@@ -443,6 +451,7 @@ func NewProxy(codec *Codec) *Proxy {
 		activity: nodeactivity.NewReporter(activityReportInterval),
 		sessions: newSessionStore(),
 		capacity: newCapacityStore(),
+		planner:  newPlannerStore(),
 	}
 	p.sessions.onPeerRelease = p.sendPeerRelease
 	return p
@@ -1198,6 +1207,8 @@ func (f *facade) serveModelList(w http.ResponseWriter, r *http.Request, matchedR
 func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	p := f.host
 	start := time.Now()
+	p.activeRequests.Add(1)
+	defer p.activeRequests.Add(-1)
 
 	// Allocate the request ID up front so both code paths (rejection
 	// and forward) can stamp the same value into their notification.
@@ -3092,6 +3103,35 @@ func (p *Proxy) handleMessage(msg *Message) {
 		}
 		if err := p.codec.Respond(msg.ID, map[string]any{"model": row}); err != nil {
 			log.Printf("failed to respond to capacity/set: %v", err)
+		}
+
+	case "capacity/plan":
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		res, err := p.planCapacity(ctx, msg.Params)
+		if err != nil {
+			p.codec.RespondError(msg.ID, -32602, "invalid params: "+err.Error())
+			return
+		}
+		if err := p.codec.Respond(msg.ID, res); err != nil {
+			log.Printf("failed to respond to capacity/plan: %v", err)
+		}
+
+	case "capacity/planner":
+		if err := p.codec.Respond(msg.ID, p.plannerResult()); err != nil {
+			log.Printf("failed to respond to capacity/planner: %v", err)
+		}
+
+	case "capacity/planner-set":
+		ctx, cancel := context.WithTimeout(context.Background(), detectionTimeout+time.Second)
+		defer cancel()
+		result, err := p.setPlanner(ctx, msg.Params)
+		if err != nil {
+			p.codec.RespondError(msg.ID, -32602, "invalid params: "+err.Error())
+			return
+		}
+		if err := p.codec.Respond(msg.ID, result); err != nil {
+			log.Printf("failed to respond to capacity/planner-set: %v", err)
 		}
 
 	case "shutdown":

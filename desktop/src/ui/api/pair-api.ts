@@ -14,8 +14,13 @@ import type { ServiceError } from '@/shared/types/errors'
 import type { NodeItemMetrics } from '@/shared/types/metrics'
 import type { Workload } from '@/shared/types/workloads'
 import type {
+    ApplyPlanResult,
     CapacityChange,
+    CapacityPlan,
+    CapacityPlanRequest,
     ModelCapacity,
+    PlannerChange,
+    PlannerState,
     SessionPolicy,
     SessionSummary
 } from '@/shared/types/sessions'
@@ -118,6 +123,14 @@ export interface ISessionsApi {
     getCapacity(): Promise<ModelCapacity[]>
     /** Set or clear one model's context capacity. */
     setCapacity(change: CapacityChange): Promise<null>
+    /** Size a model's sessions from this node's GPU memory. */
+    plan(request: CapacityPlanRequest): Promise<CapacityPlan>
+    /** Saved plans, the auto-reload switch, and whether the node is idle. */
+    getPlanner(): Promise<PlannerState>
+    /** Save or remove a plan, or turn idle auto-reload on or off. */
+    setPlanner(change: PlannerChange): Promise<PlannerState>
+    /** Reload the model's engine with its saved plan now. */
+    applyPlan(engine: string, model: string): Promise<ApplyPlanResult>
 }
 
 export interface IMetricsApi {
@@ -212,7 +225,11 @@ export function createPairApi(transport: ServiceTransport): IPairApi {
             list: () => transport.invoke('sessions:list'),
             end: (sessionId, agentId) => transport.invoke('sessions:end', { sessionId, agentId }),
             getCapacity: () => transport.invoke('capacity:get-report'),
-            setCapacity: change => transport.invoke('capacity:set', change)
+            setCapacity: change => transport.invoke('capacity:set', change),
+            plan: request => transport.invoke('capacity:plan', request),
+            getPlanner: () => transport.invoke('capacity:get-planner'),
+            setPlanner: change => transport.invoke('capacity:set-planner', change),
+            applyPlan: (engine, model) => transport.invoke('capacity:apply-plan', { engine, model })
         }
     }
 }

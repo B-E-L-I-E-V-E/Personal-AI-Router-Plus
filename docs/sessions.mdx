@@ -108,6 +108,58 @@ per-request window, LM Studio's context length and parallel count, llama.cpp's
 per-slot context and slot count. A value the engine does not report stays
 unknown rather than guessed.
 
+### Plan from GPU Memory
+
+Instead of entering a pool and a session count yourself, let PAIR work them out
+from this node's GPU memory. In **Settings → Sessions**, select **Plan from GPU
+memory** on a model:
+
+1. Choose what you want to fix: the **context window** per session (PAIR works
+   out how many sessions fit) or the **number of sessions** (PAIR works out the
+   largest window each can have).
+2. Optionally pick a smaller **context cache precision**. 8-bit holds about
+   twice as many tokens as full precision, 4-bit about three and a half times,
+   at a small cost in accuracy.
+3. **Keep free** sets the safety reserve, 10% of each GPU by default (at least
+   1 GB each). On Apple silicon, where the GPU shares system memory, PAIR always
+   keeps at least a quarter of it free for macOS.
+
+PAIR shows the arithmetic:
+
+| Line | Meaning |
+| --- | --- |
+| GPU memory | All of this node's GPUs together |
+| Kept free | The safety reserve |
+| Model | The model's weights |
+| Left for context | What remains for sessions |
+| Each session | Window × the model's context cost per token |
+
+For example, two 32 GB GPUs with an 11 GB model leave about 46 GB for context.
+A model that needs 192 KB per token fits 7 sessions of 32K tokens, or 1 session
+of 128K (3 with an 8-bit cache).
+
+PAIR reads the context cost from the model's architecture (layers, key/value
+heads and head size), counting only the layers whose memory grows with the
+window. For a model the engine does not describe, such as MLX models in
+Ollama, it measures a loaded copy instead, or asks you for the model's size
+and its cost per token.
+
+**Save and apply now** restarts the engine with matching settings and then
+limits PAIR's traffic to the plan:
+
+| Engine | What changes |
+| --- | --- |
+| Ollama | `OLLAMA_CONTEXT_LENGTH` and `OLLAMA_NUM_PARALLEL`. These apply to every model Ollama runs, so one Ollama plan replaces another |
+| llama.cpp | `--ctx-size` (window × sessions) and `--parallel` |
+| LM Studio | Not restarted. PAIR limits traffic to the plan; set the same context length and parallel count when you load the model |
+
+Restarting interrupts requests running on that engine. PAIR cannot restart an
+engine it did not install, such as your own Ollama; it says so instead.
+
+**Reload automatically when idle** (on by default) applies a saved plan by
+itself once the node has had no sessions and no requests for two checks in a
+row, about a minute. Turn it off to apply plans only when you press **Apply**.
+
 ### When Capacity Runs Out
 
 A session takes one of a model's slots on the node serving it and keeps it until
@@ -151,6 +203,9 @@ Every PAIR endpoint port answers these, from this machine only:
 | `DELETE /pair/v1/sessions/{id}` | End now |
 | `GET /pair/v1/capacity` | Each model's capacity and usage on this node |
 | `PUT /pair/v1/capacity` | `{"engine","model","contextTokens","maxSessions"}`, or `{"engine","model","clear":true}` |
+
+The planner is available to the desktop through the proxy's JSON-RPC methods
+`capacity/plan`, `capacity/planner` and `capacity/planner-set`.
 
 Calls that change a session must send the owner's `X-PAIR-Agent-ID`. The
 OpenAPI reference lists the full request and response shapes.

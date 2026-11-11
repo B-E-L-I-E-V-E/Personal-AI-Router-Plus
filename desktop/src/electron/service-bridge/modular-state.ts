@@ -1007,6 +1007,12 @@ class ModularBridgeState {
         }
     }
 
+    /** This node's GPUs as node-info reports them, for the capacity planner. */
+    getSelfGpus(): { name: string; vramBytes: number }[] {
+        const self = this.selfId ? this.nodes.get(this.selfId) : undefined
+        return (self?.gpus ?? []).map(gpu => ({ name: gpu.name, vramBytes: gpu.vramBytes }))
+    }
+
     getSelfId(): string | null {
         return this.selfId
     }

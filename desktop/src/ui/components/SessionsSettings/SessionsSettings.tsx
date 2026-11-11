@@ -2,10 +2,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useCallback, useEffect, useState } from 'react'
-import { Button, Flex, FormField, Stack, Text, TextInput } from '@nvidia/foundations-react-core'
-import type { ModelCapacity, SessionPolicy, SessionSummary } from '@/shared/types/sessions'
+import {
+    Button,
+    Flex,
+    FormField,
+    Stack,
+    Switch,
+    Text,
+    TextInput
+} from '@nvidia/foundations-react-core'
+import type {
+    ModelCapacity,
+    PlannerState,
+    SavedCapacityPlan,
+    SessionPolicy,
+    SessionSummary
+} from '@/shared/types/sessions'
 import getErrorString from '@/shared/utils/get-error-string'
 import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
+import CapacityPlanner from './CapacityPlanner'
+import { planStatus } from './plan-status'
 
 // The proxy owns these settings and their saved state; this panel only reads
 // what it reports and sends changes. It polls while open because sessions and
@@ -98,13 +114,20 @@ function PolicyCard({
 
 function CapacityRow({
     row,
+    saved,
+    autoReload,
     onChanged,
+    onPlanner,
     onError
 }: {
     row: ModelCapacity
+    saved: SavedCapacityPlan | undefined
+    autoReload: boolean
     onChanged: () => void
+    onPlanner: (state: PlannerState | null, message?: string) => void
     onError: (message: string) => void
 }) {
+    const [planning, setPlanning] = useState(false)
     const initialPool = row.configured?.contextTokens ?? row.contextTokens
     const initialSessions = row.configured?.maxSessions ?? row.maxSessions
     const [pool, setPool] = useState(initialPool > 0 ? String(initialPool) : '')
@@ -200,6 +223,75 @@ function CapacityRow({
                     {row.warning}
                 </Text>
             )}
+            {saved && (
+                <Flex justify="between" align="center" gap="2" wrap="wrap">
+                    <Text kind="body/regular/sm">{planStatus(saved, autoReload)}</Text>
+                    <Flex gap="2">
+                        {!saved.applied && (
+                            <Button
+                                size="small"
+                                kind="primary"
+                                color="brand"
+                                disabled={saving}
+                                onClick={() => {
+                                    setSaving(true)
+                                    window.pairApi.sessions
+                                        .applyPlan(row.engine, row.model)
+                                        .then(async result =>
+                                            onPlanner(
+                                                await window.pairApi.sessions.getPlanner(),
+                                                result.message
+                                            )
+                                        )
+                                        .catch(err =>
+                                            onError(
+                                                getErrorString(err) ?? 'Could not apply the plan'
+                                            )
+                                        )
+                                        .finally(() => setSaving(false))
+                                }}
+                            >
+                                Apply
+                            </Button>
+                        )}
+                        <Button
+                            size="small"
+                            kind="secondary"
+                            disabled={saving}
+                            onClick={() =>
+                                window.pairApi.sessions
+                                    .setPlanner({
+                                        remove: { engine: row.engine, model: row.model }
+                                    })
+                                    .then(state => onPlanner(state))
+                                    .catch(err =>
+                                        onError(getErrorString(err) ?? 'Could not remove the plan')
+                                    )
+                            }
+                        >
+                            Remove plan
+                        </Button>
+                    </Flex>
+                </Flex>
+            )}
+            {planning ? (
+                <CapacityPlanner
+                    engine={row.engine}
+                    model={row.model}
+                    saved={saved}
+                    onDone={(state, message) => {
+                        setPlanning(false)
+                        onPlanner(state, message)
+                    }}
+                    onError={onError}
+                />
+            ) : (
+                <div>
+                    <Button size="small" kind="secondary" onClick={() => setPlanning(true)}>
+                        Plan from GPU memory
+                    </Button>
+                </div>
+            )}
         </Stack>
     )
 }
@@ -252,18 +344,22 @@ export default function SessionsSettings() {
     const [policy, setPolicy] = useState<SessionPolicy | null>(null)
     const [capacity, setCapacity] = useState<ModelCapacity[]>([])
     const [sessions, setSessions] = useState<SessionSummary[]>([])
+    const [planner, setPlanner] = useState<PlannerState | null>(null)
+    const [notice, setNotice] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
 
     const refresh = useCallback(() => {
         Promise.all([
             window.pairApi.sessions.getPolicy(),
             window.pairApi.sessions.getCapacity(),
-            window.pairApi.sessions.list()
+            window.pairApi.sessions.list(),
+            window.pairApi.sessions.getPlanner()
         ])
-            .then(([p, c, s]) => {
+            .then(([p, c, s, pl]) => {
                 setPolicy(p)
                 setCapacity(c)
                 setSessions(s)
+                setPlanner(pl)
             })
             .catch(err => setError(getErrorString(err) ?? 'The router is not reachable'))
     }, [])
@@ -274,9 +370,29 @@ export default function SessionsSettings() {
         return () => clearInterval(timer)
     }, [refresh])
 
+    const onPlanner = useCallback(
+        (state: PlannerState | null, message?: string) => {
+            if (state) setPlanner(state)
+            if (message) setNotice(message)
+            refresh()
+        },
+        [refresh]
+    )
+    const autoReload = planner?.autoReload ?? true
+    const savedFor = (row: ModelCapacity) =>
+        planner?.plans.find(p => p.engine === row.engine && p.model === row.model)
+
     return (
         <Stack gap="4" className="py-4">
             {error && <InlineErrorBanner message={error} onClose={() => setError(null)} />}
+            {notice && (
+                <Flex justify="between" align="center" gap="3" className="pair-paper p-3">
+                    <Text kind="body/regular/sm">{notice}</Text>
+                    <Button size="small" kind="tertiary" onClick={() => setNotice(null)}>
+                        Dismiss
+                    </Button>
+                </Flex>
+            )}
             {policy && (
                 <PolicyCard
                     key={`${policy.idleTimeoutSeconds}-${policy.queueTimeoutSeconds}`}
@@ -290,6 +406,31 @@ export default function SessionsSettings() {
                     Divide a model’s context among a fixed number of sessions. When every session
                     slot is held, new sessions go to another node or wait.
                 </Text>
+                <Flex align="center" gap="3" wrap="wrap">
+                    <Switch
+                        checked={autoReload}
+                        size="small"
+                        aria-label="Reload automatically when idle"
+                        onCheckedChange={checked =>
+                            window.pairApi.sessions
+                                .setPlanner({ autoReload: checked === true })
+                                .then(state => setPlanner(state))
+                                .catch(err =>
+                                    setError(getErrorString(err) ?? 'Could not change the setting')
+                                )
+                        }
+                    />
+                    <Stack gap="0">
+                        <Text kind="body/semibold/sm">Reload automatically when idle</Text>
+                        <Text kind="body/regular/sm" className="text-subtle-color">
+                            Apply a saved plan once this node has no sessions and no requests. When
+                            off, plans apply only when you press Apply.
+                            {planner && !planner.activity.idle
+                                ? ` Busy now: ${planner.activity.sessions} sessions, ${planner.activity.activeRequests} requests.`
+                                : ''}
+                        </Text>
+                    </Stack>
+                </Flex>
                 {capacity.length === 0 ? (
                     <Text kind="body/regular/sm" className="text-subtle-color">
                         No models yet. Load a model or start a session to see it here.
@@ -299,7 +440,10 @@ export default function SessionsSettings() {
                         <CapacityRow
                             key={`${row.engine}/${row.model}/${row.configured?.contextTokens ?? 0}/${row.configured?.maxSessions ?? 0}`}
                             row={row}
+                            saved={savedFor(row)}
+                            autoReload={autoReload}
                             onChanged={refresh}
+                            onPlanner={onPlanner}
                             onError={setError}
                         />
                     ))

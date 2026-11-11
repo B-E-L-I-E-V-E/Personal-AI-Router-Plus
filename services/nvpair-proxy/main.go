@@ -89,6 +89,14 @@ func main() {
 	if err := proxy.sessions.configure(sessionFlags(policy)); err != nil {
 		log.Fatalf("invalid session flags: %v", err)
 	}
+	if path, err := appdir.Path(plannerFileName); err != nil {
+		slog.Warn("capacity plans will not persist", "err", err)
+	} else {
+		proxy.planner.path = path
+		if err := proxy.planner.load(); err != nil {
+			slog.Warn("ignoring unreadable capacity plans", "path", path, "err", err)
+		}
+	}
 	// Context capacity settings persist beside the proxy's port files. A file
 	// that cannot be read leaves the settings empty, and so detection-only,
 	// rather than stopping the router.

@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import {
+    startCapacityAutoReload,
+    stopCapacityAutoReload
+} from '@/electron/service-bridge/capacity-planner'
 import { BrowserWindow } from 'electron'
 import { createStructuredLogger } from '@/shared/utils/log'
 import { getModularLogLevel } from '@/electron/config/ui-config'
@@ -146,6 +150,7 @@ export const initializeConnector = async (): Promise<void> => {
         weSpawned = true
         await supervisor.waitUntilReady(MODULAR_STARTUP_READY_TIMEOUT_MS)
         handleSupervisorReady()
+        startCapacityAutoReload()
     } catch (error) {
         const errorString = getErrorString(error) ?? 'Failed to start modular service bridge'
         if (getConnectorStatus() === 'connected') return
@@ -179,6 +184,7 @@ export const restartConnector = (): Promise<void> => {
 export const destroyConnector = async (options?: { force?: boolean }): Promise<void> => {
     log.info({ sublevel: 'lifecycle', message: 'Destroying connector' })
     setStatus('disconnected')
+    stopCapacityAutoReload()
 
     const shouldStop = options?.force || weSpawned
     if (shouldStop) {
@@ -191,6 +197,7 @@ export const destroyConnector = async (options?: { force?: boolean }): Promise<v
 
 export const destroyConnectorSync = (): void => {
     setStatus('disconnected')
+    stopCapacityAutoReload()
 
     const shouldStop = weSpawned
     if (shouldStop) {
