@@ -93,25 +93,52 @@ jobs:
 
             - run: npm --prefix desktop ci --prefer-offline
 
-            # macOS: electron-builder imports CSC_LINK into a temporary keychain,
-            # the afterPack hook signs the nested executables, electron-builder
-            # signs the bundle and notarizes it with the APPLE_* variables.
+            # macOS: put the Developer ID certificate in a dedicated keychain
+            # before anything signs. The afterPack hook signs the nested
+            # executables before electron-builder would import CSC_LINK on its
+            # own, so the identity has to be in the search list from the start.
+            # electron-builder then finds the same identity for the bundle.
+            - name: Import the signing certificate
+              if: runner.os == 'macOS'
+              shell: bash
+              env:
+                  P12_BASE64: ${{ secrets.MAC_CERTIFICATE_P12_BASE64 }}
+                  P12_PASSWORD: ${{ secrets.MAC_CERTIFICATE_PASSWORD }}
+              run: |
+                  if [ -z "${P12_BASE64}" ]; then
+                      echo "::error::MAC_CERTIFICATE_P12_BASE64 is not set; macOS releases must be signed to auto-update."
+                      exit 1
+                  fi
+                  keychain="${RUNNER_TEMP}/signing.keychain-db"
+                  keychain_password="$(openssl rand -base64 24)"
+                  p12="${RUNNER_TEMP}/signing.p12"
+                  printf '%s' "${P12_BASE64}" | base64 --decode > "${p12}"
+                  security create-keychain -p "${keychain_password}" "${keychain}"
+                  security set-keychain-settings -lut 21600 "${keychain}"
+                  security unlock-keychain -p "${keychain_password}" "${keychain}"
+                  security import "${p12}" -k "${keychain}" -P "${P12_PASSWORD}" -T /usr/bin/codesign -T /usr/bin/security
+                  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${keychain_password}" "${keychain}" > /dev/null
+                  security list-keychains -d user -s "${keychain}" $(security list-keychains -d user | tr -d '"')
+                  rm -f "${p12}"
+                  security find-identity -v -p codesigning "${keychain}"
+
+            # Then the afterPack hook signs the nested executables and
+            # electron-builder signs the bundle with the identity found in the
+            # keychain and notarizes it with the APPLE_* variables.
             - name: Build, sign and publish ${{ matrix.name }}
               shell: bash
               env:
                   GH_TOKEN: ${{ github.token }}
                   PAIR_MAC_SIGN: ${{ runner.os == 'macOS' && '1' || '' }}
-                  CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CERTIFICATE_P12_BASE64 || '' }}
-                  CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CERTIFICATE_PASSWORD || '' }}
                   APPLE_ID: ${{ secrets.APPLE_ID }}
                   APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
                   APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-              run: |
-                  if [ "${RUNNER_OS}" = "macOS" ] && [ -z "${CSC_LINK}" ]; then
-                      echo "::error::MAC_CERTIFICATE_P12_BASE64 is not set; macOS releases must be signed to auto-update."
-                      exit 1
-                  fi
-                  npm --prefix desktop run ${{ matrix.script }}
+              run: npm --prefix desktop run ${{ matrix.script }}
+
+            - name: Remove the signing keychain
+              if: always() && runner.os == 'macOS'
+              shell: bash
+              run: security delete-keychain "${RUNNER_TEMP}/signing.keychain-db" 2>/dev/null || true
 
             - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
               if: always()
