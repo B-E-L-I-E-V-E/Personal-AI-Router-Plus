@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { randomUUID } from 'node:crypto'
 import type {
     ApplyPlanResult,
     CapacityPlan,
@@ -412,6 +413,8 @@ async function applyPlanNow(engine: string, model: string): Promise<ApplyPlanRes
                 nodeId,
                 engine: managerName,
                 expectedRevision: snap.revision,
+                // The broker requires one to correlate the operation's progress.
+                requestId: randomUUID(),
                 settings: { ...snap.settings, launchText }
             },
             MODULAR_ENGINE_LIFECYCLE_CALL_TIMEOUT_MS

@@ -145,10 +145,14 @@ describe('capacity planner bridge', () => {
 
     it('reports the planner’s refusal as an error, not a throw', async () => {
         callProxy.mockRejectedValueOnce(
-            new Error('invalid params: the model’s context cost is unknown; enter it per token (kvBytesPerToken)')
+            new Error(
+                'invalid params: the model’s context cost is unknown; enter it per token (kvBytesPerToken)'
+            )
         )
         const result = await planCapacity({ engine: 'ollama', model: 'm' })
-        expect(result.error).toBe('the model’s context cost is unknown; enter it per token (kvBytesPerToken)')
+        expect(result.error).toBe(
+            'the model’s context cost is unknown; enter it per token (kvBytesPerToken)'
+        )
     })
 
     it('defaults auto reload to on', () => {
@@ -175,6 +179,7 @@ describe('capacity planner bridge', () => {
             expectedRevision: 7,
             settings: { launchText: '--temp 0.7 --ctx-size 131072 --parallel 4' }
         })
+        expect(apply?.[2].requestId).toMatch(/^[0-9a-f-]{36}$/)
         const applied = callProxy.mock.calls.find(c => c[1] === 'capacity/planner-set')
         expect(applied?.[2]).toEqual({
             applied: {
