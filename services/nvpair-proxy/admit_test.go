@@ -314,7 +314,7 @@ func TestSlots_ReleasedWhenTheSessionMovesOrSwitchesModel(t *testing.T) {
 		}
 	})
 	t.Run("moving to another node gives up the slot", func(t *testing.T) {
-		s.pin("conv-1", "ollama", "node-b", false)
+		s.pin("conv-1", "ollama", candidate{id: "node-b"})
 		if st := s.slotStatus(b); st.Held != 0 {
 			t.Fatalf("model b still holds %d slots after the session moved", st.Held)
 		}

@@ -118,24 +118,41 @@ func (f *facade) handleClusterIngress(w http.ResponseWriter, r *http.Request) {
 			"client certificate is not a pinned member of this node's cluster")
 		return
 	}
+	// A calling node releasing a session's slot here (peer.go).
+	if f.servePeerRelease(w, r, peer) {
+		return
+	}
 	target, ok := f.localBackendTarget()
 	if !ok {
 		writeIngressError(w, http.StatusServiceUnavailable, "no-local-backend",
 			"no local inference backend is available on this node")
 		return
 	}
+	// This node enforces its own context capacity for sessions other nodes
+	// route here, as it does for its own (peer.go).
+	r, record, done, status, err := f.admitPeer(r, peer)
+	if err != nil {
+		slog.Debug("cluster ingress refused by context admission",
+			"peer", peer, "path", r.URL.Path, "status", status, "reason", err)
+		writePeerRefusal(w, status, err)
+		return
+	}
+	defer done()
 	slog.Debug("cluster ingress forwarding to local backend",
 		"peer", peer, "method", r.Method, "path", r.URL.Path, "target", target.Host)
-	f.reverseProxyToLocal(w, r, target)
+	rp := f.newLocalReverseProxy(target)
+	if record != nil {
+		rp.ModifyResponse = func(resp *http.Response) error {
+			resp.Body = newUsageReader(resp.Body, resp.Header.Get("Content-Type"), record)
+			return nil
+		}
+	}
+	rp.ServeHTTP(w, r)
 }
 
-// reverseProxyToLocal streams the request to the local engine, preserving
+// newLocalReverseProxy streams a request to the local engine, preserving
 // cancellation (the request context is the proxy's root context, so a client
 // disconnect or shutdown tears down the upstream call and stops generation).
-func (f *facade) reverseProxyToLocal(w http.ResponseWriter, r *http.Request, target *url.URL) {
-	f.newLocalReverseProxy(target).ServeHTTP(w, r)
-}
-
 func (f *facade) newLocalReverseProxy(target *url.URL) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		Director: func(req *http.Request) {

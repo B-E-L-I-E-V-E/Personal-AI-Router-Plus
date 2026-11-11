@@ -145,6 +145,14 @@ func validIdleTimeout(d time.Duration) bool {
 type session struct {
 	id      string
 	agentID string
+	// peer is set for a session another node routes here: its cluster ID. Such
+	// a session exists only to account for this node's capacity (peer.go); it
+	// is not listed, and its owner is the node that created it.
+	peer string
+	// remote is, per engine, the other node that served this session's last
+	// turn, so that node can be told to release its slot when the session ends
+	// or moves.
+	remote  map[string]remoteRef
 	created time.Time
 	// lastActive is the last time a request for this session began or ended,
 	// or a keepalive arrived.
@@ -204,6 +212,9 @@ type sessionStore struct {
 	tombstones map[string]time.Time
 	nextToken  uint64
 	now        func() time.Time
+	// onPeerRelease tells another node a session no longer needs its slot
+	// there. It is called without the lock held, on its own goroutine.
+	onPeerRelease func(ref remoteRef, sessionID string)
 	// queues holds the requests waiting for a context slot, per model, in
 	// arrival order. changed is closed and replaced whenever a slot frees.
 	queues  map[capacityKey][]*slotWaiter
@@ -296,6 +307,14 @@ func (s *sessionStore) removeLocked(sess *session, now time.Time) {
 	}
 	s.releaseSlotsLocked(sess)
 	delete(s.sessions, sess.id)
+	for _, ref := range sess.remote {
+		s.notifyPeerReleaseLocked(ref, sess.id)
+	}
+	if sess.peer != "" {
+		// A peer session is the other node's to end; tombstoning it here would
+		// refuse that node's next turn after this copy merely went idle.
+		return
+	}
 	s.tombstones[sess.id] = now
 	if len(s.tombstones) > maxSessionTombstones {
 		s.pruneTombstonesLocked(now)
@@ -353,6 +372,7 @@ func (s *sessionStore) createLocked(id, agentID string, idle time.Duration, now 
 	sess := &session{
 		id: id, agentID: agentID, created: now, lastActive: now, idleTimeout: idle,
 		nodes: make(map[string]string), local: make(map[string]bool), slots: make(map[string]string),
+		remote:   make(map[string]remoteRef),
 		context:  make(map[string]sessionContext),
 		inFlight: make(map[uint64]context.CancelFunc),
 	}
@@ -481,20 +501,29 @@ func (s *sessionStore) remove(id, agentID string) error {
 }
 
 // pin records the node that served a session on one engine, and whether that
-// node is this one.
-func (s *sessionStore) pin(id, engine, nodeID string, local bool) {
-	if nodeID == "" {
+// node is this one. A session that moves off a node releases what it held
+// there: its slot here, or its slot on the other node it left.
+func (s *sessionStore) pin(id, engine string, c candidate) {
+	if c.id == "" {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if sess, ok := s.sessions[id]; ok {
-		sess.nodes[engine] = nodeID
-		sess.local[engine] = local
-		// A session that moved to another node no longer occupies a slot here.
-		if !local {
-			s.releaseSlotLocked(sess, engine)
-		}
+	sess, ok := s.sessions[id]
+	if !ok {
+		return
+	}
+	sess.nodes[engine] = c.id
+	sess.local[engine] = c.local
+	if !c.local {
+		s.releaseSlotLocked(sess, engine)
+	}
+	if prev, had := sess.remote[engine]; had && prev.nodeID != c.id {
+		s.notifyPeerReleaseLocked(prev, sess.id)
+		delete(sess.remote, engine)
+	}
+	if !c.local && c.peerUUID != "" && c.url != nil {
+		sess.remote[engine] = remoteRef{nodeID: c.id, host: c.url.Host, peerUUID: c.peerUUID}
 	}
 }
 
@@ -563,6 +592,9 @@ func (s *sessionStore) list(agentID string) []sessionView {
 	s.sweepLocked(s.now())
 	out := make([]sessionView, 0, len(s.sessions))
 	for _, sess := range s.sessions {
+		if sess.peer != "" {
+			continue
+		}
 		if agentID == "" || sess.agentID == agentID {
 			out = append(out, s.viewLocked(sess))
 		}

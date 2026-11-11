@@ -659,10 +659,9 @@ or cannot be computed. Each row also reports `heldSlots` and `queued` (§5.13).
 ### 5.13 Context admission
 
 Admission applies to a **session** inference request whose model has a known
-capacity on **this** node: a session count, a share, or both (§5.12). Only this
-node's own candidate is gated; other nodes enforce their own capacity, and
-until they share it (a later change) they are not gated here. Requests outside
-a session are never gated.
+capacity on the node that serves it: a session count, a share, or both (§5.12).
+Every node enforces its own capacity, for its own sessions and for sessions
+other nodes route to it (§5.14). Requests outside a session are never gated.
 
 - **Slots.** A model configured for N sessions has N context slots here. A
   session takes one when first admitted for that model and keeps it across
@@ -693,6 +692,29 @@ a session are never gated.
 Admission runs before a reservation is taken or a workload is submitted, so a
 request waiting for a slot does not yet appear as a job. A slot taken when this
 node was a candidate is released at the commit if another node served instead.
+
+### 5.14 Capacity across nodes
+
+The originating node forwards a session request to a peer with its headers,
+`X-PAIR-Session-ID` included. The peer's mTLS ingress (§7) applies §5.13 to
+its own engine before forwarding: it tracks the session under the caller's
+cluster ID, so the same session ID from two nodes is two sessions, and reads
+the engine's token counts from the reply. A peer session is never listed by
+the peer and never refused as ended there; only the originating node decides
+that.
+
+- **Full peer.** The peer waits for a slot for at most the lesser of its
+  `queueTimeoutSeconds` and 90 seconds (inside the caller's 120-second wait for
+  response headers), then answers `503` with `Retry-After`. The originating
+  node treats that like any `503` (§5.4): it tries the next candidate, and
+  between rounds backs off and re-resolves until its job deadline.
+- **Outgrown on the peer.** The peer answers `400`, which is not retried.
+- **Release.** When a session's turn commits on a different node, or the
+  session ends or expires, the originating node sends
+  `POST /pair/v1/peer/sessions/{id}/release` over mTLS to the node it left, so
+  that node frees the slot at once. Only the originating node may release its
+  session. Release is best effort; an unreleased slot frees when the peer's copy
+  of the session goes idle.
 
 ## 6. Reservations
 

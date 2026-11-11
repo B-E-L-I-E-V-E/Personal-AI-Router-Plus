@@ -433,13 +433,15 @@ type Proxy struct {
 // NewProxy builds a facade-less process host. Facades arrive via
 // enableFacade, so nothing is listening when this returns.
 func NewProxy(codec *Codec) *Proxy {
-	return &Proxy{
+	p := &Proxy{
 		codec:    codec,
 		runID:    newRunID(),
 		activity: nodeactivity.NewReporter(activityReportInterval),
 		sessions: newSessionStore(),
 		capacity: newCapacityStore(),
 	}
+	p.sessions.onPeerRelease = p.sendPeerRelease
+	return p
 }
 
 // facadeFor resolves the facade an addressed message names, or nil when that
@@ -1977,7 +1979,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 					// The node that committed is the one holding this turn in
 					// its KV cache, so the session's next turn goes there.
 					if sessionID != "" {
-						p.sessions.pin(sessionID, f.profile.Name, cand.id, cand.local)
+						p.sessions.pin(sessionID, f.profile.Name, cand)
 					}
 					// Record the commit here, not just after the loop: a copy
 					// error aborts this handler by panic, and finalize needs to
