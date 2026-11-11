@@ -147,7 +147,7 @@ export async function planCapacity(request?: CapacityPlanRequest): Promise<Capac
     }
     for (const key of [
         'windowTokens',
-        'sessions',
+        'maxSessions',
         'reservePercent',
         'otherModelsBytes',
         'weightsBytes',

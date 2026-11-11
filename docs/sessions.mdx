@@ -95,13 +95,17 @@ include usage (`stream_options.include_usage`), which adds one standard usage
 chunk at the end of the stream. Requests outside a session are forwarded
 exactly as sent.
 
-For each model on a node you can set:
+A context window belongs to one conversation: every session gets the model's
+whole window, and the node's memory decides how many sessions run at once. For
+each model on a node you can set:
 
 | Setting | Meaning |
 | --- | --- |
-| **Context pool** | Total context the model can hold across all its sessions at once |
-| **Max sessions** | How many sessions may share it |
-| **Share per session** | Pool ÷ sessions, rounded down to a multiple of 1024. For example 262,144 ÷ 6 = 43,008 |
+| **Context window per session** | The tokens each session may use, a multiple of 1024 |
+| **Sessions at once** | How many sessions the model serves at the same time |
+
+PAIR shows the context held in memory, window × sessions; for example six
+sessions of 43,008 tokens hold 258,048.
 
 Where you set nothing, PAIR fills in what the local engine reports: Ollama's
 per-request window, LM Studio's context length and parallel count, llama.cpp's
@@ -110,13 +114,14 @@ unknown rather than guessed.
 
 ### Plan from GPU Memory
 
-Instead of entering a pool and a session count yourself, let PAIR work them out
-from this node's GPU memory. In **Settings → Sessions**, select **Plan from GPU
-memory** on a model:
+Instead of entering a window and a session count yourself, let PAIR work out
+how many sessions fit in this node's GPU memory. In **Settings → Sessions**,
+select **Plan from GPU memory** on a model:
 
-1. Choose what you want to fix: the **context window** per session (PAIR works
-   out how many sessions fit) or the **number of sessions** (PAIR works out the
-   largest window each can have).
+1. Each session gets the model's full context window. Enter a smaller window
+   to fit more sessions, and **At most sessions** to cap how many run at once.
+   A cap never shrinks a session's window: when memory holds only one
+   full-window session, the plan is one session.
 2. Optionally pick a smaller **context cache precision**. 8-bit holds about
    twice as many tokens as full precision, 4-bit about three and a half times,
    at a small cost in accuracy.
@@ -135,8 +140,8 @@ PAIR shows the arithmetic:
 | Each session | Window × the model's context cost per token |
 
 For example, two 32 GB GPUs with an 11 GB model leave about 46 GB for context.
-A model that needs 192 KB per token fits 7 sessions of 32K tokens, or 1 session
-of 128K (3 with an 8-bit cache).
+A model that needs 192 KB per token fits 1 session of its full 128K window
+(3 with an 8-bit cache), or 7 sessions if you lower the window to 32K.
 
 PAIR reads the context cost from the model's architecture (layers, key/value
 heads and head size), counting only the layers whose memory grows with the

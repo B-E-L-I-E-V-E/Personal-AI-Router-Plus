@@ -264,6 +264,8 @@ func (p *Proxy) planCapacity(ctx context.Context, raw json.RawMessage) (*planRes
 				described.Notes = append(described.Notes, "could not read the model from the engine: "+err.Error())
 			}
 			spec = described
+		} else {
+			spec.Notes = append(spec.Notes, "this engine is not running on this node")
 		}
 	} else {
 		spec.Notes = append(spec.Notes, "this engine is not running on this node")

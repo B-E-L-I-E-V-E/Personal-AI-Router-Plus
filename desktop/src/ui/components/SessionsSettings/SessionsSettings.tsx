@@ -31,7 +31,9 @@ const REFRESH_MS = 5000
 const SHARE_GRANULARITY = 1024
 const MIN_USEFUL_SHARE = 4096
 
-function sessionShare(pool: number, sessions: number): number {
+// The proxy stores a model's capacity as window × sessions; the page shows
+// the window each session gets, since a window belongs to one conversation.
+function sessionWindow(pool: number, sessions: number): number {
     if (pool <= 0 || sessions <= 0) return 0
     const share = Math.floor(pool / sessions)
     return share - (share % SHARE_GRANULARITY)
@@ -131,14 +133,18 @@ function CapacityRow({
     const [planning, setPlanning] = useState(false)
     const initialPool = row.configured?.contextTokens ?? row.contextTokens
     const initialSessions = row.configured?.maxSessions ?? row.maxSessions
-    const [pool, setPool] = useState(initialPool > 0 ? String(initialPool) : '')
+    const initialWindow = sessionWindow(initialPool, initialSessions)
+    const [windowText, setWindowText] = useState(initialWindow > 0 ? String(initialWindow) : '')
     const [sessions, setSessions] = useState(initialSessions > 0 ? String(initialSessions) : '')
     const [saving, setSaving] = useState(false)
 
-    const poolN = wholeNumber(pool) ?? 0
+    const windowN = wholeNumber(windowText) ?? 0
     const sessionsN = wholeNumber(sessions) ?? 0
-    const share = sessionShare(poolN, sessionsN)
-    const valid = poolN >= SHARE_GRANULARITY && sessionsN >= 1 && sessionsN <= 1024
+    const valid =
+        windowN >= SHARE_GRANULARITY &&
+        windowN % SHARE_GRANULARITY === 0 &&
+        sessionsN >= 1 &&
+        sessionsN <= 1024
 
     const run = (change: Promise<null>) => {
         setSaving(true)
@@ -160,17 +166,19 @@ function CapacityRow({
                 </Text>
             </Flex>
             <Flex align="end" gap="3" wrap="wrap">
-                <FormField slotLabel="Context pool (tokens)">
-                    <TextInput value={pool} onValueChange={setPool} />
+                <FormField slotLabel="Context window per session (tokens)">
+                    <TextInput value={windowText} onValueChange={setWindowText} />
                 </FormField>
-                <FormField slotLabel="Max sessions">
+                <FormField slotLabel="Sessions at once">
                     <TextInput value={sessions} onValueChange={setSessions} />
                 </FormField>
                 <Stack gap="1">
                     <Text kind="body/regular/sm" className="text-subtle-color">
-                        Each session gets
+                        Context held in memory
                     </Text>
-                    <Text kind="body/semibold/sm">{formatTokens(share)} tokens</Text>
+                    <Text kind="body/semibold/sm">
+                        {formatTokens(valid ? windowN * sessionsN : 0)} tokens
+                    </Text>
                 </Stack>
                 <Button
                     kind="primary"
@@ -181,7 +189,7 @@ function CapacityRow({
                             window.pairApi.sessions.setCapacity({
                                 engine: row.engine,
                                 model: row.model,
-                                contextTokens: poolN,
+                                contextTokens: windowN * sessionsN,
                                 maxSessions: sessionsN
                             })
                         )
@@ -213,7 +221,7 @@ function CapacityRow({
                     request.
                 </Text>
             )}
-            {valid && share > 0 && share < MIN_USEFUL_SHARE && (
+            {valid && windowN < MIN_USEFUL_SHARE && (
                 <Text kind="body/regular/sm" className="text-subtle-color">
                     Below {formatTokens(MIN_USEFUL_SHARE)} tokens per session is too little to be
                     useful.
@@ -408,8 +416,9 @@ export default function SessionsSettings() {
             )}
             <Card title="Context capacity on this node">
                 <Text kind="body/regular/sm" className="text-subtle-color">
-                    Divide a model’s context among a fixed number of sessions. When every session
-                    slot is held, new sessions go to another node or wait.
+                    Each session gets a model’s full context window; this sets how many sessions it
+                    runs at once. When every session slot is held, new sessions go to another node
+                    or wait.
                 </Text>
                 <Flex align="center" gap="3" wrap="wrap">
                     <Switch

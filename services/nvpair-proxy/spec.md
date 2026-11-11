@@ -749,9 +749,11 @@ reading the model:
   not scaled.
 - **Budget**: total VRAM − reserve (default 10% of each GPU, at least 1 GiB
   each; at least a quarter of the total for unified memory) − weights − other
-  resident models. The caller fixes either `windowTokens` (sessions computed,
-  at most 256) or `sessions` (window computed, rounded down to 1024, capped at
-  the model's maximum).
+  resident models. A window belongs to one conversation, so every session
+  gets the whole `windowTokens` (default and ceiling: the model's maximum) and
+  sessions = budget ÷ one session's cost, at most `maxSessions` (default and
+  ceiling 256). The cap never shrinks the window. With the engine not running,
+  `spec.notes` says so.
 - A model that cannot be sized returns a result with `error` and whatever
   `spec` was learned, not a JSON-RPC error.
 

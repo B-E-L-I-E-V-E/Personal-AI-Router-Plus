@@ -52,23 +52,35 @@ func TestPlanCacheTypeHalvesCost(t *testing.T) {
 	}
 }
 
-func TestPlanFixedSessionsComputesWindow(t *testing.T) {
-	res, err := computePlan(planRequest{Engine: "llamacpp", Model: "m", GPUs: twoCards(), Sessions: 4}, denseSpec())
-	if err != nil {
-		t.Fatal(err)
+func TestPlanSessionsCapNeverShrinksWindow(t *testing.T) {
+	free, err := computePlan(planRequest{Engine: "llamacpp", Model: "m", GPUs: twoCards(), WindowTokens: 32768}, denseSpec())
+	if err != nil || free.Sessions < 2 {
+		t.Fatalf("uncapped: %v %d sessions", err, free.Sessions)
 	}
-	if res.WindowTokens%planWindowStep != 0 || res.WindowTokens < 60000 || res.WindowTokens > 65536 {
-		t.Fatalf("window %d", res.WindowTokens)
+	capped, err := computePlan(planRequest{Engine: "llamacpp", Model: "m", GPUs: twoCards(), WindowTokens: 32768, MaxSessions: 1}, denseSpec())
+	if err != nil || capped.Sessions != 1 || capped.WindowTokens != 32768 {
+		t.Fatalf("capped: %v %d sessions of %d", err, capped.Sessions, capped.WindowTokens)
 	}
-	if !res.Fits || res.UsedBytes+res.ReserveBytes > res.TotalBytes {
-		t.Fatalf("plan overflows: used %d reserve %d total %d", res.UsedBytes, res.ReserveBytes, res.TotalBytes)
+	// A cap above what fits does not add sessions.
+	over, _ := computePlan(planRequest{Engine: "llamacpp", Model: "m", GPUs: twoCards(), WindowTokens: 32768, MaxSessions: 200}, denseSpec())
+	if over.Sessions != free.Sessions || !over.Fits || over.UsedBytes+over.ReserveBytes > over.TotalBytes {
+		t.Fatalf("over cap: %d sessions, want %d", over.Sessions, free.Sessions)
+	}
+}
+
+func TestPlanDefaultsToFullWindowPerSession(t *testing.T) {
+	spec := denseSpec()
+	spec.MaxContextTokens = 32768
+	res, err := computePlan(planRequest{Engine: "llamacpp", Model: "m", GPUs: twoCards(), MaxSessions: 4}, spec)
+	if err != nil || res.WindowTokens != 32768 || res.Sessions != 4 {
+		t.Fatalf("%v: %d sessions of %d", err, res.Sessions, res.WindowTokens)
 	}
 }
 
 func TestPlanCapsAtModelWindow(t *testing.T) {
 	spec := denseSpec()
 	spec.MaxContextTokens = 32768
-	res, _ := computePlan(planRequest{Engine: "llamacpp", Model: "m", GPUs: twoCards(), Sessions: 1}, spec)
+	res, _ := computePlan(planRequest{Engine: "llamacpp", Model: "m", GPUs: twoCards()}, spec)
 	if res.WindowTokens != 32768 {
 		t.Fatalf("window %d, want the model's maximum", res.WindowTokens)
 	}
@@ -100,7 +112,7 @@ func TestPlanSlidingWindowCountsWindowOnly(t *testing.T) {
 	if b := sessionBytes(spec, 1000, 1, 131072); b != 131072*1000+1024*5000 {
 		t.Fatalf("session bytes %d", b)
 	}
-	res, _ := computePlan(planRequest{GPUs: twoCards(), Sessions: 2}, spec)
+	res, _ := computePlan(planRequest{GPUs: twoCards(), MaxSessions: 2}, spec)
 	if !res.Fits || res.UsedBytes+res.ReserveBytes > res.TotalBytes {
 		t.Fatalf("sliding plan overflows: %+v", res)
 	}
@@ -112,7 +124,8 @@ func TestPlanManualValuesAndErrors(t *testing.T) {
 		t.Fatalf("manual plan: %v %+v", err, res)
 	}
 	for _, req := range []planRequest{
-		{GPUs: twoCards(), WindowTokens: 1, Sessions: 1},
+		{GPUs: twoCards(), MaxSessions: maxPlannedSessions + 1},
+		{GPUs: twoCards(), WindowTokens: -1},
 		{GPUs: twoCards(), CacheType: "q2"},
 		{GPUs: nil},
 		{GPUs: twoCards(), ReservePercent: 95},

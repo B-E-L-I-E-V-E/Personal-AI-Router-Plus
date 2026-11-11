@@ -95,8 +95,8 @@ export default function CapacityPlanner({
     onDone: (state: PlannerState | null, message?: string) => void
     onError: (message: string) => void
 }) {
-    const [mode, setMode] = useState<'window' | 'sessions'>(saved ? 'sessions' : 'window')
-    const [value, setValue] = useState(saved ? String(saved.sessions) : '')
+    const [windowText, setWindowText] = useState(saved ? String(saved.windowTokens) : '')
+    const [capText, setCapText] = useState('')
     const [cacheType, setCacheType] = useState<KvCacheType>(saved?.cacheType ?? 'f16')
     const [reserve, setReserve] = useState(String(saved?.reservePercent || 10))
     const [weightsGb, setWeightsGb] = useState('')
@@ -104,12 +104,19 @@ export default function CapacityPlanner({
     const [plan, setPlan] = useState<CapacityPlan | null>(null)
     const [busy, setBusy] = useState(false)
 
-    const n = value.trim() === '' ? 0 : wholeNumber(value)
+    const windowN = windowText.trim() === '' ? 0 : wholeNumber(windowText)
+    const capN = capText.trim() === '' ? 0 : wholeNumber(capText)
     const reserveN = decimal(reserve)
     const weightsN = weightsGb.trim() === '' ? 0 : decimal(weightsGb)
     const kbN = kbPerToken.trim() === '' ? 0 : decimal(kbPerToken)
     const inputsValid =
-        n !== null && reserveN !== null && reserveN <= 90 && weightsN !== null && kbN !== null
+        windowN !== null &&
+        capN !== null &&
+        capN <= 256 &&
+        reserveN !== null &&
+        reserveN <= 90 &&
+        weightsN !== null &&
+        kbN !== null
 
     useEffect(() => {
         if (!inputsValid) return
@@ -120,8 +127,8 @@ export default function CapacityPlanner({
                     model,
                     cacheType,
                     reservePercent: reserveN || undefined,
-                    windowTokens: mode === 'window' && n ? n : undefined,
-                    sessions: mode === 'sessions' && n ? n : undefined,
+                    windowTokens: windowN || undefined,
+                    maxSessions: capN || undefined,
                     weightsBytes: weightsN ? Math.round(weightsN * GB) : undefined,
                     kvBytesPerToken: kbN ? Math.round(kbN * 1024) : undefined
                 })
@@ -129,7 +136,7 @@ export default function CapacityPlanner({
                 .catch(err => onError(getErrorString(err) ?? 'Could not size this model'))
         }, 300)
         return () => clearTimeout(timer)
-    }, [engine, model, mode, n, cacheType, reserveN, weightsN, kbN, inputsValid, onError])
+    }, [engine, model, windowN, capN, cacheType, reserveN, weightsN, kbN, inputsValid, onError])
 
     const usable = plan && !plan.error && plan.sessions > 0 && plan.windowTokens >= 2048
     const needsManual = plan?.error && /unknown/.test(plan.error)
@@ -160,32 +167,15 @@ export default function CapacityPlanner({
     return (
         <Stack gap="3" className="pair-paper p-3">
             <Text kind="body/regular/sm" className="text-subtle-color">
-                Size this model from this node’s GPU memory: what is left after the model and a
-                safety reserve is divided into sessions.
+                Each session gets this model’s full context window. PAIR runs as many sessions at
+                once as fit in the GPU memory left after the model and a safety reserve.
             </Text>
             <Flex align="end" gap="3" wrap="wrap">
-                <Stack gap="1">
-                    <Text kind="body/regular/sm" className="text-subtle-color">
-                        I choose the
-                    </Text>
-                    <Choice
-                        options={[
-                            { id: 'window', label: 'Context window' },
-                            { id: 'sessions', label: 'Number of sessions' }
-                        ]}
-                        value={mode}
-                        onChange={m => {
-                            setMode(m)
-                            setValue('')
-                        }}
-                    />
-                </Stack>
-                <FormField
-                    slotLabel={
-                        mode === 'window' ? 'Tokens per session (blank: model maximum)' : 'Sessions'
-                    }
-                >
-                    <TextInput value={value} onValueChange={setValue} />
+                <FormField slotLabel="Context window per session (blank: model maximum)">
+                    <TextInput value={windowText} onValueChange={setWindowText} />
+                </FormField>
+                <FormField slotLabel="At most sessions (blank: as many as fit)">
+                    <TextInput value={capText} onValueChange={setCapText} />
                 </FormField>
                 <FormField slotLabel="Keep free (% of each GPU)">
                     <TextInput value={reserve} onValueChange={setReserve} />
@@ -209,7 +199,7 @@ export default function CapacityPlanner({
             )}
             {!inputsValid && (
                 <Text kind="body/regular/sm" className="text-subtle-color">
-                    Enter numbers only; keep at most 90% free.
+                    Enter numbers only; at most 256 sessions and 90% kept free.
                 </Text>
             )}
 

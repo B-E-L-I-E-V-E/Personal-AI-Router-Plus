@@ -10,12 +10,15 @@ import (
 )
 
 // The capacity planner answers: with this node's GPU memory and this model,
-// how many sessions of what context window fit without running out of memory?
+// how many sessions fit without running out of memory? The context window
+// belongs to one conversation, so every session gets the whole window — the
+// model's maximum unless the user lowers it — and the memory left decides how
+// many such sessions run at once. Sessions never share or split a window.
 //
 //	usable    = total VRAM − reserve − model weights − other resident models
 //	per token = key/value cache bytes for one token of context
 //	session   = window × per token (+ fixed sliding-window and recurrent state)
-//	sessions  = usable ÷ session
+//	sessions  = usable ÷ session, at most the user's cap
 //
 // The reserve keeps headroom for the driver, the engine's working buffers and
 // everything the formula does not count. On Apple silicon the GPU shares
@@ -27,7 +30,6 @@ const (
 	defaultReservePercent  = 10
 	minReservePerGPU       = gib
 	unifiedMemoryGPUShare  = 0.75
-	planWindowStep         = 1024
 	maxPlannedSessions     = 256
 	minPlannedWindowTokens = 2048
 )
@@ -52,10 +54,11 @@ type planRequest struct {
 	// Unified marks GPUs that share system memory (Apple silicon).
 	Unified bool `json:"unified,omitempty"`
 
-	// Exactly one of these is the user's choice; the other is computed.
-	// Neither: the model's full window.
+	// WindowTokens is each session's window; zero means the model's maximum.
 	WindowTokens int64 `json:"windowTokens,omitempty"`
-	Sessions     int   `json:"sessions,omitempty"`
+	// MaxSessions caps how many sessions are planned; zero means as many as
+	// fit. It never shrinks a session's window.
+	MaxSessions int `json:"maxSessions,omitempty"`
 
 	CacheType      string  `json:"cacheType,omitempty"`
 	ReservePercent float64 `json:"reservePercent,omitempty"`
@@ -91,13 +94,6 @@ type planResult struct {
 	Error string `json:"error,omitempty"`
 }
 
-func roundDownWindow(tokens int64) int64 {
-	if tokens < planWindowStep {
-		return tokens
-	}
-	return tokens / planWindowStep * planWindowStep
-}
-
 // sessionBytes is the memory one session of window tokens needs.
 func sessionBytes(spec modelSpec, perToken int64, factor float64, window int64) int64 {
 	b := window * perToken
@@ -114,14 +110,11 @@ func sessionBytes(spec modelSpec, perToken int64, factor float64, window int64) 
 // computePlan is pure: it applies the request to a model description.
 func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 	res := planResult{Spec: spec}
-	if req.WindowTokens > 0 && req.Sessions > 0 {
-		return res, errors.New("set either windowTokens or sessions, not both")
-	}
-	if req.WindowTokens < 0 || req.Sessions < 0 || req.OtherModelsBytes < 0 || req.WeightsBytes < 0 || req.KVBytesPerToken < 0 {
+	if req.WindowTokens < 0 || req.MaxSessions < 0 || req.OtherModelsBytes < 0 || req.WeightsBytes < 0 || req.KVBytesPerToken < 0 {
 		return res, errors.New("values must not be negative")
 	}
-	if req.Sessions > maxPlannedSessions {
-		return res, fmt.Errorf("sessions must be at most %d", maxPlannedSessions)
+	if req.MaxSessions > maxPlannedSessions {
+		return res, fmt.Errorf("maxSessions must be at most %d", maxPlannedSessions)
 	}
 	cache := req.CacheType
 	if cache == "" {
@@ -197,48 +190,29 @@ func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 	}
 
 	maxWindow := spec.MaxContextTokens
-	switch {
-	case req.Sessions > 0:
-		share := res.ContextBytes / int64(req.Sessions)
-		fixed := sessionBytes(spec, perToken, factor, 0)
-		var window int64
-		if share > fixed {
-			// Solve share = sessionBytes(window) for window. Sliding layers
-			// stop growing past their window, so try the linear part first.
-			window = (share - spec.RecurrentBytesPerSession) / (perToken + int64(float64(spec.SlidingBytesPerToken)*factor))
-			if spec.SlidingWindow > 0 && window > spec.SlidingWindow {
-				window = (share - sessionBytes(spec, 0, factor, spec.SlidingWindow)) / perToken
-			}
-		}
-		if maxWindow > 0 && window > maxWindow {
-			window = maxWindow
-		}
-		res.WindowTokens = roundDownWindow(window)
-		res.Sessions = req.Sessions
-		if res.WindowTokens < minPlannedWindowTokens {
-			res.Warnings = append(res.Warnings, fmt.Sprintf("%d sessions leave less than %d tokens each", req.Sessions, minPlannedWindowTokens))
-		}
-	default:
-		window := req.WindowTokens
+	window := req.WindowTokens
+	if window == 0 {
+		window = maxWindow
 		if window == 0 {
-			window = maxWindow
-			if window == 0 {
-				return res, errors.New("the model's maximum context is unknown; enter a window (windowTokens)")
-			}
+			return res, errors.New("the model's maximum context is unknown; enter a window (windowTokens)")
 		}
-		if maxWindow > 0 && window > maxWindow {
-			res.Warnings = append(res.Warnings, fmt.Sprintf("the model supports at most %d tokens; using that", maxWindow))
-			window = maxWindow
-		}
-		res.WindowTokens = window
-		n := res.ContextBytes / sessionBytes(spec, perToken, factor, window)
-		if n > maxPlannedSessions {
-			n = maxPlannedSessions
-		}
-		res.Sessions = int(n)
-		if n == 0 {
-			res.Warnings = append(res.Warnings, "not even one session of this window fits; choose a smaller window or a smaller cache type")
-		}
+	}
+	if maxWindow > 0 && window > maxWindow {
+		res.Warnings = append(res.Warnings, fmt.Sprintf("the model supports at most %d tokens; using that", maxWindow))
+		window = maxWindow
+	}
+	res.WindowTokens = window
+	n := res.ContextBytes / sessionBytes(spec, perToken, factor, window)
+	limit := int64(maxPlannedSessions)
+	if req.MaxSessions > 0 {
+		limit = int64(req.MaxSessions)
+	}
+	if n > limit {
+		n = limit
+	}
+	res.Sessions = int(n)
+	if n == 0 {
+		res.Warnings = append(res.Warnings, "not even one session of this window fits; choose a smaller window or a smaller cache type")
 	}
 	res.BytesPerSession = sessionBytes(spec, perToken, factor, res.WindowTokens)
 	res.PoolTokens = res.WindowTokens * int64(res.Sessions)

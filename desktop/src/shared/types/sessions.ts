@@ -74,12 +74,17 @@ export interface ModelSpec {
 
 export type KvCacheType = 'f16' | 'q8_0' | 'q4_0'
 
-/** A capacity/plan question. Set windowTokens or sessions, not both. */
+/**
+ * A capacity/plan question. Every session gets the whole window; the planner
+ * counts how many such sessions fit.
+ */
 export interface CapacityPlanRequest {
     engine: string
     model: string
+    /** Each session's window; omitted means the model's maximum. */
     windowTokens?: number
-    sessions?: number
+    /** At most this many sessions; omitted means as many as fit. */
+    maxSessions?: number
     cacheType?: KvCacheType
     reservePercent?: number
     otherModelsBytes?: number
