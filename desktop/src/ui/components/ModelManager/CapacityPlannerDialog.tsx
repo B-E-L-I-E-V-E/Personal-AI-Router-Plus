@@ -17,7 +17,11 @@ import getErrorString from '@/shared/utils/get-error-string'
 import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
 import CapacityPlanner from '@/ui/components/SessionsSettings/CapacityPlanner'
 import { planStatus } from '@/ui/components/SessionsSettings/plan-status'
-import { findPlan, useCapacityPlannerStore } from '@/ui/stores/capacity-planner.store'
+import {
+    findPlan,
+    removePlanAndLimit,
+    useCapacityPlannerStore
+} from '@/ui/stores/capacity-planner.store'
 
 /**
  * One model's context window and session count, sized from this node's
@@ -60,8 +64,7 @@ export function CapacityPlannerDialog({
     // what its engine reports.
     const removePlan = () =>
         run(async () => {
-            setPlanner(await window.pairApi.sessions.setPlanner({ remove: { engine, model } }))
-            await window.pairApi.sessions.setCapacity({ engine, model, clear: true })
+            setPlanner(await removePlanAndLimit(engine, model))
             onClose()
         }, 'Could not remove the plan')
     const setAutoReload = (on: boolean) =>

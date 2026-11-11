@@ -154,6 +154,49 @@ describe('expert offload', () => {
     })
 })
 
+describe('post and reply budgets', () => {
+    it('asks the planner for a reply budget and reads the split back', async () => {
+        callProxy.mockResolvedValueOnce({
+            spec: {},
+            windowTokens: 40960,
+            sessions: 21,
+            replyTokens: 4096,
+            postTokens: 36864
+        })
+        const result = await planCapacity({
+            engine: 'ollama',
+            model: 'm',
+            windowTokens: 40960,
+            replyTokens: 4096
+        })
+        expect(callProxy.mock.calls[0][2].replyTokens).toBe(4096)
+        expect(result.replyTokens).toBe(4096)
+        expect(result.postTokens).toBe(36864)
+    })
+
+    it('leaves the reply budget to the planner’s default when unset', async () => {
+        callProxy.mockResolvedValueOnce({ spec: {}, replyTokens: 8192, postTokens: 32768 })
+        await planCapacity({ engine: 'ollama', model: 'm' })
+        expect(callProxy.mock.calls[0][2]).not.toHaveProperty('replyTokens')
+    })
+
+    it('reads a saved plan’s reply budget', () => {
+        const state = parsePlanner({
+            plans: [
+                {
+                    engine: 'ollama',
+                    model: 'm',
+                    windowTokens: 8192,
+                    sessions: 2,
+                    replyTokens: 2048
+                },
+                { engine: 'ollama', model: 'n', windowTokens: 8192, sessions: 2 }
+            ]
+        })
+        expect(state.plans.map(p => p.replyTokens)).toEqual([2048, 0])
+    })
+})
+
 describe('capacity planner bridge', () => {
     it('sends this node’s GPUs with the plan request', async () => {
         callProxy.mockResolvedValueOnce({

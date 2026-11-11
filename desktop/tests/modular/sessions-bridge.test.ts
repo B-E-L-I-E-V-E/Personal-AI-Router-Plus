@@ -135,4 +135,51 @@ describe('sessions bridge', () => {
             ['sessions/end', { sessionId: 'conv-1', agentId: '' }]
         ])
     })
+
+    it('carries the reply budget both ways', async () => {
+        callProxy.mockResolvedValueOnce({
+            models: [
+                {
+                    engine: 'ollama',
+                    model: 'm',
+                    configured: { contextTokens: 16384, maxSessions: 2, replyTokens: 2048 },
+                    sessionContextTokens: 8192,
+                    replyTokens: 2048,
+                    messageTokens: 6144,
+                    source: 'configured'
+                }
+            ]
+        })
+        const [row] = await getCapacityReport()
+        expect(row).toMatchObject({
+            configured: { contextTokens: 16384, maxSessions: 2, replyTokens: 2048 },
+            replyTokens: 2048,
+            messageTokens: 6144
+        })
+
+        callProxy.mockResolvedValue({})
+        await setCapacity({
+            engine: 'ollama',
+            model: 'm',
+            contextTokens: 16384,
+            maxSessions: 2,
+            replyTokens: 2048
+        })
+        expect(callProxy.mock.calls.at(-1)?.[2]).toEqual({
+            engine: 'ollama',
+            model: 'm',
+            contextTokens: 16384,
+            maxSessions: 2,
+            replyTokens: 2048
+        })
+    })
+
+    it('reads a missing reply budget as none', async () => {
+        callProxy.mockResolvedValueOnce({
+            models: [{ engine: 'ollama', model: 'm', configured: null, source: 'detected' }]
+        })
+        const [row] = await getCapacityReport()
+        expect(row.replyTokens).toBe(0)
+        expect(row.messageTokens).toBe(0)
+    })
 })

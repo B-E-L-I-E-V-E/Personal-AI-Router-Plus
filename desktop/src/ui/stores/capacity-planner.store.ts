@@ -35,3 +35,13 @@ export function findPlan(
 ): SavedCapacityPlan | undefined {
     return planner?.plans.find(p => p.engine === engine && p.model === model)
 }
+
+/**
+ * Removes a model's saved plan and lifts the limit the plan set, so the model
+ * goes back to what its engine reports. Returns the planner state after.
+ */
+export async function removePlanAndLimit(engine: string, model: string): Promise<PlannerState> {
+    const state = await window.pairApi.sessions.setPlanner({ remove: { engine, model } })
+    await window.pairApi.sessions.setCapacity({ engine, model, clear: true })
+    return state
+}
