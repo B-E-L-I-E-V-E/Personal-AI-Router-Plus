@@ -24,8 +24,8 @@ export default function TextFitDetails({ tokens }: { tokens: number }) {
                 aria-label="Text that fits in the context window"
                 style={{
                     display: 'grid',
-                    gridTemplateColumns: '1fr auto auto auto',
-                    columnGap: '1rem',
+                    gridTemplateColumns: '1fr auto auto auto auto',
+                    columnGap: '0.75rem',
                     rowGap: '0.25rem',
                     alignItems: 'baseline'
                 }}
@@ -34,13 +34,16 @@ export default function TextFitDetails({ tokens }: { tokens: number }) {
                     Text
                 </Text>
                 <Text kind="body/semibold/sm" role="columnheader" style={RIGHT}>
-                    Chars per token
+                    Chars/token
                 </Text>
                 <Text kind="body/semibold/sm" role="columnheader" style={RIGHT}>
                     Characters
                 </Text>
                 <Text kind="body/semibold/sm" role="columnheader" style={RIGHT}>
                     Words
+                </Text>
+                <Text kind="body/semibold/sm" role="columnheader" style={RIGHT}>
+                    Pages
                 </Text>
                 {textKindFits(tokens).map(k => (
                     <Fragment key={k.label}>
@@ -54,7 +57,10 @@ export default function TextFitDetails({ tokens }: { tokens: number }) {
                             {k.characters.toLocaleString()}
                         </Text>
                         <Text kind="body/regular/sm" role="cell" style={RIGHT}>
-                            {k.words > 0 ? k.words.toLocaleString() : '—'}
+                            {k.words.toLocaleString()}
+                        </Text>
+                        <Text kind="body/regular/sm" role="cell" style={RIGHT}>
+                            {k.pages.toLocaleString()}
                         </Text>
                     </Fragment>
                 ))}
@@ -76,9 +82,12 @@ export default function TextFitDetails({ tokens }: { tokens: number }) {
                     encoded data and Chinese or Japanese take about one token per character, and an
                     emoji takes more than one. The figures were measured with qwen3’s tokenizer on
                     samples of each kind; other models give similar numbers for English and code and
-                    differ more for other languages. The window holds the whole conversation: your
-                    messages, the model’s replies and the earlier turns it re-reads. Counts are
-                    rounded down.
+                    differ more for other languages. Words for English and code were counted in the
+                    samples; Chinese words average about one and a half characters; text without
+                    words (JSON, base64, IDs, emoji) is counted in standard words of five characters
+                    and a space. A page is 500 words, single spaced. The window holds the whole
+                    conversation: your messages, the model’s replies and the earlier turns it
+                    re-reads. Counts are rounded down.
                 </Text>
             )}
         </Stack>

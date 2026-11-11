@@ -86,37 +86,52 @@ function roughlyDown(n: number): number {
     return Math.floor(n / scale) * scale
 }
 
+/** The typing standard's word: five characters and a space. */
+const CHARS_PER_STANDARD_WORD = 6
+/** Chinese words average about one and a half characters. */
+const CHARS_PER_CHINESE_WORD = 1.5
+/** A single-spaced page. */
+const WORDS_PER_PAGE = 500
+
 /**
  * Text per token for kinds of text, measured with qwen3's tokenizer on
  * samples of each. Other modern tokenizers (Llama 3, Gemma, GPT-style BPE)
  * give similar numbers for English and code and differ more for other
- * languages. Words are counted only where text has words.
+ * languages. English and code words were counted in the samples; text
+ * without words is counted in standard words of six characters, and Chinese
+ * in words of one and a half characters.
  */
-const TEXT_KINDS: { label: string; charsPerToken: number; wordsPerToken?: number }[] = [
-    { label: 'English prose', charsPerToken: 4.1, wordsPerToken: 0.67 },
-    { label: 'Code', charsPerToken: 3.6, wordsPerToken: 0.47 },
-    { label: 'Minified JSON', charsPerToken: 3.4 },
-    { label: 'Chinese', charsPerToken: 1.7 },
-    { label: 'Base64', charsPerToken: 1.3 },
-    { label: 'UUIDs and hashes', charsPerToken: 1.2 },
-    { label: 'Emoji', charsPerToken: 0.9 }
+const TEXT_KINDS: { label: string; charsPerToken: number; charsPerWord: number }[] = [
+    // Measured: 0.67 and 0.47 words per token.
+    { label: 'English prose', charsPerToken: 4.1, charsPerWord: 4.1 / 0.67 },
+    { label: 'Code', charsPerToken: 3.6, charsPerWord: 3.6 / 0.47 },
+    { label: 'Minified JSON', charsPerToken: 3.4, charsPerWord: CHARS_PER_STANDARD_WORD },
+    { label: 'Chinese', charsPerToken: 1.7, charsPerWord: CHARS_PER_CHINESE_WORD },
+    { label: 'Base64', charsPerToken: 1.3, charsPerWord: CHARS_PER_STANDARD_WORD },
+    { label: 'UUIDs and hashes', charsPerToken: 1.2, charsPerWord: CHARS_PER_STANDARD_WORD },
+    { label: 'Emoji', charsPerToken: 0.9, charsPerWord: CHARS_PER_STANDARD_WORD }
 ]
 
 interface TextKindFit {
     label: string
     charsPerToken: number
-    /** Characters that fit, rounded down. */
+    /** Characters, words and single-spaced pages that fit, rounded down. */
     characters: number
-    /** Words that fit, rounded down; 0 where the text has no words. */
     words: number
+    pages: number
 }
 
 /** How much of each kind of text fits in a window of tokens. */
 export function textKindFits(tokens: number): TextKindFit[] {
-    return TEXT_KINDS.map(k => ({
-        label: k.label,
-        charsPerToken: k.charsPerToken,
-        characters: roughlyDown(tokens * k.charsPerToken),
-        words: k.wordsPerToken ? roughlyDown(tokens * k.wordsPerToken) : 0
-    }))
+    return TEXT_KINDS.map(k => {
+        const characters = tokens * k.charsPerToken
+        const words = characters / k.charsPerWord
+        return {
+            label: k.label,
+            charsPerToken: k.charsPerToken,
+            characters: roughlyDown(characters),
+            words: roughlyDown(words),
+            pages: roughlyDown(words / WORDS_PER_PAGE)
+        }
+    })
 }

@@ -114,8 +114,17 @@ describe('text kinds', () => {
         const fits = textKindFits(40960)
         expect(fits.map(f => f.label)[0]).toBe('English prose')
         expect(fits.find(f => f.label === 'English prose')?.characters).toBe(160000)
-        expect(fits.find(f => f.label === 'English prose')?.words).toBe(27000)
-        expect(fits.find(f => f.label === 'Chinese')?.words).toBe(0)
+        expect(fits.find(f => f.label === 'English prose')).toMatchObject({
+            words: 27000,
+            pages: 54
+        })
+        expect(fits.find(f => f.label === 'Chinese')).toMatchObject({
+            characters: 69000,
+            words: 46000,
+            pages: 92
+        })
+        // Every kind has words and pages.
+        for (const f of fits) expect(f.words > 0 && f.pages > 0).toBe(true)
         expect(fits.at(-1)?.characters).toBe(36000)
         for (let i = 1; i < fits.length; i++)
             expect(fits[i].charsPerToken).toBeLessThanOrEqual(fits[i - 1].charsPerToken)
