@@ -598,9 +598,19 @@ follows the ownership rule of §5.10. A session object reports `expiresAt` and a
 suggested `keepaliveIntervalSeconds` of one third of its window.
 
 `sessions/configure` is a process-wide JSON-RPC request with optional
-`idleTimeoutSeconds`, `maxLifetimeSeconds` and `maxSessions`; omitted fields keep
-their value and the result is the policy in force. A lower limit refuses new
-sessions without evicting live ones.
+`idleTimeoutSeconds`, `maxLifetimeSeconds`, `maxSessions`,
+`queueTimeoutSeconds` and `maxQueued`; omitted fields keep their value, an empty
+payload only reads, and the result is the policy in force. A change is saved to
+`session-policy.json` beside the port files and restored at startup; a flag
+given explicitly on the command line overrides the saved value. A lower limit
+refuses new sessions without evicting live ones.
+
+The desktop's **Settings → Sessions** tab drives the proxy through the
+broker's engine relay with the process-wide requests `sessions/configure`,
+`sessions/list` (this node's own sessions, optional `agentId` filter),
+`sessions/end` (`sessionId`, plus the owner's `agentId`), `capacity/report` and
+`capacity/set` (the `PUT /pair/v1/capacity` body). Any enabled engine's relay
+reaches the same store. The desktop keeps no copy of these settings.
 
 ### 5.12 Context accounting and capacity
 

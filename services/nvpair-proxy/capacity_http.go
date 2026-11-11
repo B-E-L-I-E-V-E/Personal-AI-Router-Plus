@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -29,36 +30,23 @@ func (f *facade) serveCapacityAPI(w http.ResponseWriter, r *http.Request) bool {
 	case http.MethodGet:
 		writeSessionJSON(w, http.StatusOK, map[string]any{"models": f.host.capacityReport(r.Context())})
 	case http.MethodPut:
-		var body struct {
-			Engine        string `json:"engine"`
-			Model         string `json:"model"`
-			ContextTokens int64  `json:"contextTokens"`
-			MaxSessions   int    `json:"maxSessions"`
-			Clear         bool   `json:"clear"`
+		raw, err := io.ReadAll(io.LimitReader(r.Body, maxSessionAPIBody))
+		if err != nil {
+			writeSessionJSON(w, http.StatusBadRequest, map[string]string{"error": "read body: " + err.Error()})
+			return true
 		}
-		if err := decodeSessionBody(r, &body); err != nil {
+		row, err := f.host.setCapacity(r.Context(), raw)
+		if err != nil {
 			writeSessionJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return true
 		}
-		if _, ok := profileFor(body.Engine); !ok {
-			writeSessionJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown engine; use one of " + engineNames()})
+		if row == nil {
+			w.WriteHeader(http.StatusNoContent)
 			return true
 		}
-		k := capacityKey{Engine: body.Engine, Model: body.Model}
-		setting := capacitySetting{ContextTokens: body.ContextTokens, MaxSessions: body.MaxSessions}
-		if err := f.host.capacity.set(k, setting, body.Clear); err != nil {
-			writeSessionJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return true
-		}
-		slog.Info("context capacity changed", "engine", k.Engine, "model", k.Model,
-			"context_tokens", setting.ContextTokens, "max_sessions", setting.MaxSessions, "cleared", body.Clear)
-		for _, row := range f.host.capacityReport(r.Context()) {
-			if row.Engine == k.Engine && row.Model == k.Model {
-				writeSessionJSON(w, http.StatusOK, row)
-				return true
-			}
-		}
-		w.WriteHeader(http.StatusNoContent)
+		slog.Info("context capacity changed", "engine", row.Engine, "model", row.Model,
+			"context_tokens", row.ContextTokens, "max_sessions", row.MaxSessions)
+		writeSessionJSON(w, http.StatusOK, row)
 	default:
 		methodNotAllowed(w, "GET, PUT")
 	}

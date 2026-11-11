@@ -428,6 +428,10 @@ type Proxy struct {
 	// capacity holds the user's per-model context settings for this node and
 	// caches what the local engines report.
 	capacity *capacityStore
+
+	// sessionPolicyPath saves the session policy; empty keeps it in memory
+	// only (tests).
+	sessionPolicyPath string
 }
 
 // NewProxy builds a facade-less process host. Facades arrive via
@@ -3030,18 +3034,64 @@ func (p *Proxy) handleMessage(msg *Message) {
 		// Process-wide, so it is a bare method rather than engine-addressed.
 		// Omitted fields keep their current value; the result is the policy now
 		// in force.
-		cfg, err := applySessionConfigParams(p.sessions.config(), msg.Params)
-		if err == nil {
-			err = p.sessions.configure(cfg)
-		}
+		// An empty payload reads the policy without changing it. A change is
+		// saved, so it survives a restart.
+		cfg, err := p.configureSessions(msg.Params)
 		if err != nil {
 			p.codec.RespondError(msg.ID, -32602, "invalid params: "+err.Error())
 			return
 		}
-		slog.Info("session policy changed",
-			"idle_timeout", cfg.IdleTimeout, "max_lifetime", cfg.MaxLifetime, "max_sessions", cfg.MaxSessions)
+		slog.Info("session policy in force",
+			"idle_timeout", cfg.IdleTimeout, "max_lifetime", cfg.MaxLifetime, "max_sessions", cfg.MaxSessions,
+			"queue_timeout", cfg.QueueTimeout, "max_queued", cfg.MaxQueued)
 		if err := p.codec.Respond(msg.ID, sessionConfigResult(cfg)); err != nil {
 			log.Printf("failed to respond to sessions/configure: %v", err)
+		}
+
+	case "sessions/list":
+		result, err := p.sessionsListResult(msg.Params)
+		if err != nil {
+			p.codec.RespondError(msg.ID, -32602, "invalid params: "+err.Error())
+			return
+		}
+		if err := p.codec.Respond(msg.ID, result); err != nil {
+			log.Printf("failed to respond to sessions/list: %v", err)
+		}
+
+	case "sessions/end":
+		var params struct {
+			SessionID string `json:"sessionId"`
+			AgentID   string `json:"agentId"`
+		}
+		if err := json.Unmarshal(msg.Params, &params); err != nil || !validRequestID(params.SessionID) {
+			p.codec.RespondError(msg.ID, -32602, `invalid params: expected {"sessionId","agentId"?}`)
+			return
+		}
+		if err := p.sessions.remove(params.SessionID, params.AgentID); err != nil {
+			p.codec.RespondError(msg.ID, -32000, err.Error())
+			return
+		}
+		if err := p.codec.Respond(msg.ID, map[string]bool{"ended": true}); err != nil {
+			log.Printf("failed to respond to sessions/end: %v", err)
+		}
+
+	case "capacity/report":
+		ctx, cancel := context.WithTimeout(context.Background(), detectionTimeout+time.Second)
+		defer cancel()
+		if err := p.codec.Respond(msg.ID, map[string]any{"models": p.capacityReport(ctx)}); err != nil {
+			log.Printf("failed to respond to capacity/report: %v", err)
+		}
+
+	case "capacity/set":
+		ctx, cancel := context.WithTimeout(context.Background(), detectionTimeout+time.Second)
+		defer cancel()
+		row, err := p.setCapacity(ctx, msg.Params)
+		if err != nil {
+			p.codec.RespondError(msg.ID, -32602, "invalid params: "+err.Error())
+			return
+		}
+		if err := p.codec.Respond(msg.ID, map[string]any{"model": row}); err != nil {
+			log.Printf("failed to respond to capacity/set: %v", err)
 		}
 
 	case "shutdown":

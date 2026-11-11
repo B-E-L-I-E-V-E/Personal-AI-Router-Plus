@@ -210,6 +210,8 @@
 | `proxy/request` | notification (we consume) | ✅ yes |
 | `proxy/request-started` | notification (we consume) | ➖ ignored |
 | `ready` | notification (we consume) | ✅ yes |
+| `capacity/report` | request (we call) | ✅ yes |
+| `capacity/set` | request (we call) | ✅ yes |
 | `facade/enable` | request (we call) | ⚠️ not called |
 | `node/add-manual` | request (we call) | ✅ yes |
 | `node/remove-manual` | request (we call) | ✅ yes |
@@ -218,7 +220,9 @@
 | `node/set-local-backend` | request (we call) | ⚠️ not called |
 | `node/set-priority` | request (we call) | ✅ yes |
 | `nodes/list` | request (we call) | ✅ yes |
-| `sessions/configure` | request (we call) | ➖ ignored |
+| `sessions/configure` | request (we call) | ✅ yes |
+| `sessions/end` | request (we call) | ✅ yes |
+| `sessions/list` | request (we call) | ✅ yes |
 
 **Dynamic / unresolved notify sites (verify by hand — `npm run service-contracts` prints the line numbers):**
 - `method (var)  (proxy.go)`

@@ -744,24 +744,33 @@ func sessionConfigResult(cfg sessionConfig) map[string]int {
 	}
 }
 
-// registerSessionFlags declares the session policy flags on fs and returns a
-// function that yields the configured policy after parsing. Every field starts
-// from defaultSessionConfig, so a field without a flag keeps its default
-// rather than its zero value.
-func registerSessionFlags(fs *flag.FlagSet) func() sessionConfig {
+// registerSessionFlags declares the session policy flags on fs. The returned
+// function applies only the flags given on the command line to base, so a
+// saved policy keeps every value the operator did not explicitly override,
+// and a field without a flag keeps base's value rather than a zero.
+func registerSessionFlags(fs *flag.FlagSet) func(base sessionConfig) sessionConfig {
 	d := defaultSessionConfig()
 	idle := fs.Duration("session-idle-timeout", d.IdleTimeout, "default sliding idle timeout for sessions (1m to 60m); adjustable at runtime via sessions/configure")
 	lifetime := fs.Duration("session-max-lifetime", d.MaxLifetime, "maximum total length of a session even while it is kept alive; 0 disables the cap")
 	maxSessions := fs.Int("max-sessions", d.MaxSessions, "maximum number of live sessions")
 	queueTimeout := fs.Duration("session-queue-timeout", d.QueueTimeout, "how long a session request may wait for a context slot on this node (0 to 5m; 0 refuses at once)")
 	maxQueued := fs.Int("session-max-queued", d.MaxQueued, "maximum session requests waiting for context slots, per model")
-	return func() sessionConfig {
-		cfg := d
-		cfg.IdleTimeout = *idle
-		cfg.MaxLifetime = *lifetime
-		cfg.MaxSessions = *maxSessions
-		cfg.QueueTimeout = *queueTimeout
-		cfg.MaxQueued = *maxQueued
+	return func(base sessionConfig) sessionConfig {
+		cfg := base
+		fs.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "session-idle-timeout":
+				cfg.IdleTimeout = *idle
+			case "session-max-lifetime":
+				cfg.MaxLifetime = *lifetime
+			case "max-sessions":
+				cfg.MaxSessions = *maxSessions
+			case "session-queue-timeout":
+				cfg.QueueTimeout = *queueTimeout
+			case "session-max-queued":
+				cfg.MaxQueued = *maxQueued
+			}
+		})
 		return cfg
 	}
 }

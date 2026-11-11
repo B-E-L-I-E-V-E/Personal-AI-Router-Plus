@@ -199,6 +199,12 @@ its share gets `400` until it sends a shorter, compacted conversation.
 Responses carry `X-PAIR-Context-Session-Tokens`, `X-PAIR-Context-Session-Limit`
 and `X-PAIR-Queue-Wait-Ms`. See `spec.md` §5.13.
 
+Each node enforces its own capacity, including for sessions other nodes route
+to it, and frees a slot as soon as the session moves or ends (`spec.md` §5.14).
+In the desktop app, **Settings → Sessions** edits the session policy and each
+model's capacity and lists live sessions; changes are saved by the proxy in
+`session-policy.json` and `context-capacity.json`.
+
 **Persisted port.** A port chosen at runtime via `set-port` is saved to the
 per-user data dir (`%LocalAppData%\Nvidia Corporation\Personal AI Router` on
 Windows, `~/.config/Nvidia Corporation/Personal AI Router` on Linux) and

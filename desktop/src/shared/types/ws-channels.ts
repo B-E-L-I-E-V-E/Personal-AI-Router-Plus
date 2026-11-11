@@ -43,6 +43,12 @@ import type { NodeItem } from '@/shared/types/nodes'
 import type { NodeItemMetrics } from '@/shared/types/metrics'
 import type { Workload } from '@/shared/types/workloads'
 import type {
+    CapacityChange,
+    ModelCapacity,
+    SessionPolicy,
+    SessionSummary
+} from '@/shared/types/sessions'
+import type {
     AvailableNode,
     ClusterIdentityPayload,
     ClusterNode,
@@ -113,6 +119,14 @@ export interface WsInvokeChannelMap {
 
     // Workloads
     'workloads:get-initial': { request: void; response: Record<string, Workload> }
+
+    // Sessions and context capacity (nvpair-proxy, relayed by the broker)
+    'sessions:get-policy': { request: void; response: SessionPolicy }
+    'sessions:set-policy': { request: Partial<SessionPolicy>; response: SessionPolicy }
+    'sessions:list': { request: void; response: SessionSummary[] }
+    'sessions:end': { request: { sessionId: string; agentId: string | null }; response: null }
+    'capacity:get-report': { request: void; response: ModelCapacity[] }
+    'capacity:set': { request: CapacityChange; response: null }
 }
 
 export type WsInvokeChannel = keyof WsInvokeChannelMap

@@ -13,6 +13,12 @@ import type { NodeItem } from '@/shared/types/nodes'
 import type { ServiceError } from '@/shared/types/errors'
 import type { NodeItemMetrics } from '@/shared/types/metrics'
 import type { Workload } from '@/shared/types/workloads'
+import type {
+    CapacityChange,
+    ModelCapacity,
+    SessionPolicy,
+    SessionSummary
+} from '@/shared/types/sessions'
 import type { AppInitialSnapshot, ClusterInitialSnapshot } from '@/shared/types/bootstrap'
 
 // ---------------------------------------------------------------------------
@@ -99,6 +105,21 @@ export interface IErrorsApi {
     onUpdate(callback: (errors: ServiceError[]) => void): () => void
 }
 
+export interface ISessionsApi {
+    /** The proxy's session policy. */
+    getPolicy(): Promise<SessionPolicy>
+    /** Change part of the session policy; resolves to the policy in force. */
+    setPolicy(change: Partial<SessionPolicy>): Promise<SessionPolicy>
+    /** Live sessions this node routes. */
+    list(): Promise<SessionSummary[]>
+    /** End a session now, cancelling anything it has running. */
+    end(sessionId: string, agentId: string | null): Promise<null>
+    /** Context capacity per model on this node. */
+    getCapacity(): Promise<ModelCapacity[]>
+    /** Set or clear one model's context capacity. */
+    setCapacity(change: CapacityChange): Promise<null>
+}
+
 export interface IMetricsApi {
     /** Periodic hardware metrics update (CPU, GPU, memory) for a node. */
     onUpdate(callback: (metrics: NodeItemMetrics) => void): () => void
@@ -122,6 +143,7 @@ export interface IPairApi {
     workloads: IWorkloadsApi
     errors: IErrorsApi
     metrics: IMetricsApi
+    sessions: ISessionsApi
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +205,14 @@ export function createPairApi(transport: ServiceTransport): IPairApi {
         },
         metrics: {
             onUpdate: cb => transport.subscribePush('metrics:update', cb)
+        },
+        sessions: {
+            getPolicy: () => transport.invoke('sessions:get-policy'),
+            setPolicy: change => transport.invoke('sessions:set-policy', change),
+            list: () => transport.invoke('sessions:list'),
+            end: (sessionId, agentId) => transport.invoke('sessions:end', { sessionId, agentId }),
+            getCapacity: () => transport.invoke('capacity:get-report'),
+            setCapacity: change => transport.invoke('capacity:set', change)
         }
     }
 }

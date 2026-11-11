@@ -96,8 +96,8 @@ func (s *sessionStore) notifyPeerReleaseLocked(ref remoteRef, sessionID string) 
 	if s.onPeerRelease == nil {
 		return
 	}
-	notify := s.onPeerRelease
-	go notify(ref, sessionID)
+	release := s.onPeerRelease
+	go release(ref, sessionID)
 }
 
 // sendPeerRelease tells another node this session no longer needs its slot.

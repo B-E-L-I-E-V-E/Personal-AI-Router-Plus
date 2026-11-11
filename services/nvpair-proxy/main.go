@@ -73,7 +73,20 @@ func main() {
 
 	codec := NewCodec(transport)
 	proxy := NewProxy(codec)
-	if err := proxy.sessions.configure(sessionFlags()); err != nil {
+	// Session policy: the defaults, then the policy saved through
+	// sessions/configure, then any flag given explicitly on the command line.
+	policy := defaultSessionConfig()
+	if path, err := appdir.Path(sessionPolicyFileName); err != nil {
+		slog.Warn("session policy will not persist", "err", err)
+	} else {
+		proxy.sessionPolicyPath = path
+		if saved, ok, err := loadSessionPolicy(path); err != nil {
+			slog.Warn("ignoring unreadable session policy", "path", path, "err", err)
+		} else if ok {
+			policy = saved
+		}
+	}
+	if err := proxy.sessions.configure(sessionFlags(policy)); err != nil {
 		log.Fatalf("invalid session flags: %v", err)
 	}
 	// Context capacity settings persist beside the proxy's port files. A file

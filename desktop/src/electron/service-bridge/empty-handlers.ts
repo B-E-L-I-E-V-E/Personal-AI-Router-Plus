@@ -29,6 +29,14 @@ import {
 import type { JsonObject, JsonValue } from './json-rpc-subprocess'
 import { emptyInvite, parseClusterNodes, parseInvite, parseNodeIdentity } from './cluster-json'
 import { removeManualNodeEntry, resolveManualNodeKey } from './manual-nodes-store'
+import {
+    endSession,
+    getCapacityReport,
+    getSessionPolicy,
+    listSessions,
+    setCapacity,
+    setSessionPolicy
+} from './sessions-bridge'
 
 type BridgeHandler<C extends WsInvokeChannel> = (
     payload?: WsInvokeRequest<C>
@@ -717,7 +725,14 @@ const EMPTY_SERVICE_BRIDGE_HANDLERS: BridgeHandlerMap = {
     'errors:get-initial': () => handleErrorsGetInitial(),
     'errors:clear': payload => (payload ? handleErrorsClear(payload) : null),
 
-    'workloads:get-initial': () => handleWorkloadsGetInitial()
+    'workloads:get-initial': () => handleWorkloadsGetInitial(),
+
+    'sessions:get-policy': () => getSessionPolicy(),
+    'sessions:set-policy': payload => setSessionPolicy(payload),
+    'sessions:list': () => listSessions(),
+    'sessions:end': payload => endSession(payload),
+    'capacity:get-report': () => getCapacityReport(),
+    'capacity:set': payload => setCapacity(payload)
 }
 
 export function handleServiceBridgeInvoke<C extends WsInvokeChannel>(

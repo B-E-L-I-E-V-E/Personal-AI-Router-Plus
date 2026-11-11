@@ -14,7 +14,6 @@
         "node/selection-changed": "Automatic routing has no selected-node UI, so PAIR deliberately does not consume proxy selection changes.",
         "proxy/request": "Per-request proxy telemetry is not rendered; workload lifecycle uses the broker workloads stream.",
         "proxy/request-started": "Per-request proxy telemetry is not rendered; see proxy/request.",
-        "sessions/configure": "Process-wide session policy (idle timeout, maximum lifetime, session limit, context-slot queue timeout and length) on nvpair-proxy. Not yet wired to a settings control: the proxy runs with its defaults, or with the --session-idle-timeout, --session-max-lifetime and --max-sessions flags when started standalone. The settings UI and broker relay are planned follow-up work.",
         "workload:submitted": "Producer-to-broker lifecycle event. PAIR consumes the broker's translated workloads:upsert stream rather than raw workload events.",
         "workload:started": "Proxy-to-broker lifecycle event translated by the broker into workloads:upsert, which PAIR consumes.",
         "workload:completed": "Proxy-to-broker terminal lifecycle event translated by the broker into workloads:upsert.",

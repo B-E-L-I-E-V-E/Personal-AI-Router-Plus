@@ -11,6 +11,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -483,27 +485,66 @@ func TestSessionsAPI_DeleteCancelsInFlightInference(t *testing.T) {
 	})
 }
 
-// The proxy's startup policy must keep every default its flags do not set.
+// The proxy's startup policy must keep every value its flags do not set.
 // Building it field by field once left the context-slot queue at zero, so
 // every full node refused at once instead of queueing.
 func TestRegisterSessionFlags(t *testing.T) {
-	parse := func(name string, args []string, want sessionConfig) {
+	saved := defaultSessionConfig()
+	saved.IdleTimeout = 20 * time.Minute
+	saved.MaxQueued = 4
+	parse := func(name string, base sessionConfig, args []string, want sessionConfig) {
 		t.Run(name, func(t *testing.T) {
 			fs := flag.NewFlagSet("proxy", flag.ContinueOnError)
 			cfg := registerSessionFlags(fs)
 			if err := fs.Parse(args); err != nil {
 				t.Fatalf("parse %v: %v", args, err)
 			}
-			if got := cfg(); got != want {
+			if got := cfg(base); got != want {
 				t.Fatalf("config = %+v, want %+v", got, want)
 			}
 		})
 	}
-	parse("no flags is the default policy", nil, defaultSessionConfig())
-	tuned := defaultSessionConfig()
-	tuned.IdleTimeout = 5 * time.Minute
+	parse("no flags keeps the defaults", defaultSessionConfig(), nil, defaultSessionConfig())
+	parse("no flags keeps a saved policy", saved, nil, saved)
+	tuned := saved
 	tuned.QueueTimeout = 2 * time.Minute
-	tuned.MaxQueued = 8
-	parse("flags override only what they name",
-		[]string{"-session-idle-timeout=5m", "-session-queue-timeout=2m", "-session-max-queued=8"}, tuned)
+	parse("a flag overrides only what it names", saved, []string{"-session-queue-timeout=2m"}, tuned)
+}
+
+func TestSessionPolicy_SavedAndReloaded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), sessionPolicyFileName)
+	p := NewProxy(NewCodec(&recRW{}))
+	p.sessionPolicyPath = path
+
+	if _, ok, err := loadSessionPolicy(path); err != nil || ok {
+		t.Fatalf("load before any save: ok=%v err=%v, want nothing saved", ok, err)
+	}
+	t.Run("reading the policy saves nothing", func(t *testing.T) {
+		if _, err := p.configureSessions(json.RawMessage(`{}`)); err != nil {
+			t.Fatalf("configure: %v", err)
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("an empty configure wrote the file (stat err %v)", err)
+		}
+	})
+	t.Run("a change is saved and reloads", func(t *testing.T) {
+		cfg, err := p.configureSessions(json.RawMessage(`{"idleTimeoutSeconds":300,"queueTimeoutSeconds":30}`))
+		if err != nil {
+			t.Fatalf("configure: %v", err)
+		}
+		got, ok, err := loadSessionPolicy(path)
+		if err != nil || !ok || got != cfg {
+			t.Fatalf("reloaded %+v (ok=%v err=%v), want %+v", got, ok, err, cfg)
+		}
+	})
+	t.Run("an invalid change is refused and not saved", func(t *testing.T) {
+		before, _, _ := loadSessionPolicy(path)
+		if _, err := p.configureSessions(json.RawMessage(`{"idleTimeoutSeconds":5}`)); err == nil {
+			t.Fatal("configure accepted an idle timeout below the minimum")
+		}
+		after, _, _ := loadSessionPolicy(path)
+		if after != before {
+			t.Fatalf("saved policy changed to %+v after a refused change", after)
+		}
+	})
 }
