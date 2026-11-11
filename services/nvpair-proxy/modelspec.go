@@ -45,6 +45,12 @@ type modelSpec struct {
 	// layers, which does not grow with the window.
 	RecurrentBytesPerSession int64 `json:"recurrentBytesPerSession,omitempty"`
 
+	// ExpertCount is the number of routed experts in a mixture-of-experts
+	// model, and ExpertBytes the size of their weights, which llama.cpp can
+	// keep in system memory instead of on the GPU.
+	ExpertCount int   `json:"expertCount,omitempty"`
+	ExpertBytes int64 `json:"expertBytes,omitempty"`
+
 	Layers          int `json:"layers,omitempty"`
 	AttentionLayers int `json:"attentionLayers,omitempty"`
 	KVHeads         int `json:"kvHeads,omitempty"`
@@ -305,6 +311,7 @@ func (c *specClient) describe(ctx context.Context, engine string, base *url.URL,
 func (c *specClient) describeOllama(ctx context.Context, base *url.URL, s *modelSpec, knownParallel int) error {
 	var show struct {
 		ModelInfo map[string]any `json:"model_info"`
+		Tensors   []ollamaTensor `json:"tensors"`
 		Details   struct {
 			Format string `json:"format"`
 		} `json:"details"`
@@ -313,7 +320,11 @@ func (c *specClient) describeOllama(ctx context.Context, base *url.URL, s *model
 		return err
 	}
 	s.Format = show.Details.Format
-	s.applyArchitecture(jsonToMeta(show.ModelInfo))
+	meta := jsonToMeta(show.ModelInfo)
+	s.applyArchitecture(meta)
+	if tensors, ok := ollamaTensors(show.Tensors); ok {
+		s.applyExperts(meta, tensors)
+	}
 
 	var tags struct {
 		Models []struct {
@@ -366,7 +377,7 @@ var shardSuffix = regexp.MustCompile(`-(\d{5})-of-(\d{5})\.gguf$`)
 
 // fileSpec reads a GGUF model file (and its shards' sizes) into s.
 func fileSpec(path string, s *modelSpec) error {
-	meta, err := readGGUFFile(path)
+	meta, tensors, err := readGGUFFile(path)
 	if err != nil {
 		return err
 	}
@@ -374,19 +385,26 @@ func fileSpec(path string, s *modelSpec) error {
 	if !s.applyArchitecture(meta) {
 		s.Notes = append(s.Notes, "the model file does not describe its attention layers; enter the context cost per token")
 	}
-	var total int64
+	// A split model keeps part of the tensor table in each shard.
+	shards := []string{path}
 	if m := shardSuffix.FindStringSubmatch(path); m != nil {
 		prefix := strings.TrimSuffix(path, m[0])
-		matches, _ := filepath.Glob(prefix + "-*-of-" + m[2] + ".gguf")
-		for _, p := range matches {
-			if st, err := os.Stat(p); err == nil {
-				total += st.Size()
-			}
+		shards, _ = filepath.Glob(prefix + "-*-of-" + m[2] + ".gguf")
+	}
+	var total int64
+	for _, p := range shards {
+		if st, err := os.Stat(p); err == nil {
+			total += st.Size()
 		}
-	} else if st, err := os.Stat(path); err == nil {
-		total = st.Size()
+		if p == path {
+			continue
+		}
+		if _, more, err := readGGUFFile(p); err == nil {
+			tensors = append(tensors, more...)
+		}
 	}
 	s.WeightsBytes = total
+	s.applyExperts(meta, tensors)
 	return nil
 }
 

@@ -6,6 +6,7 @@ import {
     Button,
     Flex,
     FormField,
+    Slider,
     Stack,
     Switch,
     Text,
@@ -21,6 +22,7 @@ import type {
 import getErrorString from '@/shared/utils/get-error-string'
 import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
 import CapacityPlanner from './CapacityPlanner'
+import { nearestStop, shortTokens, windowStops } from './capacity-sliders'
 import InstalledModelPicker from './InstalledModelPicker'
 import { planStatus } from './plan-status'
 
@@ -30,6 +32,8 @@ import { planStatus } from './plan-status'
 const REFRESH_MS = 5000
 const SHARE_GRANULARITY = 1024
 const MIN_USEFUL_SHARE = 4096
+// The manual editor's sessions slider; the GPU planner sizes beyond this.
+const MANUAL_SESSIONS_MAX = 64
 
 // The proxy stores a model's capacity as window × sessions; the page shows
 // the window each session gets, since a window belongs to one conversation.
@@ -134,12 +138,20 @@ function CapacityRow({
     const initialPool = row.configured?.contextTokens ?? row.contextTokens
     const initialSessions = row.configured?.maxSessions ?? row.maxSessions
     const initialWindow = sessionWindow(initialPool, initialSessions)
-    const [windowText, setWindowText] = useState(initialWindow > 0 ? String(initialWindow) : '')
-    const [sessions, setSessions] = useState(initialSessions > 0 ? String(initialSessions) : '')
+    // Stops up to the engine's own window, keeping a saved window that is not
+    // a power of two selectable.
+    const stops = useMemo(() => {
+        const base = windowStops(Math.max(row.detectedWindowTokens, initialWindow))
+        if (initialWindow > 0 && !base.includes(initialWindow)) base.push(initialWindow)
+        return base.sort((a, b) => a - b)
+    }, [row.detectedWindowTokens, initialWindow])
+    const sessionsMax = Math.max(MANUAL_SESSIONS_MAX, initialSessions)
+    const [windowN, setWindowN] = useState(
+        initialWindow > 0 ? initialWindow : stops[stops.length - 1]
+    )
+    const [sessionsN, setSessionsN] = useState(Math.max(1, initialSessions))
     const [saving, setSaving] = useState(false)
 
-    const windowN = wholeNumber(windowText) ?? 0
-    const sessionsN = wholeNumber(sessions) ?? 0
     const valid =
         windowN >= SHARE_GRANULARITY &&
         windowN % SHARE_GRANULARITY === 0 &&
@@ -165,13 +177,38 @@ function CapacityRow({
                     {formatTokens(row.usedContextTokens)} tokens in use
                 </Text>
             </Flex>
+            <Stack gap="1">
+                <Flex justify="between" gap="3">
+                    <Text kind="body/semibold/sm">Context window per session</Text>
+                    <Text kind="body/semibold/sm">{formatTokens(windowN)} tokens</Text>
+                </Flex>
+                <Slider
+                    min={0}
+                    max={stops.length - 1}
+                    step={1}
+                    value={nearestStop(stops, windowN)}
+                    onValueChange={i => setWindowN(stops[i])}
+                    customSteps={stops.map((_, i) => i)}
+                    stepFormatFn={i => shortTokens(stops[i] ?? 0)}
+                    attributes={{ SliderInput: { 'aria-label': 'Context window per session' } }}
+                />
+            </Stack>
+            <Stack gap="1">
+                <Flex justify="between" gap="3">
+                    <Text kind="body/semibold/sm">Sessions at once</Text>
+                    <Text kind="body/semibold/sm">{sessionsN}</Text>
+                </Flex>
+                <Slider
+                    min={1}
+                    max={sessionsMax}
+                    step={1}
+                    value={sessionsN}
+                    onValueChange={setSessionsN}
+                    customSteps={[1, Math.round(sessionsMax / 2), sessionsMax]}
+                    attributes={{ SliderInput: { 'aria-label': 'Sessions at once' } }}
+                />
+            </Stack>
             <Flex align="end" gap="3" wrap="wrap">
-                <FormField slotLabel="Context window per session (tokens)">
-                    <TextInput value={windowText} onValueChange={setWindowText} />
-                </FormField>
-                <FormField slotLabel="Sessions at once">
-                    <TextInput value={sessions} onValueChange={setSessions} />
-                </FormField>
                 <Stack gap="1">
                     <Text kind="body/regular/sm" className="text-subtle-color">
                         Context held in memory

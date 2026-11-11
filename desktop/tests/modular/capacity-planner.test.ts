@@ -127,6 +127,33 @@ describe('launch text', () => {
     })
 })
 
+describe('expert offload', () => {
+    it('keeps llama.cpp experts on the CPU only when the plan says so', () => {
+        expect(llamaCppLaunchText('--temp 0.7', { ...plan, offloadExperts: true })).toBe(
+            '--temp 0.7 --ctx-size 131072 --parallel 4 --cpu-moe'
+        )
+        // Turning it off removes every spelling PAIR owns.
+        expect(llamaCppLaunchText('-cmoe --n-cpu-moe 12 -ncmoe=3 --temp 0.7', plan)).toBe(
+            '--temp 0.7 --ctx-size 131072 --parallel 4'
+        )
+    })
+
+    it('sends system memory and the offload choice with a plan request', async () => {
+        callProxy.mockResolvedValueOnce({ spec: {}, sessions: 3, canOffloadExperts: true })
+        const result = await planCapacity({
+            engine: 'llamacpp',
+            model: 'm',
+            windowTokens: 32768,
+            offloadExperts: true
+        })
+        const params = callProxy.mock.calls[0][2]
+        expect(params.systemRamBytes).toBeGreaterThan(0)
+        expect(params.offloadExperts).toBe(true)
+        expect(result.canOffloadExperts).toBe(true)
+        expect(result.ramFits).toBe(true)
+    })
+})
+
 describe('capacity planner bridge', () => {
     it('sends this node’s GPUs with the plan request', async () => {
         callProxy.mockResolvedValueOnce({
@@ -187,7 +214,8 @@ describe('capacity planner bridge', () => {
                 model: 'm',
                 windowTokens: 32768,
                 sessions: 4,
-                cacheType: 'f16'
+                cacheType: 'f16',
+                offloadExperts: false
             }
         })
     })

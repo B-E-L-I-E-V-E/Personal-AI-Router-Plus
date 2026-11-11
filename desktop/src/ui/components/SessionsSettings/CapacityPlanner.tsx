@@ -1,8 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { useEffect, useState } from 'react'
-import { Button, Flex, FormField, Stack, Text, TextInput } from '@nvidia/foundations-react-core'
+import { useEffect, useMemo, useState } from 'react'
+import {
+    Button,
+    Flex,
+    FormField,
+    Slider,
+    Stack,
+    Switch,
+    Text,
+    TextInput
+} from '@nvidia/foundations-react-core'
 import type {
     CapacityPlan,
     KvCacheType,
@@ -10,6 +19,14 @@ import type {
     SavedCapacityPlan
 } from '@/shared/types/sessions'
 import getErrorString from '@/shared/utils/get-error-string'
+import {
+    memoryUse,
+    MIN_WINDOW_TOKENS,
+    nearestStop,
+    sessionsSliderMax,
+    shortTokens,
+    windowStops
+} from './capacity-sliders'
 
 const GB = 1024 ** 3
 
@@ -19,12 +36,6 @@ function gb(bytes: number): string {
 
 function tokens(n: number): string {
     return n > 0 ? n.toLocaleString() : '—'
-}
-
-function wholeNumber(text: string): number | null {
-    const trimmed = text.trim()
-    if (!/^\d+$/.test(trimmed)) return null
-    return Number(trimmed)
 }
 
 function decimal(text: string): number | null {
@@ -44,6 +55,11 @@ const SOURCE_TEXT: Record<string, string> = {
     measured: 'Context cost measured from the loaded model.',
     manual: 'Using the values you entered.'
 }
+
+/** Window used when the model does not report its maximum. */
+const FALLBACK_WINDOW = 32768
+
+const DANGER_TEXT = { color: 'var(--text-color-feedback-danger)' }
 
 function Choice<T extends string>({
     options,
@@ -71,14 +87,57 @@ function Choice<T extends string>({
     )
 }
 
-function Line({ label, value }: { label: string; value: string }) {
+/** One labelled memory bar: what the settings need against what there is. */
+function MemoryBar({
+    label,
+    needed,
+    total,
+    over,
+    detail
+}: {
+    label: string
+    needed: number
+    total: number
+    over: boolean
+    detail: string
+}) {
+    const pct = total > 0 ? Math.min(100, (needed / total) * 100) : 0
     return (
-        <Flex justify="between" gap="3">
+        <Stack gap="1">
+            <Flex justify="between" gap="3">
+                <Text kind="body/semibold/sm">{label}</Text>
+                <Text kind="body/semibold/sm" style={over ? DANGER_TEXT : undefined}>
+                    {gb(needed)} of {gb(total)}
+                    {over ? ' — too much' : ''}
+                </Text>
+            </Flex>
+            <div
+                role="meter"
+                aria-label={label}
+                aria-valuemin={0}
+                aria-valuemax={total}
+                aria-valuenow={needed}
+                style={{
+                    height: 8,
+                    borderRadius: 4,
+                    overflow: 'hidden',
+                    background: 'color-mix(in srgb, currentColor 15%, transparent)'
+                }}
+            >
+                <div
+                    style={{
+                        width: `${pct}%`,
+                        height: '100%',
+                        background: over
+                            ? 'var(--text-color-feedback-danger)'
+                            : 'var(--color-brand)'
+                    }}
+                />
+            </div>
             <Text kind="body/regular/sm" className="text-subtle-color">
-                {label}
+                {detail}
             </Text>
-            <Text kind="body/regular/sm">{value}</Text>
-        </Flex>
+        </Stack>
     )
 }
 
@@ -95,50 +154,83 @@ export default function CapacityPlanner({
     onDone: (state: PlannerState | null, message?: string) => void
     onError: (message: string) => void
 }) {
-    const [windowText, setWindowText] = useState(saved ? String(saved.windowTokens) : '')
-    const [capText, setCapText] = useState('')
+    // null until the model's maximum is known; then the chosen window.
+    const [windowTokens, setWindowTokens] = useState<number | null>(saved?.windowTokens ?? null)
+    const [sessions, setSessions] = useState<number | null>(saved?.sessions ?? null)
+    const [sessionsTouched, setSessionsTouched] = useState(saved !== undefined)
     const [cacheType, setCacheType] = useState<KvCacheType>(saved?.cacheType ?? 'f16')
-    const [reserve, setReserve] = useState(String(saved?.reservePercent || 10))
+    const [reserve, setReserve] = useState(saved?.reservePercent || 10)
+    const [offload, setOffload] = useState(saved?.offloadExperts ?? false)
     const [weightsGb, setWeightsGb] = useState('')
     const [kbPerToken, setKbPerToken] = useState('')
     const [plan, setPlan] = useState<CapacityPlan | null>(null)
     const [busy, setBusy] = useState(false)
 
-    const windowN = windowText.trim() === '' ? 0 : wholeNumber(windowText)
-    const capN = capText.trim() === '' ? 0 : wholeNumber(capText)
-    const reserveN = decimal(reserve)
     const weightsN = weightsGb.trim() === '' ? 0 : decimal(weightsGb)
     const kbN = kbPerToken.trim() === '' ? 0 : decimal(kbPerToken)
-    const inputsValid =
-        windowN !== null &&
-        capN !== null &&
-        capN <= 256 &&
-        reserveN !== null &&
-        reserveN <= 90 &&
-        weightsN !== null &&
-        kbN !== null
+    const manualValid = weightsN !== null && kbN !== null
 
     useEffect(() => {
-        if (!inputsValid) return
+        if (!manualValid) return
         const timer = setTimeout(() => {
             window.pairApi.sessions
                 .plan({
                     engine,
                     model,
                     cacheType,
-                    reservePercent: reserveN || undefined,
-                    windowTokens: windowN || undefined,
-                    maxSessions: capN || undefined,
+                    reservePercent: reserve || undefined,
+                    windowTokens: windowTokens ?? undefined,
+                    offloadExperts: offload || undefined,
                     weightsBytes: weightsN ? Math.round(weightsN * GB) : undefined,
                     kvBytesPerToken: kbN ? Math.round(kbN * 1024) : undefined
                 })
-                .then(setPlan)
+                .then(result => {
+                    // A model that does not report its maximum needs a window
+                    // to be sized at all.
+                    if (windowTokens === null && /maximum context is unknown/.test(result.error)) {
+                        setWindowTokens(FALLBACK_WINDOW)
+                        return
+                    }
+                    setPlan(result)
+                    if (!result.error) {
+                        if (windowTokens === null) setWindowTokens(result.windowTokens)
+                        if (!sessionsTouched) setSessions(Math.max(1, result.sessions))
+                    }
+                })
                 .catch(err => onError(getErrorString(err) ?? 'Could not size this model'))
-        }, 300)
+        }, 200)
         return () => clearTimeout(timer)
-    }, [engine, model, windowN, capN, cacheType, reserveN, weightsN, kbN, inputsValid, onError])
+    }, [
+        engine,
+        model,
+        windowTokens,
+        cacheType,
+        reserve,
+        offload,
+        weightsN,
+        kbN,
+        manualValid,
+        sessionsTouched,
+        onError
+    ])
 
-    const usable = plan && !plan.error && plan.sessions > 0 && plan.windowTokens >= 2048
+    const stops = useMemo(
+        () => windowStops(plan?.spec.maxContextTokens ?? 0),
+        [plan?.spec.maxContextTokens]
+    )
+    const windowIndex = nearestStop(stops, windowTokens ?? stops[stops.length - 1])
+    const fit = plan && !plan.error ? plan.sessions : 0
+    const sessionsMax = sessionsSliderMax(fit)
+    const chosen = Math.min(sessions ?? 1, sessionsMax)
+    const use = plan && !plan.error ? memoryUse(plan, chosen) : null
+    const over = use ? use.gpuOver || use.ramOver : false
+    const usable =
+        plan !== null &&
+        !plan.error &&
+        use !== null &&
+        !over &&
+        chosen >= 1 &&
+        plan.windowTokens >= MIN_WINDOW_TOKENS
     const needsManual = plan?.error && /unknown/.test(plan.error)
 
     const save = (apply: boolean) => {
@@ -150,9 +242,10 @@ export default function CapacityPlanner({
                     engine,
                     model,
                     windowTokens: plan.windowTokens,
-                    sessions: plan.sessions,
+                    sessions: chosen,
                     cacheType: plan.cacheType,
-                    reservePercent: reserveN ?? 10
+                    reservePercent: reserve,
+                    offloadExperts: plan.offloadExperts
                 }
             })
             .then(async state => {
@@ -164,29 +257,105 @@ export default function CapacityPlanner({
             .finally(() => setBusy(false))
     }
 
+    const gpuLabel = use?.shared ? 'Memory (shared by GPU and system)' : 'GPU memory'
+
     return (
         <Stack gap="3" className="pair-paper p-3">
             <Text kind="body/regular/sm" className="text-subtle-color">
-                Each session gets this model’s full context window. PAIR runs as many sessions at
-                once as fit in the GPU memory left after the model and a safety reserve.
+                Each session gets the whole context window. Choose the window, then how many
+                sessions run at once; the bars show the memory that needs.
             </Text>
-            <Flex align="end" gap="3" wrap="wrap">
-                <FormField slotLabel="Context window per session (blank: model maximum)">
-                    <TextInput value={windowText} onValueChange={setWindowText} />
-                </FormField>
-                <FormField slotLabel="At most sessions (blank: as many as fit)">
-                    <TextInput value={capText} onValueChange={setCapText} />
-                </FormField>
-                <FormField slotLabel="Keep free (% of each GPU)">
-                    <TextInput value={reserve} onValueChange={setReserve} />
-                </FormField>
-            </Flex>
+
+            <Stack gap="1">
+                <Flex justify="between" gap="3">
+                    <Text kind="body/semibold/sm">Context window per session</Text>
+                    <Text kind="body/semibold/sm">{tokens(stops[windowIndex])} tokens</Text>
+                </Flex>
+                <Slider
+                    min={0}
+                    max={stops.length - 1}
+                    step={1}
+                    value={windowIndex}
+                    onValueChange={i => setWindowTokens(stops[i])}
+                    customSteps={stops.map((_, i) => i)}
+                    stepFormatFn={i => shortTokens(stops[i] ?? 0)}
+                    attributes={{ SliderInput: { 'aria-label': 'Context window per session' } }}
+                />
+            </Stack>
+
+            <Stack gap="1">
+                <Flex justify="between" gap="3">
+                    <Text kind="body/semibold/sm">Sessions at once</Text>
+                    <Text
+                        kind="body/semibold/sm"
+                        style={chosen > fit && plan && !plan.error ? DANGER_TEXT : undefined}
+                    >
+                        {chosen} {plan && !plan.error ? `(${fit} fit)` : ''}
+                    </Text>
+                </Flex>
+                <Slider
+                    min={1}
+                    max={sessionsMax}
+                    step={1}
+                    value={chosen}
+                    onValueChange={n => {
+                        setSessions(n)
+                        setSessionsTouched(true)
+                    }}
+                    customSteps={[1, ...(fit > 1 && fit < sessionsMax ? [fit] : []), sessionsMax]}
+                    attributes={{ SliderInput: { 'aria-label': 'Sessions at once' } }}
+                />
+            </Stack>
+
+            <Stack gap="1">
+                <Flex justify="between" gap="3">
+                    <Text kind="body/semibold/sm">Keep free</Text>
+                    <Text kind="body/semibold/sm">{reserve}% of each GPU</Text>
+                </Flex>
+                <Slider
+                    min={0}
+                    max={50}
+                    step={5}
+                    value={reserve}
+                    onValueChange={setReserve}
+                    customSteps={[0, 10, 25, 50]}
+                    stepFormatFn={v => `${v}%`}
+                    attributes={{ SliderInput: { 'aria-label': 'Keep free' } }}
+                />
+            </Stack>
+
             <Stack gap="1">
                 <Text kind="body/regular/sm" className="text-subtle-color">
                     Context cache precision (lower fits more sessions; slightly less accurate)
                 </Text>
                 <Choice options={CACHE_TYPES} value={cacheType} onChange={setCacheType} />
             </Stack>
+
+            {plan && (plan.canOffloadExperts || plan.offloadExperts) && (
+                <Flex align="center" gap="3">
+                    <Switch
+                        checked={offload}
+                        size="small"
+                        aria-label="Keep expert weights in system memory"
+                        onCheckedChange={checked => setOffload(checked === true)}
+                    />
+                    <Stack gap="0">
+                        <Text kind="body/semibold/sm">
+                            Keep expert weights in system memory ({gb(plan.expertBytes)})
+                        </Text>
+                        <Text kind="body/regular/sm" className="text-subtle-color">
+                            Frees GPU memory for more sessions; tokens come out slower because the
+                            experts run on the CPU.
+                        </Text>
+                    </Stack>
+                </Flex>
+            )}
+            {plan?.offloadNote && (
+                <Text kind="body/regular/sm" className="text-subtle-color">
+                    This is a mixture-of-experts model, but {plan.offloadNote}.
+                </Text>
+            )}
+
             {(needsManual || weightsGb || kbPerToken) && (
                 <Flex align="end" gap="3" wrap="wrap">
                     <FormField slotLabel="Model size (GB)">
@@ -197,9 +366,9 @@ export default function CapacityPlanner({
                     </FormField>
                 </Flex>
             )}
-            {!inputsValid && (
+            {!manualValid && (
                 <Text kind="body/regular/sm" className="text-subtle-color">
-                    Enter numbers only; at most 256 sessions and 90% kept free.
+                    Enter numbers only.
                 </Text>
             )}
 
@@ -208,28 +377,43 @@ export default function CapacityPlanner({
                     {plan.error}
                 </Text>
             )}
-            {plan && !plan.error && (
-                <Stack gap="1">
-                    <Text kind="body/semibold/md">
-                        {plan.sessions > 0
-                            ? `${plan.sessions} session${plan.sessions === 1 ? '' : 's'} of ${tokens(plan.windowTokens)} tokens`
-                            : 'Does not fit'}
+            {plan && !plan.error && use && (
+                <Stack gap="2">
+                    <Text kind="body/semibold/md" style={over ? DANGER_TEXT : undefined}>
+                        {over
+                            ? `${chosen} session${chosen === 1 ? '' : 's'} of ${tokens(plan.windowTokens)} tokens do not fit`
+                            : `${chosen} session${chosen === 1 ? '' : 's'} of ${tokens(plan.windowTokens)} tokens`}
                     </Text>
-                    <Line label="GPU memory" value={gb(plan.totalBytes)} />
-                    <Line label="Kept free" value={gb(plan.reserveBytes)} />
-                    <Line label="Model" value={gb(plan.weightsBytes)} />
-                    {plan.otherModelsBytes > 0 && (
-                        <Line label="Other models" value={gb(plan.otherModelsBytes)} />
+                    <MemoryBar
+                        label={gpuLabel}
+                        needed={use.gpuNeeded}
+                        total={use.gpuTotal}
+                        over={use.gpuOver}
+                        detail={[
+                            `model ${gb(plan.gpuWeightsBytes)}`,
+                            plan.otherModelsBytes > 0
+                                ? `other models ${gb(plan.otherModelsBytes)}`
+                                : '',
+                            `${chosen} × ${gb(plan.bytesPerSession)} context (${(plan.bytesPerToken / 1024).toFixed(0)} KB per token)`,
+                            `kept free ${gb(plan.reserveBytes)}`
+                        ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                    />
+                    {!use.shared && use.ramTotal > 0 && (
+                        <MemoryBar
+                            label="System memory"
+                            needed={use.ramNeeded}
+                            total={use.ramTotal}
+                            over={use.ramOver}
+                            detail={[
+                                plan.offloadExperts
+                                    ? `expert weights ${gb(plan.ramUsedBytes)}`
+                                    : 'no model weights',
+                                `kept free for the system ${gb(plan.ramReserveBytes)}`
+                            ].join(' · ')}
+                        />
                     )}
-                    <Line label="Left for context" value={gb(plan.contextBytes)} />
-                    <Line
-                        label="Each session"
-                        value={`${gb(plan.bytesPerSession)} (${(plan.bytesPerToken / 1024).toFixed(0)} KB per token)`}
-                    />
-                    <Line
-                        label="Planned use"
-                        value={`${gb(plan.usedBytes)} of ${gb(plan.totalBytes)}`}
-                    />
                     <Text kind="body/regular/sm" className="text-subtle-color">
                         {SOURCE_TEXT[plan.spec.source] ?? ''}
                         {plan.spec.maxContextTokens > 0

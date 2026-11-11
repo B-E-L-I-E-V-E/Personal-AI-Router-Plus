@@ -69,6 +69,10 @@ export interface ModelSpec {
     weightsBytes: number
     maxContextTokens: number
     kvBytesPerToken: number
+    /** Routed experts in a mixture-of-experts model (0 for a dense model). */
+    expertCount: number
+    /** Size of the expert weights, which llama.cpp can keep in system memory. */
+    expertBytes: number
     notes: string[]
 }
 
@@ -85,6 +89,8 @@ export interface CapacityPlanRequest {
     windowTokens?: number
     /** At most this many sessions; omitted means as many as fit. */
     maxSessions?: number
+    /** Keep a mixture-of-experts model's expert weights in system memory. */
+    offloadExperts?: boolean
     cacheType?: KvCacheType
     reservePercent?: number
     otherModelsBytes?: number
@@ -97,6 +103,8 @@ export interface CapacityPlan {
     totalBytes: number
     reserveBytes: number
     weightsBytes: number
+    /** The weights on the GPU: all, or all but the experts when offloaded. */
+    gpuWeightsBytes: number
     otherModelsBytes: number
     contextBytes: number
     bytesPerToken: number
@@ -107,6 +115,18 @@ export interface CapacityPlan {
     poolTokens: number
     usedBytes: number
     fits: boolean
+    /** Whether this model, engine and node can keep experts in system memory. */
+    canOffloadExperts: boolean
+    offloadExperts: boolean
+    expertBytes: number
+    /** Why expert offload is unavailable, for a mixture-of-experts model. */
+    offloadNote: string
+    /** The GPU shares system memory (Apple silicon). */
+    unified: boolean
+    ramTotalBytes: number
+    ramReserveBytes: number
+    ramUsedBytes: number
+    ramFits: boolean
     warnings: string[]
     /** The planner's refusal, when it could not size the model. */
     error: string
@@ -119,6 +139,7 @@ export interface SavedCapacityPlan {
     sessions: number
     cacheType: KvCacheType
     reservePercent: number
+    offloadExperts: boolean
     applied: boolean
     appliedAt: number
     savedAt: number

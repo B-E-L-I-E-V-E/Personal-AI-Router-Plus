@@ -753,7 +753,17 @@ reading the model:
   gets the whole `windowTokens` (default and ceiling: the model's maximum) and
   sessions = budget ÷ one session's cost, at most `maxSessions` (default and
   ceiling 256). The cap never shrinks the window. With the engine not running,
-  `spec.notes` says so.
+  `spec.notes` says so. A model that does not fit still reports its
+  per-session cost, so the desktop's calculator can show what it would need.
+- **Expert offload**: for a mixture-of-experts model (`expert_count` > 1),
+  `spec.expertBytes` is the exact size of the routed-expert tensors
+  (`blk.N.ffn_{up,down,gate,gate_up}_exps`, shared experts excluded), summed
+  from the GGUF tensor table (every shard) or Ollama's `/api/show` tensor
+  list. With `offloadExperts` and `systemRamBytes`, those bytes count against
+  system memory (reserve: a quarter, at least 4 GiB) instead of GPU memory.
+  `canOffloadExperts` is false, with `offloadNote` saying why, on unified
+  memory, on Ollama, or when the size is unknown; asking anyway is an error.
+  Saved plans carry `offloadExperts`, applied to llama.cpp as `--cpu-moe`.
 - A model that cannot be sized returns a result with `error` and whatever
   `spec` was learned, not a JSON-RPC error.
 

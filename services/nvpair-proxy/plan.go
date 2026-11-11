@@ -26,10 +26,14 @@ import (
 // reserve is at least a quarter of the total there.
 
 const (
-	gib                    = int64(1) << 30
-	defaultReservePercent  = 10
-	minReservePerGPU       = gib
-	unifiedMemoryGPUShare  = 0.75
+	gib                   = int64(1) << 30
+	defaultReservePercent = 10
+	minReservePerGPU      = gib
+	unifiedMemoryGPUShare = 0.75
+	// System memory kept free for the OS and other programs when expert
+	// weights move there: a quarter of it, at least 4 GiB.
+	ramReserveShare        = 0.25
+	minRAMReserve          = 4 * gib
 	maxPlannedSessions     = 256
 	minPlannedWindowTokens = 2048
 )
@@ -66,6 +70,12 @@ type planRequest struct {
 	// this one.
 	OtherModelsBytes int64 `json:"otherModelsBytes,omitempty"`
 
+	// SystemRAMBytes is this node's system memory, for expert offload.
+	SystemRAMBytes int64 `json:"systemRamBytes,omitempty"`
+	// OffloadExperts keeps a mixture-of-experts model's expert weights in
+	// system memory (llama.cpp --cpu-moe), freeing GPU memory for context.
+	OffloadExperts bool `json:"offloadExperts,omitempty"`
+
 	// Manual values for what the engine cannot describe.
 	WeightsBytes    int64 `json:"weightsBytes,omitempty"`
 	KVBytesPerToken int64 `json:"kvBytesPerToken,omitempty"`
@@ -74,9 +84,26 @@ type planRequest struct {
 type planResult struct {
 	Spec modelSpec `json:"spec"`
 
-	TotalBytes      int64 `json:"totalBytes"`
-	ReserveBytes    int64 `json:"reserveBytes"`
-	WeightsBytes    int64 `json:"weightsBytes"`
+	TotalBytes   int64 `json:"totalBytes"`
+	ReserveBytes int64 `json:"reserveBytes"`
+	WeightsBytes int64 `json:"weightsBytes"`
+	// GPUWeightsBytes is the part of the weights on the GPU: all of them,
+	// or all but the experts when they are offloaded.
+	GPUWeightsBytes int64 `json:"gpuWeightsBytes"`
+
+	// Expert offload. CanOffloadExperts says whether this model, engine and
+	// node can do it at all; RAM* is system memory, Unified when it is the
+	// same memory as the GPU's.
+	CanOffloadExperts bool   `json:"canOffloadExperts"`
+	OffloadExperts    bool   `json:"offloadExperts"`
+	ExpertBytes       int64  `json:"expertBytes"`
+	OffloadNote       string `json:"offloadNote,omitempty"`
+	Unified           bool   `json:"unified"`
+	RAMTotalBytes     int64  `json:"ramTotalBytes"`
+	RAMReserveBytes   int64  `json:"ramReserveBytes"`
+	RAMUsedBytes      int64  `json:"ramUsedBytes"`
+	RAMFits           bool   `json:"ramFits"`
+
 	OtherBytes      int64 `json:"otherModelsBytes"`
 	ContextBytes    int64 `json:"contextBytes"`
 	BytesPerToken   int64 `json:"bytesPerToken"`
@@ -160,6 +187,42 @@ func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 	if req.WeightsBytes > 0 {
 		res.WeightsBytes = req.WeightsBytes
 	}
+	res.Unified = req.Unified
+	res.ExpertBytes = spec.ExpertBytes
+	switch {
+	case spec.ExpertCount == 0:
+	case spec.ExpertBytes <= 0 || spec.ExpertBytes >= res.WeightsBytes:
+		res.OffloadNote = "the size of this model's expert weights is unknown"
+	case req.Unified:
+		res.OffloadNote = "the GPU shares system memory here, so moving expert weights frees nothing"
+	case strings.EqualFold(req.Engine, "ollama"):
+		res.OffloadNote = "Ollama cannot keep expert weights in system memory; use llama.cpp or LM Studio for that"
+	case req.SystemRAMBytes <= 0:
+		res.OffloadNote = "this node's system memory is unknown"
+	default:
+		res.CanOffloadExperts = true
+	}
+	if req.OffloadExperts && !res.CanOffloadExperts {
+		reason := res.OffloadNote
+		if reason == "" {
+			reason = "this model has no expert weights"
+		}
+		return res, errors.New("cannot keep expert weights in system memory: " + reason)
+	}
+	res.OffloadExperts = req.OffloadExperts
+	res.GPUWeightsBytes = res.WeightsBytes
+	if res.OffloadExperts {
+		res.GPUWeightsBytes -= res.ExpertBytes
+		res.RAMUsedBytes = res.ExpertBytes
+	}
+	res.RAMTotalBytes = req.SystemRAMBytes
+	if res.RAMTotalBytes > 0 && !req.Unified {
+		res.RAMReserveBytes = int64(float64(res.RAMTotalBytes) * ramReserveShare)
+		if res.RAMReserveBytes < minRAMReserve {
+			res.RAMReserveBytes = minRAMReserve
+		}
+	}
+	res.RAMFits = !res.OffloadExperts || res.RAMUsedBytes+res.RAMReserveBytes <= res.RAMTotalBytes
 	perF16 := spec.KVBytesPerToken
 	if req.KVBytesPerToken > 0 {
 		perF16 = req.KVBytesPerToken
@@ -182,11 +245,12 @@ func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 	}
 	res.BytesPerToken = perToken
 	res.OtherBytes = req.OtherModelsBytes
-	res.ContextBytes = res.TotalBytes - res.ReserveBytes - res.WeightsBytes - res.OtherBytes
+	res.ContextBytes = res.TotalBytes - res.ReserveBytes - res.GPUWeightsBytes - res.OtherBytes
 	if res.ContextBytes <= 0 {
+		// Keep going: the per-session cost still tells the user what a
+		// session would need.
 		res.Warnings = append(res.Warnings, "the model does not fit in this node's GPU memory with the reserve kept free")
 		res.ContextBytes = 0
-		return res, nil
 	}
 
 	maxWindow := spec.MaxContextTokens
@@ -211,13 +275,19 @@ func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 		n = limit
 	}
 	res.Sessions = int(n)
-	if n == 0 {
+	if n == 0 && res.ContextBytes > 0 {
 		res.Warnings = append(res.Warnings, "not even one session of this window fits; choose a smaller window or a smaller cache type")
 	}
 	res.BytesPerSession = sessionBytes(spec, perToken, factor, res.WindowTokens)
 	res.PoolTokens = res.WindowTokens * int64(res.Sessions)
-	res.UsedBytes = res.WeightsBytes + res.OtherBytes + res.BytesPerSession*int64(res.Sessions)
-	res.Fits = res.Sessions > 0 && res.WindowTokens > 0 && res.UsedBytes+res.ReserveBytes <= res.TotalBytes
+	res.UsedBytes = res.GPUWeightsBytes + res.OtherBytes + res.BytesPerSession*int64(res.Sessions)
+	res.Fits = res.Sessions > 0 && res.WindowTokens > 0 && res.UsedBytes+res.ReserveBytes <= res.TotalBytes && res.RAMFits
+	if !res.RAMFits {
+		res.Warnings = append(res.Warnings, "the expert weights do not fit in system memory with the reserve kept free")
+	}
+	if res.OffloadExperts {
+		res.Warnings = append(res.Warnings, "expert weights in system memory run on the CPU, so each token is slower")
+	}
 	if res.Spec.Source == "measured" && cache != "f16" {
 		res.Warnings = append(res.Warnings, "the cost was measured at the engine's current cache type; re-measure after applying "+cache)
 	}

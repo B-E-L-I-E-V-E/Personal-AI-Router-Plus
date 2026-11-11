@@ -31,6 +31,9 @@ type savedPlan struct {
 	Sessions       int     `json:"sessions"`
 	CacheType      string  `json:"cacheType"`
 	ReservePercent float64 `json:"reservePercent,omitempty"`
+	// OffloadExperts keeps a mixture-of-experts model's expert weights in
+	// system memory (llama.cpp --cpu-moe).
+	OffloadExperts bool `json:"offloadExperts,omitempty"`
 	// Applied is set once the engine runs with this plan; changing the plan
 	// clears it.
 	Applied   bool  `json:"applied"`
@@ -115,6 +118,9 @@ func (p savedPlan) validate() error {
 	if _, ok := cacheTypeFactor[p.CacheType]; !ok {
 		return errors.New("cacheType must be f16, q8_0 or q4_0")
 	}
+	if p.OffloadExperts && p.Engine == "ollama" {
+		return errors.New("Ollama cannot keep expert weights in system memory")
+	}
 	return nil
 }
 
@@ -158,7 +164,7 @@ func (s *plannerStore) put(plan savedPlan) error {
 	for _, p := range s.state.Plans {
 		same := p.Engine == plan.Engine && p.Model == plan.Model
 		if same || (plan.Engine == "ollama" && p.Engine == "ollama") {
-			if same && p.WindowTokens == plan.WindowTokens && p.Sessions == plan.Sessions && p.CacheType == plan.CacheType {
+			if same && p.sameSettings(plan.WindowTokens, plan.Sessions, plan.CacheType, plan.OffloadExperts) {
 				plan.Applied, plan.AppliedAt = p.Applied, p.AppliedAt
 			}
 			continue
@@ -191,12 +197,16 @@ func (s *plannerStore) setAutoReload(on bool) error {
 
 // markApplied records that the engine now runs plan's numbers. A plan changed
 // since the apply started stays pending.
-func (s *plannerStore) markApplied(engine, model string, window int64, sessions int, cache string) (savedPlan, bool, error) {
+func (p savedPlan) sameSettings(window int64, sessions int, cache string, offload bool) bool {
+	return p.WindowTokens == window && p.Sessions == sessions && p.CacheType == cache && p.OffloadExperts == offload
+}
+
+func (s *plannerStore) markApplied(engine, model string, window int64, sessions int, cache string, offload bool) (savedPlan, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, p := range s.state.Plans {
 		if p.Engine == engine && p.Model == model {
-			if p.WindowTokens != window || p.Sessions != sessions || p.CacheType != cache {
+			if !p.sameSettings(window, sessions, cache, offload) {
 				return p, false, nil
 			}
 			s.state.Plans[i].Applied = true
@@ -314,7 +324,7 @@ func (p *Proxy) setPlanner(ctx context.Context, raw json.RawMessage) (map[string
 		if cache == "" {
 			cache = "f16"
 		}
-		plan, ok, err := p.planner.markApplied(a.Engine, a.Model, a.WindowTokens, a.Sessions, cache)
+		plan, ok, err := p.planner.markApplied(a.Engine, a.Model, a.WindowTokens, a.Sessions, cache, a.OffloadExperts)
 		if err != nil {
 			return nil, err
 		}

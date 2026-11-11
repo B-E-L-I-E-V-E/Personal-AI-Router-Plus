@@ -118,26 +118,47 @@ Instead of entering a window and a session count yourself, let PAIR work out
 how many sessions fit in this node's GPU memory. In **Settings → Sessions**,
 select **Plan from GPU memory** on a model:
 
-1. Each session gets the model's full context window. Enter a smaller window
-   to fit more sessions, and **At most sessions** to cap how many run at once.
-   A cap never shrinks a session's window: when memory holds only one
-   full-window session, the plan is one session.
-2. Optionally pick a smaller **context cache precision**. 8-bit holds about
+1. Drag **Context window per session**. It stops at 2K, 4K, 8K and so on up
+   to the model's maximum, which is the last stop. Every session gets this
+   whole window.
+2. Drag **Sessions at once**. The label shows how many fit; the slider goes
+   further so you can see what more would need.
+3. Optionally pick a smaller **context cache precision**. 8-bit holds about
    twice as many tokens as full precision, 4-bit about three and a half times,
    at a small cost in accuracy.
-3. **Keep free** sets the safety reserve, 10% of each GPU by default (at least
+4. **Keep free** sets the safety reserve, 10% of each GPU by default (at least
    1 GB each). On Apple silicon, where the GPU shares system memory, PAIR always
    keeps at least a quarter of it free for macOS.
 
-PAIR shows the arithmetic:
+As you drag, the memory bars show what the settings need:
 
-| Line | Meaning |
+| Bar | What it adds up |
 | --- | --- |
-| GPU memory | All of this node's GPUs together |
-| Kept free | The safety reserve |
-| Model | The model's weights |
-| Left for context | What remains for sessions |
-| Each session | Window × the model's context cost per token |
+| GPU memory | The model's weights on the GPU, sessions × one session's context, and the reserve |
+| System memory | Expert weights kept there (see below), and a quarter of it (at least 4 GB) kept free for the system |
+
+A bar turns red when the settings need more than the node has, and the plan
+cannot be saved until it fits again. On Apple silicon the GPU and the system
+share one memory, shown as a single bar.
+
+#### Mixture-of-Experts Models
+
+Mixture-of-experts models (Qwen3 30B-A3B, gpt-oss, Mixtral and others) keep most
+of their weights in experts, of which only a few run per token. On a node with
+its own GPU memory, **Keep expert weights in system memory** moves them to
+system memory, so the GPU holds only attention and the context and fits more
+sessions. Tokens come out slower, since the experts then run on the CPU.
+
+PAIR reads the exact size of the expert weights from the model's tensor table.
+The switch appears only where it helps:
+
+| Engine | Expert offload |
+| --- | --- |
+| llama.cpp | Applied with `--cpu-moe` |
+| LM Studio | Planned; turn on keeping expert weights on the CPU when you load the model |
+| Ollama | Not available; Ollama has no setting for it |
+
+On Apple silicon it is never offered: the GPU already uses system memory.
 
 For example, two 32 GB GPUs with an 11 GB model leave about 46 GB for context.
 A model that needs 192 KB per token fits 1 session of its full 128K window

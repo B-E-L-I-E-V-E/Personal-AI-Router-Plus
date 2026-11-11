@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { randomUUID } from 'node:crypto'
+import { totalmem } from 'node:os'
 import type {
     ApplyPlanResult,
     CapacityPlan,
@@ -68,6 +69,8 @@ function parseSpec(value: JsonValue | undefined): ModelSpec {
         weightsBytes: numberValue(obj?.weightsBytes),
         maxContextTokens: numberValue(obj?.maxContextTokens),
         kvBytesPerToken: numberValue(obj?.kvBytesPerToken),
+        expertCount: numberValue(obj?.expertCount),
+        expertBytes: numberValue(obj?.expertBytes),
         notes: stringList(obj?.notes)
     }
 }
@@ -79,6 +82,7 @@ function parsePlan(value: JsonValue | undefined, error = ''): CapacityPlan {
         totalBytes: numberValue(obj?.totalBytes),
         reserveBytes: numberValue(obj?.reserveBytes),
         weightsBytes: numberValue(obj?.weightsBytes),
+        gpuWeightsBytes: numberValue(obj?.gpuWeightsBytes),
         otherModelsBytes: numberValue(obj?.otherModelsBytes),
         contextBytes: numberValue(obj?.contextBytes),
         bytesPerToken: numberValue(obj?.bytesPerToken),
@@ -89,6 +93,15 @@ function parsePlan(value: JsonValue | undefined, error = ''): CapacityPlan {
         poolTokens: numberValue(obj?.poolTokens),
         usedBytes: numberValue(obj?.usedBytes),
         fits: obj?.fits === true,
+        canOffloadExperts: obj?.canOffloadExperts === true,
+        offloadExperts: obj?.offloadExperts === true,
+        expertBytes: numberValue(obj?.expertBytes),
+        offloadNote: stringValue(obj?.offloadNote),
+        unified: obj?.unified === true,
+        ramTotalBytes: numberValue(obj?.ramTotalBytes),
+        ramReserveBytes: numberValue(obj?.ramReserveBytes),
+        ramUsedBytes: numberValue(obj?.ramUsedBytes),
+        ramFits: obj?.ramFits !== false,
         warnings: stringList(obj?.warnings),
         error: error || stringValue(obj?.error)
     }
@@ -106,6 +119,7 @@ function parseSavedPlan(value: JsonValue): SavedCapacityPlan | null {
         sessions: numberValue(obj.sessions),
         cacheType: cacheTypeValue(obj.cacheType),
         reservePercent: numberValue(obj.reservePercent),
+        offloadExperts: obj.offloadExperts === true,
         applied: obj.applied === true,
         appliedAt: numberValue(obj.appliedAt),
         savedAt: numberValue(obj.savedAt)
@@ -143,7 +157,8 @@ export async function planCapacity(request?: CapacityPlanRequest): Promise<Capac
         engine: request.engine,
         model: request.model,
         gpus: gpus.map(gpu => ({ name: gpu.name, vramBytes: gpu.vramBytes })),
-        unified: isUnifiedMemory(gpus)
+        unified: isUnifiedMemory(gpus),
+        systemRamBytes: totalmem()
     }
     for (const key of [
         'windowTokens',
@@ -157,6 +172,7 @@ export async function planCapacity(request?: CapacityPlanRequest): Promise<Capac
         if (typeof v === 'number' && v > 0) params[key] = v
     }
     if (request.cacheType) params.cacheType = request.cacheType
+    if (request.offloadExperts) params.offloadExperts = true
     try {
         return parsePlan(await callSessionProxy('capacity/plan', params))
     } catch (err) {
@@ -233,6 +249,8 @@ interface PlanNumbers {
     windowTokens: number
     sessions: number
     cacheType: KvCacheType
+    /** Keep expert weights in system memory (llama.cpp only). */
+    offloadExperts?: boolean
 }
 
 /**
@@ -266,8 +284,11 @@ const LLAMA_VALUE_OPTIONS = [
     ['-c', '--ctx-size'],
     ['-np', '--parallel'],
     ['-ctk', '--cache-type-k'],
-    ['-ctv', '--cache-type-v']
+    ['-ctv', '--cache-type-v'],
+    ['-ncmoe', '--n-cpu-moe']
 ]
+// Owned flags without a value: where the expert weights live.
+const LLAMA_FLAG_OPTIONS = ['-cmoe', '--cpu-moe']
 
 /**
  * llama.cpp splits --ctx-size evenly across --parallel slots, so the total is
@@ -280,6 +301,7 @@ export function llamaCppLaunchText(text: string, plan: PlanNumbers): string {
     for (let i = 0; i < args.length; i++) {
         const token = args[i]
         const name = token.includes('=') ? token.slice(0, token.indexOf('=')) : token
+        if (LLAMA_FLAG_OPTIONS.includes(token)) continue
         if (owned.includes(name)) {
             if (!token.includes('=')) i++ // skip the value
             continue
@@ -298,6 +320,8 @@ export function llamaCppLaunchText(text: string, plan: PlanNumbers): string {
             added.push('--flash-attn', 'on')
         }
     }
+    // Experts on the CPU; attention and the context cache stay on the GPU.
+    if (plan.offloadExperts) added.push('--cpu-moe')
     return [...env, ...kept, ...added].join(' ')
 }
 
@@ -356,7 +380,8 @@ async function applyPlanNow(engine: string, model: string): Promise<ApplyPlanRes
     const numbers = {
         windowTokens: plan.windowTokens,
         sessions: plan.sessions,
-        cacheType: plan.cacheType
+        cacheType: plan.cacheType,
+        offloadExperts: plan.offloadExperts
     }
     const markApplied = async () => {
         await callSessionProxy('capacity/planner-set', {
@@ -365,7 +390,8 @@ async function applyPlanNow(engine: string, model: string): Promise<ApplyPlanRes
                 model,
                 windowTokens: plan.windowTokens,
                 sessions: plan.sessions,
-                cacheType: plan.cacheType
+                cacheType: plan.cacheType,
+                offloadExperts: plan.offloadExperts
             }
         })
     }
@@ -381,7 +407,7 @@ async function applyPlanNow(engine: string, model: string): Promise<ApplyPlanRes
         })
         return {
             applied: false,
-            message: `PAIR now limits ${model} to ${plan.sessions} sessions of ${plan.windowTokens} tokens. LM Studio sets context when it loads a model: load it with a ${plan.windowTokens}-token context and ${plan.sessions} parallel slots to match.`
+            message: `PAIR now limits ${model} to ${plan.sessions} sessions of ${plan.windowTokens} tokens. LM Studio sets context when it loads a model: load it with a ${plan.windowTokens}-token context and ${plan.sessions} parallel slots${plan.offloadExperts ? ', and turn on keeping expert weights on the CPU,' : ''} to match.`
         }
     }
     if (engine !== 'ollama' && engine !== 'llamacpp')
@@ -431,12 +457,13 @@ async function applyPlanNow(engine: string, model: string): Promise<ApplyPlanRes
             model,
             windowTokens: plan.windowTokens,
             sessions: plan.sessions,
-            cacheType: plan.cacheType
+            cacheType: plan.cacheType,
+            offloadExperts: plan.offloadExperts
         }
     })
     return {
         applied: true,
-        message: `${engine} restarted with ${plan.sessions} sessions of ${plan.windowTokens} tokens`
+        message: `${engine} restarted with ${plan.sessions} sessions of ${plan.windowTokens} tokens${plan.offloadExperts ? ', expert weights in system memory' : ''}`
     }
 }
 

@@ -15,14 +15,26 @@ import (
 
 // The capacity planner reads a model's architecture from its GGUF header: the
 // layer count, key/value heads and head sizes decide how much memory each
-// token of context costs. Only the metadata section is read; tensors are not.
+// token of context costs. The tensor table that follows is read too, for the
+// size of each tensor (mixture-of-experts weights can live in system memory);
+// tensor data is never read.
 
 const (
 	ggufMaxKeys       = 1 << 16
 	ggufMaxStringLen  = 1 << 20
 	ggufMaxKeptArray  = 4096
 	ggufMaxArrayItems = 1 << 24
+	ggufMaxTensors    = 1 << 20
+	ggufMaxDims       = 8
 )
+
+// ggufTensor is one entry of the tensor table: its name, ggml type and
+// element count.
+type ggufTensor struct {
+	Name     string
+	Type     uint32
+	Elements uint64
+}
 
 // ggufValue is one decoded metadata value: an integer, float, bool, string,
 // or a slice of integers. Arrays of other kinds, and long arrays, are skipped
@@ -190,21 +202,27 @@ func (g *ggufReader) value(t uint32) ggufValue {
 
 // readGGUFMetadata returns the metadata keys of a GGUF file (version 2 or 3).
 func readGGUFMetadata(r io.Reader) (map[string]ggufValue, error) {
+	meta, _, err := readGGUF(r, false)
+	return meta, err
+}
+
+// readGGUF reads the metadata keys and, when tensors is set, the tensor table.
+func readGGUF(r io.Reader, tensors bool) (map[string]ggufValue, []ggufTensor, error) {
 	g := &ggufReader{r: bufio.NewReaderSize(r, 1<<16)}
 	if magic := g.read(4); g.err == nil && string(magic) != "GGUF" {
-		return nil, errors.New("not a GGUF file")
+		return nil, nil, errors.New("not a GGUF file")
 	}
 	version := g.u32()
 	if g.err == nil && (version < 2 || version > 3) {
-		return nil, fmt.Errorf("unsupported GGUF version %d", version)
+		return nil, nil, fmt.Errorf("unsupported GGUF version %d", version)
 	}
-	_ = g.u64() // tensor count
+	tensorCount := g.u64()
 	count := g.u64()
 	if g.err != nil {
-		return nil, g.err
+		return nil, nil, g.err
 	}
 	if count > ggufMaxKeys {
-		return nil, fmt.Errorf("gguf header declares %d keys", count)
+		return nil, nil, fmt.Errorf("gguf header declares %d keys", count)
 	}
 	meta := make(map[string]ggufValue, count)
 	for i := uint64(0); i < count; i++ {
@@ -212,18 +230,46 @@ func readGGUFMetadata(r io.Reader) (map[string]ggufValue, error) {
 		t := g.u32()
 		v := g.value(t)
 		if g.err != nil {
-			return nil, fmt.Errorf("gguf metadata: %w", g.err)
+			return nil, nil, fmt.Errorf("gguf metadata: %w", g.err)
 		}
 		meta[key] = v
 	}
-	return meta, nil
+	if !tensors {
+		return meta, nil, nil
+	}
+	if tensorCount > ggufMaxTensors {
+		return nil, nil, fmt.Errorf("gguf header declares %d tensors", tensorCount)
+	}
+	out := make([]ggufTensor, 0, tensorCount)
+	for i := uint64(0); i < tensorCount; i++ {
+		name := g.str()
+		dims := g.u32()
+		if g.err == nil && dims > ggufMaxDims {
+			return nil, nil, fmt.Errorf("gguf tensor %q has %d dimensions", name, dims)
+		}
+		elements := uint64(1)
+		for d := uint32(0); d < dims; d++ {
+			n := g.u64()
+			if n != 0 && elements > math.MaxUint64/n {
+				return nil, nil, fmt.Errorf("gguf tensor %q is too large", name)
+			}
+			elements *= n
+		}
+		typ := g.u32()
+		_ = g.u64() // data offset
+		if g.err != nil {
+			return nil, nil, fmt.Errorf("gguf tensors: %w", g.err)
+		}
+		out = append(out, ggufTensor{Name: name, Type: typ, Elements: elements})
+	}
+	return meta, out, nil
 }
 
-func readGGUFFile(path string) (map[string]ggufValue, error) {
+func readGGUFFile(path string) (map[string]ggufValue, []ggufTensor, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer f.Close()
-	return readGGUFMetadata(f)
+	return readGGUF(f, true)
 }
