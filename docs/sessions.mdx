@@ -100,6 +100,36 @@ whole window, and the node's memory decides how many sessions run at once. Each
 model has its own **context window per session** and **sessions at once**, set
 from GPU memory as described below.
 
+### Messages and the Reply Share One Window
+
+A session's window holds everything the model reads and writes: your messages,
+the conversation so far, and the reply, a thinking model's reasoning included.
+There is no separate limit per message; a message may use whatever the window
+has left after the conversation and room for the reply. With a 40,960-token
+window and 8,192 kept for the reply, a session's messages and history can use
+32,768 tokens.
+
+Engines handle a conversation that does not fit badly. Ollama accepts it and
+keeps only the last half of the window, answering as if nothing were lost; a
+reply with no length of its own keeps going past the window by forgetting the
+start of the conversation. So for session requests on a node with a reply
+budget, PAIR:
+
+- sets `"truncate": false` on Ollama's own endpoints (`/api/chat`,
+  `/api/generate`), so Ollama refuses a conversation longer than the window
+  with its exact token count instead of cutting it. Ollama's OpenAI-compatible
+  endpoints have no such switch;
+- caps a reply that sets no length of its own at the reply budget
+  (`options.num_predict` on Ollama's endpoints, `max_tokens` on
+  OpenAI-compatible ones). Values the client set are kept;
+- refuses, with `400`, a next turn once the conversation PAIR last measured
+  has used the messages' share, naming the window, the reply budget and what
+  is left, so the sender can shorten the conversation;
+- reports `X-PAIR-Context-Reply-Tokens` and `X-PAIR-Context-Message-Limit`
+  with `X-PAIR-Context-Session-Limit` on every reply it serves.
+
+Requests outside a session are forwarded exactly as sent.
+
 Where you set nothing, PAIR fills in what the local engine reports: Ollama's
 per-request window, LM Studio's context length and parallel count, llama.cpp's
 per-slot context and slot count. A value the engine does not report stays
@@ -124,7 +154,11 @@ Each model row then shows its plan and whether it is applied. In the dialog:
 3. Optionally pick a smaller **context cache precision**. 8-bit holds about
    twice as many tokens as full precision, 4-bit about three and a half times,
    at a small cost in accuracy.
-4. **Keep free** sets the safety reserve, 10% of each GPU by default (at least
+4. **Room for the reply** sets how much of each session's window is kept for
+   the model's reply: 8,192 tokens by default, at most half the window. The
+   table under it shows how much text the messages and history can hold.
+   Changing only this takes effect at once, without restarting the engine.
+5. **Keep free** sets the safety reserve, 10% of each GPU by default (at least
    1 GB each). On Apple silicon, where the GPU shares system memory, PAIR always
    keeps at least a quarter of it free for macOS.
 
@@ -193,8 +227,9 @@ it ends, expires, or moves.
 - **Every slot held.** A new session's request goes to another node with the
   model. With no other node, it waits in line for a slot (60 seconds by default,
   up to 5 minutes), then gets `503` with `Retry-After`.
-- **Session too large.** When a session's measured context has reached its share
-  and the next request is not shorter, it gets `400`, naming both numbers.
+- **Session too large.** When a session's measured conversation has reached its
+  limit (the window, less the reply budget when one is set) and the next request
+  is not shorter, it gets `400`, naming the numbers.
   Shorten or summarize the conversation and send it again; a shorter request is
   accepted and measured afresh.
 

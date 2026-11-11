@@ -161,6 +161,9 @@ function CapacitySummaryRow({
                 <Text kind="body/regular/sm">
                     Now: {row.maxSessions} session{row.maxSessions === 1 ? '' : 's'} of{' '}
                     {formatTokens(perSession)} tokens
+                    {row.messageTokens > 0
+                        ? ` · ${formatTokens(row.messageTokens)} for messages, ${formatTokens(row.replyTokens)} for replies`
+                        : ''}
                     {row.configured ? '' : ' (reported by the engine)'}
                 </Text>
             )}

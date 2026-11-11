@@ -103,13 +103,16 @@ function parseCapacity(value: JsonValue | undefined): ModelCapacity[] {
             configured: configured
                 ? {
                       contextTokens: numberValue(configured.contextTokens),
-                      maxSessions: numberValue(configured.maxSessions)
+                      maxSessions: numberValue(configured.maxSessions),
+                      replyTokens: numberValue(configured.replyTokens)
                   }
                 : null,
             detectedWindowTokens: numberValue(objectValue(obj.detected)?.windowTokens),
             contextTokens: numberValue(obj.contextTokens),
             maxSessions: numberValue(obj.maxSessions),
             sessionContextTokens: numberValue(obj.sessionContextTokens),
+            replyTokens: numberValue(obj.replyTokens),
+            messageTokens: numberValue(obj.messageTokens),
             source: stringValue(obj.source),
             heldSlots: numberValue(obj.heldSlots),
             queued: numberValue(obj.queued),
@@ -158,6 +161,7 @@ export async function setCapacity(change?: CapacityChange): Promise<null> {
     if (change.clear) params.clear = true
     if (typeof change.contextTokens === 'number') params.contextTokens = change.contextTokens
     if (typeof change.maxSessions === 'number') params.maxSessions = change.maxSessions
+    if (typeof change.replyTokens === 'number') params.replyTokens = change.replyTokens
     await callSessionProxy('capacity/set', params)
     return null
 }

@@ -11,13 +11,13 @@ const RIGHT = { textAlign: 'right' as const }
  * How much text fits in one session's context window, by kind of text. It
  * follows the window slider; More info says where the numbers come from.
  */
-export default function TextFitDetails({ tokens }: { tokens: number }) {
+export default function TextFitDetails({ tokens, label }: { tokens: number; label?: string }) {
     const [open, setOpen] = useState(false)
     if (tokens <= 0) return null
     return (
         <Stack gap="1">
             <Text kind="body/regular/sm" className="text-subtle-color">
-                One conversation in {tokens.toLocaleString()} tokens holds about:
+                {label ?? `One conversation in ${tokens.toLocaleString()} tokens holds about:`}
             </Text>
             <div
                 role="table"

@@ -134,6 +134,7 @@ type capacitySetParams struct {
 	Model         string `json:"model"`
 	ContextTokens int64  `json:"contextTokens"`
 	MaxSessions   int    `json:"maxSessions"`
+	ReplyTokens   int64  `json:"replyTokens"`
 	Clear         bool   `json:"clear"`
 }
 
@@ -142,13 +143,13 @@ type capacitySetParams struct {
 func (p *Proxy) setCapacity(ctx context.Context, raw json.RawMessage) (*modelCapacity, error) {
 	var params capacitySetParams
 	if err := json.Unmarshal(raw, &params); err != nil {
-		return nil, errors.New(`expected {"engine","model","contextTokens","maxSessions","clear"?}`)
+		return nil, errors.New(`expected {"engine","model","contextTokens","maxSessions","replyTokens"?,"clear"?}`)
 	}
 	if _, ok := profileFor(params.Engine); !ok {
 		return nil, fmt.Errorf("unknown engine; use one of %s", engineNames())
 	}
 	k := capacityKey{Engine: params.Engine, Model: params.Model}
-	if err := p.capacity.set(k, capacitySetting{ContextTokens: params.ContextTokens, MaxSessions: params.MaxSessions}, params.Clear); err != nil {
+	if err := p.capacity.set(k, capacitySetting{ContextTokens: params.ContextTokens, MaxSessions: params.MaxSessions, ReplyTokens: params.ReplyTokens}, params.Clear); err != nil {
 		return nil, err
 	}
 	for _, row := range p.capacityReport(ctx) {

@@ -26,6 +26,9 @@ import { callSessionProxy } from './sessions-bridge'
 
 const log = createStructuredLogger('capacity-planner')
 
+/** The reply budget a plan keeps when none is chosen (the proxy's default). */
+const DEFAULT_REPLY_TOKENS = 8192
+
 /**
  * The capacity planner sizes a model's sessions from this node's GPU memory
  * (nvpair-proxy does the math and reads the model), and applies a saved plan
@@ -120,6 +123,7 @@ function parseSavedPlan(value: JsonValue): SavedCapacityPlan | null {
         cacheType: cacheTypeValue(obj.cacheType),
         reservePercent: numberValue(obj.reservePercent),
         offloadExperts: obj.offloadExperts === true,
+        replyTokens: numberValue(obj.replyTokens),
         applied: obj.applied === true,
         appliedAt: numberValue(obj.appliedAt),
         savedAt: numberValue(obj.savedAt)
@@ -355,6 +359,11 @@ async function waitForApplied(
     }
 }
 
+/** The reply budget PAIR keeps for a plan: as the proxy computes it. */
+function replyBudget(plan: SavedCapacityPlan): number {
+    return Math.min(plan.replyTokens || DEFAULT_REPLY_TOKENS, Math.floor(plan.windowTokens / 2))
+}
+
 let applying: Promise<ApplyPlanResult> | null = null
 
 /** Applies the saved plan for one model. Only one apply runs at a time. */
@@ -403,7 +412,8 @@ async function applyPlanNow(engine: string, model: string): Promise<ApplyPlanRes
             engine,
             model,
             contextTokens: plan.windowTokens * plan.sessions,
-            maxSessions: plan.sessions
+            maxSessions: plan.sessions,
+            replyTokens: replyBudget(plan)
         })
         return {
             applied: false,

@@ -6,6 +6,8 @@ import type { CapacityPlan } from '@/shared/types/sessions'
 import {
     memoryUse,
     nearestStop,
+    replyBudget,
+    replyStops,
     sessionsSliderMax,
     shortTokens,
     textKindFits,
@@ -128,5 +130,18 @@ describe('text kinds', () => {
         expect(fits.at(-1)?.characters).toBe(36000)
         for (let i = 1; i < fits.length; i++)
             expect(fits[i].charsPerToken).toBeLessThanOrEqual(fits[i - 1].charsPerToken)
+    })
+})
+
+describe('reply budget', () => {
+    it('stops at powers of two up to half the window', () => {
+        expect(replyStops(40960)).toEqual([512, 1024, 2048, 4096, 8192, 16384])
+        expect(replyStops(2048)).toEqual([512, 1024])
+    })
+
+    it('defaults to 8,192 and never takes more than half the window', () => {
+        expect(replyBudget(40960)).toBe(8192)
+        expect(replyBudget(40960, 4096)).toBe(4096)
+        expect(replyBudget(8192)).toBe(4096)
     })
 })

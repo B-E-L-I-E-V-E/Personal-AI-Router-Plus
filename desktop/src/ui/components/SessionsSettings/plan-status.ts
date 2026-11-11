@@ -9,7 +9,8 @@ function tokens(n: number): string {
 
 /** What a saved plan's state means, in one line. */
 export function planStatus(plan: SavedCapacityPlan, autoReload: boolean): string {
-    const what = `${plan.sessions} × ${tokens(plan.windowTokens)} tokens${
+    const reply = Math.min(plan.replyTokens || 8192, Math.floor(plan.windowTokens / 2))
+    const what = `${plan.sessions} × ${tokens(plan.windowTokens)} tokens, ${tokens(reply)} for replies${
         plan.cacheType === 'f16' ? '' : ` (${plan.cacheType === 'q8_0' ? '8-bit' : '4-bit'} cache)`
     }`
     if (plan.applied) return `Plan: ${what} — applied`

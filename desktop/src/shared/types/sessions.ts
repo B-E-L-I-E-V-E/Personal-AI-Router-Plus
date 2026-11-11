@@ -37,11 +37,15 @@ export interface SessionSummary {
 export interface ModelCapacity {
     engine: string
     model: string
-    configured: { contextTokens: number; maxSessions: number } | null
+    configured: { contextTokens: number; maxSessions: number; replyTokens: number } | null
     detectedWindowTokens: number
     contextTokens: number
     maxSessions: number
     sessionContextTokens: number
+    /** Kept from each session's window for replies (0: no reply budget). */
+    replyTokens: number
+    /** What remains for a session's messages and history. */
+    messageTokens: number
     source: string
     heldSlots: number
     queued: number
@@ -55,6 +59,7 @@ export interface CapacityChange {
     model: string
     contextTokens?: number
     maxSessions?: number
+    replyTokens?: number
     clear?: boolean
 }
 
@@ -140,6 +145,8 @@ export interface SavedCapacityPlan {
     cacheType: KvCacheType
     reservePercent: number
     offloadExperts: boolean
+    /** Kept from each session's window for replies; 0 means the default. */
+    replyTokens: number
     applied: boolean
     appliedAt: number
     savedAt: number

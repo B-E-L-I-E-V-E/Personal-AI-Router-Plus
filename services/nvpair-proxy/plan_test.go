@@ -390,3 +390,37 @@ func TestPlannerAppliedSetsCapacity(t *testing.T) {
 		t.Fatalf("fresh proxy not idle: %+v", a)
 	}
 }
+
+func TestPlanReplyBudgetDefaultAndChange(t *testing.T) {
+	if got := (savedPlan{WindowTokens: 40960}).replyBudget(); got != 8192 {
+		t.Fatalf("default reply budget %d, want 8192", got)
+	}
+	if got := (savedPlan{WindowTokens: 4096}).replyBudget(); got != 2048 {
+		t.Fatalf("small window reply budget %d, want half the window", got)
+	}
+	if (savedPlan{Engine: "llamacpp", Model: "m", WindowTokens: 8192, Sessions: 1, CacheType: "f16", ReplyTokens: 8192}).validate() == nil {
+		t.Fatal("a reply budget as large as the window was accepted")
+	}
+
+	p := NewProxy(nil)
+	p.planner.put(savedPlan{Engine: "llamacpp", Model: "m", WindowTokens: 16384, Sessions: 2})
+	raw, _ := json.Marshal(map[string]any{"applied": map[string]any{"engine": "llamacpp", "model": "m", "windowTokens": 16384, "sessions": 2}})
+	if _, err := p.setPlanner(context.Background(), raw); err != nil {
+		t.Fatal(err)
+	}
+	k := capacityKey{Engine: "llamacpp", Model: "m"}
+	if got := p.capacity.settingsSnapshot()[k].ReplyTokens; got != 8192 {
+		t.Fatalf("applied reply budget %d, want the 8192 default", got)
+	}
+	// A new reply budget alone keeps the plan applied and takes effect at once.
+	raw, _ = json.Marshal(map[string]any{"save": map[string]any{"engine": "llamacpp", "model": "m", "windowTokens": 16384, "sessions": 2, "cacheType": "f16", "replyTokens": 4096}})
+	if _, err := p.setPlanner(context.Background(), raw); err != nil {
+		t.Fatal(err)
+	}
+	if plan, _ := p.planner.find("llamacpp", "m"); !plan.Applied {
+		t.Fatal("changing only the reply budget made the plan pending")
+	}
+	if got := p.capacity.settingsSnapshot()[k].ReplyTokens; got != 4096 {
+		t.Fatalf("reply budget %d after the change, want 4096", got)
+	}
+}

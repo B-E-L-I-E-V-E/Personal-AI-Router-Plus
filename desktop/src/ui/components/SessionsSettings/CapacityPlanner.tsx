@@ -24,6 +24,8 @@ import {
     memoryUse,
     MIN_WINDOW_TOKENS,
     nearestStop,
+    replyBudget,
+    replyStops,
     sessionsSliderMax,
     shortTokens,
     windowStops
@@ -168,6 +170,8 @@ export default function CapacityPlanner({
     const [cacheType, setCacheType] = useState<KvCacheType>(saved?.cacheType ?? 'f16')
     const [reserve, setReserve] = useState(saved?.reservePercent || 10)
     const [offload, setOffload] = useState(saved?.offloadExperts ?? false)
+    // 0 until chosen: the default budget for the window.
+    const [reply, setReply] = useState(saved?.replyTokens ?? 0)
     const [weightsGb, setWeightsGb] = useState('')
     const [kbPerToken, setKbPerToken] = useState('')
     const [plan, setPlan] = useState<CapacityPlan | null>(null)
@@ -226,6 +230,11 @@ export default function CapacityPlanner({
         [plan?.spec.maxContextTokens]
     )
     const windowIndex = nearestStop(stops, windowTokens ?? stops[stops.length - 1])
+    const windowNow = stops[windowIndex]
+    const replyOptions = useMemo(() => replyStops(windowNow), [windowNow])
+    const replyIndex = nearestStop(replyOptions, replyBudget(windowNow, reply))
+    const replyNow = replyOptions[replyIndex]
+    const messageTokens = windowNow - replyNow
     const fit = plan && !plan.error ? plan.sessions : 0
     // Reaches past what fits, and never below a saved count.
     const sessionsMax = Math.max(sessionsSliderMax(fit), Math.min(sessions ?? 0, MAX_SESSIONS))
@@ -254,7 +263,8 @@ export default function CapacityPlanner({
                     sessions: chosen,
                     cacheType: plan.cacheType,
                     reservePercent: reserve,
-                    offloadExperts: plan.offloadExperts
+                    offloadExperts: plan.offloadExperts,
+                    replyTokens: replyNow
                 }
             })
             .then(async state => {
@@ -292,7 +302,33 @@ export default function CapacityPlanner({
                         attributes={{ SliderInput: { 'aria-label': 'Context window per session' } }}
                     />
                 </SliderTone>
-                <TextFitDetails tokens={stops[windowIndex]} />
+            </Stack>
+
+            <Stack gap="1">
+                <Flex justify="between" gap="3">
+                    <Text kind="body/semibold/sm">Room for the reply</Text>
+                    <Text kind="body/semibold/sm">{tokens(replyNow)} tokens</Text>
+                </Flex>
+                <Slider
+                    min={0}
+                    max={replyOptions.length - 1}
+                    step={1}
+                    value={replyIndex}
+                    onValueChange={i => setReply(replyOptions[i])}
+                    customSteps={replyOptions.map((_, i) => i)}
+                    stepFormatFn={i => shortTokens(replyOptions[i] ?? 0)}
+                    attributes={{ SliderInput: { 'aria-label': 'Room for the reply' } }}
+                />
+                <Text kind="body/regular/sm" className="text-subtle-color">
+                    Each session’s window is shared: {tokens(messageTokens)} tokens for its messages
+                    and history, {tokens(replyNow)} for the model’s reply, a thinking model’s
+                    reasoning included. PAIR refuses a conversation that outgrows its part, and caps
+                    replies that set no length of their own.
+                </Text>
+                <TextFitDetails
+                    tokens={messageTokens}
+                    label={`Messages and history can use ${tokens(messageTokens)} tokens, about:`}
+                />
             </Stack>
 
             <Stack gap="1">

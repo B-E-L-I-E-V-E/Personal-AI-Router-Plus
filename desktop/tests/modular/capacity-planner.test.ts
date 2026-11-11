@@ -220,6 +220,35 @@ describe('capacity planner bridge', () => {
         })
     })
 
+    it('limits LM Studio traffic with the plan’s reply budget', async () => {
+        callProxy.mockImplementation(async (_e: string, method: string) =>
+            method === 'capacity/planner'
+                ? plannerState({
+                      plans: [
+                          {
+                              engine: 'lmstudio',
+                              model: 'm',
+                              windowTokens: 8192,
+                              sessions: 2,
+                              cacheType: 'f16',
+                              applied: false
+                          }
+                      ]
+                  })
+                : {}
+        )
+        await applyPlan({ engine: 'lmstudio', model: 'm' })
+        const set = callProxy.mock.calls.find(c => c[1] === 'capacity/set')
+        // The default 8,192 is more than half this window, so half is kept.
+        expect(set?.[2]).toEqual({
+            engine: 'lmstudio',
+            model: 'm',
+            contextTokens: 16384,
+            maxSessions: 2,
+            replyTokens: 4096
+        })
+    })
+
     it('does not restart an engine PAIR does not manage', async () => {
         callProxy.mockResolvedValue(plannerState())
         callProcess.mockResolvedValue(settingsSnapshot('', { editable: false, reason: 'adopted' }))

@@ -20,11 +20,17 @@ const (
 	// sent only when that node is this one and the share is known.
 	contextTokensHeader = "X-PAIR-Context-Session-Tokens"
 	contextLimitHeader  = "X-PAIR-Context-Session-Limit"
+	// contextReplyHeader is the part of that window kept for replies, and
+	// contextMessageHeader what remains for the conversation: the most its
+	// messages and history may hold. Sent with the limit when a reply budget
+	// is set.
+	contextReplyHeader   = "X-PAIR-Context-Reply-Tokens"
+	contextMessageHeader = "X-PAIR-Context-Message-Limit"
 )
 
 // errContextExceeded refuses a session that has outgrown its share and is not
 // sending a shorter conversation. Waiting would not help, so it is not queued.
-var errContextExceeded = errors.New("the session's context has reached its share on this node")
+var errContextExceeded = errors.New("the session's conversation has reached its limit on this node")
 
 // admissionStatus maps an admission error to its HTTP status.
 func admissionStatus(err error) int {
@@ -72,9 +78,19 @@ func (f *facade) admitSession(ctx context.Context, id string, sess sessionView, 
 	others = append(others, cands[local+1:]...)
 
 	if lim.SessionShare > 0 {
-		if c, ok := sess.Context[k.Engine]; ok && c.Model == model && c.Tokens >= lim.SessionShare && bodyLen >= c.BodyBytes {
+		// With a reply budget, the conversation may use only the rest of the
+		// window, so the model always has room to answer.
+		limit := lim.SessionShare
+		if lim.MessageTokens > 0 {
+			limit = lim.MessageTokens
+		}
+		if c, ok := sess.Context[k.Engine]; ok && c.Model == model && c.Tokens >= limit && bodyLen >= c.BodyBytes {
 			if len(others) > 0 {
 				return others, lim, 0, nil
+			}
+			if lim.MessageTokens > 0 {
+				return nil, lim, 0, fmt.Errorf("%w: it holds %d tokens, and each session's %d-token window keeps %d for the reply, leaving %d for the conversation; shorten the conversation or end the session",
+					errContextExceeded, c.Tokens, lim.SessionShare, lim.ReplyTokens, lim.MessageTokens)
 			}
 			return nil, lim, 0, fmt.Errorf("%w: it holds %d tokens against a share of %d; shorten the conversation or end the session",
 				errContextExceeded, c.Tokens, lim.SessionShare)

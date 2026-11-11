@@ -764,6 +764,18 @@ reading the model:
   `canOffloadExperts` is false, with `offloadNote` saying why, on unified
   memory, on Ollama, or when the size is unknown; asking anyway is an error.
   Saved plans carry `offloadExperts`, applied to llama.cpp as `--cpu-moe`.
+- **Reply budget**: a plan's `replyTokens` (default 8192, at most half the
+  window) is kept from each session's window for replies. Applying the plan
+  sets the model's capacity with `replyTokens`; `messageTokens` = share −
+  reply is what a session's conversation may use. Admission refuses a turn
+  once the measured conversation reaches `messageTokens` (instead of the whole
+  share) and the request is not shorter. Changing only `replyTokens` keeps an
+  applied plan applied and updates the capacity at once. On this node's own
+  attempts for a session request, `withSessionBudget` sets `truncate: false`
+  on Ollama's `/api/chat` and `/api/generate` and caps an unset reply length
+  (`options.num_predict`, or `max_tokens` on OpenAI-compatible routes) at the
+  reply budget; replies carry `X-PAIR-Context-Reply-Tokens` and
+  `X-PAIR-Context-Message-Limit`.
 - A model that cannot be sized returns a result with `error` and whatever
   `spec` was learned, not a JSON-RPC error.
 

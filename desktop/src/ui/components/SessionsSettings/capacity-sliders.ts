@@ -135,3 +135,22 @@ export function textKindFits(tokens: number): TextKindFit[] {
         }
     })
 }
+
+/** The reply budget a plan keeps when none is chosen (the proxy's default). */
+const DEFAULT_REPLY_TOKENS = 8192
+const MIN_REPLY_TOKENS = 512
+
+/**
+ * The reply budget slider's stops: powers of two from 512 up to half the
+ * window, so the conversation always keeps at least half.
+ */
+export function replyStops(windowTokens: number): number[] {
+    const stops: number[] = []
+    for (let r = MIN_REPLY_TOKENS; r <= windowTokens / 2; r *= 2) stops.push(r)
+    return stops.length > 0 ? stops : [Math.max(1, Math.floor(windowTokens / 2))]
+}
+
+/** The reply budget for a window: the saved one, else the default, at most half the window. */
+export function replyBudget(windowTokens: number, saved = 0): number {
+    return Math.min(saved || DEFAULT_REPLY_TOKENS, Math.floor(windowTokens / 2))
+}

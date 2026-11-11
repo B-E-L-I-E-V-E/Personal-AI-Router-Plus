@@ -37,6 +37,10 @@ from the
   how much text the window holds. The sliders turn red when the settings need
   more than the node has, and such a plan can still be saved. Mixture-of-experts
   models can keep their expert weights in system memory on llama.cpp.
+- **Room for the reply.** Each model keeps part of every session's window for
+  replies (8,192 tokens by default). Messages and history get the rest; PAIR
+  refuses a conversation that outgrows it, stops Ollama from silently cutting
+  long conversations, and caps replies that set no length.
 - **Settings → Sessions.** Edit the session policy, see each model's capacity
   and plan, and see or end live sessions.
 - **Signed macOS builds and PAIR Plus updates.** macOS builds are signed with a

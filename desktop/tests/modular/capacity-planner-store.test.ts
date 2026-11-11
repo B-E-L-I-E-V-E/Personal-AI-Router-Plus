@@ -16,6 +16,7 @@ const state: PlannerState = {
             cacheType: 'f16',
             reservePercent: 10,
             offloadExperts: false,
+            replyTokens: 0,
             applied: true,
             appliedAt: 1,
             savedAt: 1

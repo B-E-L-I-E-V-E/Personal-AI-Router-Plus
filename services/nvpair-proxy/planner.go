@@ -24,6 +24,23 @@ import (
 
 const plannerFileName = "capacity-plans.json"
 
+// defaultReplyTokens is the reply budget a plan keeps when none is chosen:
+// room for a long answer, and for a thinking model's reasoning before it.
+const defaultReplyTokens = 8192
+
+// replyBudget is the plan's reply budget, the default when unset, never more
+// than half its window.
+func (p savedPlan) replyBudget() int64 {
+	r := p.ReplyTokens
+	if r == 0 {
+		r = defaultReplyTokens
+	}
+	if half := p.WindowTokens / 2; r > half {
+		r = half
+	}
+	return r
+}
+
 type savedPlan struct {
 	Engine         string  `json:"engine"`
 	Model          string  `json:"model"`
@@ -34,6 +51,9 @@ type savedPlan struct {
 	// OffloadExperts keeps a mixture-of-experts model's expert weights in
 	// system memory (llama.cpp --cpu-moe).
 	OffloadExperts bool `json:"offloadExperts,omitempty"`
+	// ReplyTokens is kept from each session's window for replies; zero means
+	// the default (defaultReplyTokens, at most half the window).
+	ReplyTokens int64 `json:"replyTokens,omitempty"`
 	// Applied is set once the engine runs with this plan; changing the plan
 	// clears it.
 	Applied   bool  `json:"applied"`
@@ -117,6 +137,9 @@ func (p savedPlan) validate() error {
 	}
 	if _, ok := cacheTypeFactor[p.CacheType]; !ok {
 		return errors.New("cacheType must be f16, q8_0 or q4_0")
+	}
+	if p.ReplyTokens < 0 || (p.ReplyTokens > 0 && p.ReplyTokens >= p.WindowTokens) {
+		return errors.New("replyTokens must be less than windowTokens")
 	}
 	if p.OffloadExperts && p.Engine == "ollama" {
 		return errors.New("Ollama cannot keep expert weights in system memory")
@@ -313,6 +336,13 @@ func (p *Proxy) setPlanner(ctx context.Context, raw json.RawMessage) (map[string
 		if err := p.planner.put(*params.Save); err != nil {
 			return nil, err
 		}
+		// The reply budget is PAIR's own limit, not the engine's, so a plan
+		// still applied after the save takes a new one at once.
+		if plan, ok := p.planner.find(params.Save.Engine, params.Save.Model); ok && plan.Applied {
+			if err := p.applyPlanCapacity(plan); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if params.Remove != nil {
 		if err := p.planner.remove(params.Remove.Engine, params.Remove.Model); err != nil {
@@ -329,12 +359,21 @@ func (p *Proxy) setPlanner(ctx context.Context, raw json.RawMessage) (map[string
 			return nil, err
 		}
 		if ok {
-			k := capacityKey{Engine: plan.Engine, Model: plan.Model}
-			setting := capacitySetting{ContextTokens: plan.WindowTokens * int64(plan.Sessions), MaxSessions: plan.Sessions}
-			if err := p.capacity.set(k, setting, false); err != nil {
+			if err := p.applyPlanCapacity(plan); err != nil {
 				return nil, err
 			}
 		}
 	}
 	return p.plannerResult(), nil
+}
+
+// applyPlanCapacity sets the model's context capacity to an applied plan's:
+// window × sessions, that many sessions, and the plan's reply budget.
+func (p *Proxy) applyPlanCapacity(plan savedPlan) error {
+	k := capacityKey{Engine: plan.Engine, Model: plan.Model}
+	return p.capacity.set(k, capacitySetting{
+		ContextTokens: plan.WindowTokens * int64(plan.Sessions),
+		MaxSessions:   plan.Sessions,
+		ReplyTokens:   plan.replyBudget(),
+	}, false)
 }

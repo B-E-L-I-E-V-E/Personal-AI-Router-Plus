@@ -1862,7 +1862,20 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		// goes on the copy for the same reason.
 		attemptReq := r.WithContext(attemptCtx)
 		if bodyBytes != nil {
-			attemptReq.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			body := bodyBytes
+			// On this node a session request gets this node's budget: the
+			// engine may not silently cut a conversation that does not fit,
+			// and a reply with no length of its own stays within the reply
+			// budget. Other nodes apply their own budgets on ingress.
+			if cand.local && sessionID != "" && isInf {
+				body = withSessionBudget(body, f.profile.Name, r.URL.Path, sessionLimit.ReplyTokens)
+			}
+			attemptReq.Body = io.NopCloser(bytes.NewReader(body))
+			if len(body) != len(bodyBytes) {
+				attemptReq.ContentLength = int64(len(body))
+				attemptReq.Header = attemptReq.Header.Clone()
+				attemptReq.Header.Del("Content-Length")
+			}
 		}
 		retry := false
 		sc := &statusCapture{ResponseWriter: w, status: http.StatusOK, idle: idleClientWriteTimeout}
@@ -1953,6 +1966,10 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				// this node is the one serving.
 				if cand.local && sessionLimit.SessionShare > 0 {
 					w.Header().Set(contextLimitHeader, strconv.FormatInt(sessionLimit.SessionShare, 10))
+					if sessionLimit.MessageTokens > 0 {
+						w.Header().Set(contextReplyHeader, strconv.FormatInt(sessionLimit.ReplyTokens, 10))
+						w.Header().Set(contextMessageHeader, strconv.FormatInt(sessionLimit.MessageTokens, 10))
+					}
 				}
 				// Read the engine's token counts as the reply streams through,
 				// for the session's context size. Only the numbers are kept.
