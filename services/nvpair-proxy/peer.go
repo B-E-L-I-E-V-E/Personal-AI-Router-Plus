@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -174,11 +173,18 @@ func (f *facade) admitPeer(r *http.Request, peer string) (*http.Request, func(to
 
 	lim := p.limitFor(f, k)
 	if lim.SessionShare > 0 {
-		if c, ok := sess.Context[k.Engine]; ok && c.Model == model && c.Tokens >= lim.SessionShare && len(body) >= c.BodyBytes {
+		if c, ok := sess.Context[k.Engine]; ok && c.Model == model && c.Tokens >= lim.conversationLimit() && len(body) >= c.BodyBytes {
 			done()
-			return r, nil, none, http.StatusBadRequest, fmt.Errorf("%w: it holds %d tokens against a share of %d on the serving node; shorten the conversation or end the session",
-				errContextExceeded, c.Tokens, lim.SessionShare)
+			return r, nil, none, http.StatusBadRequest, lim.exceeded(c.Tokens, " on the serving node")
 		}
+	}
+	// The serving node applies its own budget, as it would for a session
+	// request made to it directly (budget.go).
+	if budgeted := withSessionBudget(body, f.profile.Name, r.URL.Path, lim.ReplyTokens); len(budgeted) != len(body) {
+		r.Body = io.NopCloser(bytes.NewReader(budgeted))
+		r.ContentLength = int64(len(budgeted))
+		r.Header = r.Header.Clone()
+		r.Header.Del("Content-Length")
 	}
 	if lim.MaxSessions > 0 && !p.sessions.takeSlotNow(key, k, lim.MaxSessions) {
 		wait := min(p.sessions.config().QueueTimeout, maxPeerQueueWait)

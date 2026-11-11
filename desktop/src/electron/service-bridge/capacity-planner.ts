@@ -93,6 +93,8 @@ function parsePlan(value: JsonValue | undefined, error = ''): CapacityPlan {
         cacheType: cacheTypeValue(obj?.cacheType),
         windowTokens: numberValue(obj?.windowTokens),
         sessions: numberValue(obj?.sessions),
+        replyTokens: numberValue(obj?.replyTokens),
+        postTokens: numberValue(obj?.postTokens),
         poolTokens: numberValue(obj?.poolTokens),
         usedBytes: numberValue(obj?.usedBytes),
         fits: obj?.fits === true,
@@ -167,6 +169,7 @@ export async function planCapacity(request?: CapacityPlanRequest): Promise<Capac
     for (const key of [
         'windowTokens',
         'maxSessions',
+        'replyTokens',
         'reservePercent',
         'otherModelsBytes',
         'weightsBytes',

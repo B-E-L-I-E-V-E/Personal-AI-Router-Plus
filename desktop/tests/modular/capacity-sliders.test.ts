@@ -42,6 +42,8 @@ function plan(overrides: Partial<CapacityPlan> = {}): CapacityPlan {
         cacheType: 'f16',
         windowTokens: 32768,
         sessions: 4,
+        replyTokens: 8192,
+        postTokens: 32768,
         poolTokens: 0,
         usedBytes: 0,
         fits: true,

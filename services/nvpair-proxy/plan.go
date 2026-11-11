@@ -63,6 +63,10 @@ type planRequest struct {
 	// MaxSessions caps how many sessions are planned; zero means as many as
 	// fit. It never shrinks a session's window.
 	MaxSessions int `json:"maxSessions,omitempty"`
+	// ReplyTokens is kept from each session's window for replies; zero means
+	// the default (8192, at most half the window). It does not change the
+	// memory a session needs, only how the window is shared.
+	ReplyTokens int64 `json:"replyTokens,omitempty"`
 
 	CacheType      string  `json:"cacheType,omitempty"`
 	ReservePercent float64 `json:"reservePercent,omitempty"`
@@ -109,13 +113,18 @@ type planResult struct {
 	BytesPerToken   int64 `json:"bytesPerToken"`
 	BytesPerSession int64 `json:"bytesPerSession"`
 
-	CacheType    string   `json:"cacheType"`
-	WindowTokens int64    `json:"windowTokens"`
-	Sessions     int      `json:"sessions"`
-	PoolTokens   int64    `json:"poolTokens"`
-	UsedBytes    int64    `json:"usedBytes"`
-	Fits         bool     `json:"fits"`
-	Warnings     []string `json:"warnings,omitempty"`
+	CacheType    string `json:"cacheType"`
+	WindowTokens int64  `json:"windowTokens"`
+	Sessions     int    `json:"sessions"`
+	// ReplyTokens is the part of each session's window kept for replies, and
+	// PostTokens what a session's posts and history may use: the window less
+	// the reply budget.
+	ReplyTokens int64    `json:"replyTokens"`
+	PostTokens  int64    `json:"postTokens"`
+	PoolTokens  int64    `json:"poolTokens"`
+	UsedBytes   int64    `json:"usedBytes"`
+	Fits        bool     `json:"fits"`
+	Warnings    []string `json:"warnings,omitempty"`
 	// Error is why the model could not be sized; Spec still says what is
 	// known, so the caller can ask for the missing values.
 	Error string `json:"error,omitempty"`
@@ -137,7 +146,7 @@ func sessionBytes(spec modelSpec, perToken int64, factor float64, window int64) 
 // computePlan is pure: it applies the request to a model description.
 func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 	res := planResult{Spec: spec}
-	if req.WindowTokens < 0 || req.MaxSessions < 0 || req.OtherModelsBytes < 0 || req.WeightsBytes < 0 || req.KVBytesPerToken < 0 {
+	if req.ReplyTokens < 0 || req.WindowTokens < 0 || req.MaxSessions < 0 || req.OtherModelsBytes < 0 || req.WeightsBytes < 0 || req.KVBytesPerToken < 0 {
 		return res, errors.New("values must not be negative")
 	}
 	if req.MaxSessions > maxPlannedSessions {
@@ -266,6 +275,11 @@ func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 		window = maxWindow
 	}
 	res.WindowTokens = window
+	res.ReplyTokens = (savedPlan{WindowTokens: window, ReplyTokens: req.ReplyTokens}).replyBudget()
+	if req.ReplyTokens > 0 && req.ReplyTokens >= window {
+		return res, fmt.Errorf("replyTokens must be less than the window (%d)", window)
+	}
+	res.PostTokens = window - res.ReplyTokens
 	n := res.ContextBytes / sessionBytes(spec, perToken, factor, window)
 	limit := int64(maxPlannedSessions)
 	if req.MaxSessions > 0 {

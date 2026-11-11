@@ -254,6 +254,10 @@ function SessionRow({
 }) {
     const [ending, setEnding] = useState(false)
     const tokens = session.context.reduce((sum, c) => sum + c.tokens, 0)
+    const rooms = session.context.flatMap(c =>
+        c.postRoomTokens === null ? [] : [c.postRoomTokens]
+    )
+    const room = rooms.length > 0 ? Math.min(...rooms) : null
     const expires = new Date(session.expiresAt)
     return (
         <Flex justify="between" align="center" gap="3" wrap="wrap" className="pair-paper p-3">
@@ -262,6 +266,11 @@ function SessionRow({
                 <Text kind="body/regular/sm" className="text-subtle-color">
                     {session.agentId ? `Agent ${session.agentId} · ` : ''}
                     {session.requests} requests · {formatTokens(tokens)} tokens
+                    {room === null
+                        ? ''
+                        : room > 0
+                          ? ` · room for ${room.toLocaleString()} more`
+                          : ' · full: shorten the conversation'}
                     {session.inFlight > 0
                         ? ' · running'
                         : Number.isNaN(expires.getTime())

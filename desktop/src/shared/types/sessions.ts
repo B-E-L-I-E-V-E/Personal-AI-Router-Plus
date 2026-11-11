@@ -21,6 +21,12 @@ export interface SessionContextUse {
     engine: string
     model: string
     tokens: number
+    /**
+     * Tokens the next post may add before the conversation reaches its limit
+     * on this node (the window less the reply budget); null when unknown, as
+     * for a session another node serves.
+     */
+    postRoomTokens: number | null
 }
 
 /** A live session this node routes. */
@@ -94,6 +100,8 @@ export interface CapacityPlanRequest {
     windowTokens?: number
     /** At most this many sessions; omitted means as many as fit. */
     maxSessions?: number
+    /** Kept from each session's window for replies; omitted means the default. */
+    replyTokens?: number
     /** Keep a mixture-of-experts model's expert weights in system memory. */
     offloadExperts?: boolean
     cacheType?: KvCacheType
@@ -117,6 +125,10 @@ export interface CapacityPlan {
     cacheType: KvCacheType
     windowTokens: number
     sessions: number
+    /** Kept from each session's window for replies. */
+    replyTokens: number
+    /** What a session's posts and history may use: window less reply. */
+    postTokens: number
     poolTokens: number
     usedBytes: number
     fits: boolean

@@ -775,7 +775,12 @@ reading the model:
   on Ollama's `/api/chat` and `/api/generate` and caps an unset reply length
   (`options.num_predict`, or `max_tokens` on OpenAI-compatible routes) at the
   reply budget; replies carry `X-PAIR-Context-Reply-Tokens` and
-  `X-PAIR-Context-Message-Limit`.
+  `X-PAIR-Context-Message-Limit`. A node serving a session for another node
+  (cluster ingress) applies its own conversation limit and the same rewrite.
+  `GET /pair/v1/sessions/{id}` adds, to each context this node serves,
+  `windowTokens`, `replyTokens`, `conversationLimitTokens` and
+  `postRoomTokens`; `capacity/plan` takes `replyTokens` and returns
+  `replyTokens` and `postTokens`.
 - A model that cannot be sized returns a result with `error` and whatever
   `spec` was learned, not a JSON-RPC error.
 

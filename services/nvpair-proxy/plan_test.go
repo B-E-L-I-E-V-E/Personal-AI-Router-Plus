@@ -424,3 +424,25 @@ func TestPlanReplyBudgetDefaultAndChange(t *testing.T) {
 		t.Fatalf("reply budget %d after the change, want 4096", got)
 	}
 }
+
+func TestPlanReportsPostAndReplyBudgets(t *testing.T) {
+	spec := denseSpec()
+	spec.MaxContextTokens = 40960
+	res, err := computePlan(planRequest{Engine: "llamacpp", GPUs: twoCards()}, spec)
+	if err != nil || res.ReplyTokens != 8192 || res.PostTokens != 32768 {
+		t.Fatalf("%v: reply %d post %d, want the 8192 default and 32768", err, res.ReplyTokens, res.PostTokens)
+	}
+	res, _ = computePlan(planRequest{Engine: "llamacpp", GPUs: twoCards(), WindowTokens: 8192, ReplyTokens: 2048}, spec)
+	if res.ReplyTokens != 2048 || res.PostTokens != 6144 {
+		t.Fatalf("reply %d post %d, want 2048 and 6144", res.ReplyTokens, res.PostTokens)
+	}
+	// The reply budget never changes how many sessions fit.
+	a, _ := computePlan(planRequest{Engine: "llamacpp", GPUs: twoCards(), WindowTokens: 8192, ReplyTokens: 512}, spec)
+	b, _ := computePlan(planRequest{Engine: "llamacpp", GPUs: twoCards(), WindowTokens: 8192, ReplyTokens: 4096}, spec)
+	if a.Sessions != b.Sessions {
+		t.Fatalf("sessions %d vs %d: the reply budget changed the memory plan", a.Sessions, b.Sessions)
+	}
+	if _, err := computePlan(planRequest{Engine: "llamacpp", GPUs: twoCards(), WindowTokens: 8192, ReplyTokens: 8192}, spec); err == nil {
+		t.Fatal("a reply budget as large as the window was accepted")
+	}
+}

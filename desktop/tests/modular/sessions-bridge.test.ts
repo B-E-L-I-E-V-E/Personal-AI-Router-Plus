@@ -59,7 +59,10 @@ describe('sessions bridge', () => {
                     expiresAt: '2026-11-11T00:04:03Z',
                     inFlight: 0,
                     requests: 2,
-                    context: { ollama: { model: 'qwen3:0.6b', tokens: 39 } }
+                    context: {
+                        ollama: { model: 'qwen3:0.6b', tokens: 39, postRoomTokens: 6105 },
+                        llamacpp: { model: 'other', tokens: 5 }
+                    }
                 },
                 { sessionId: '', agentId: null }
             ]
@@ -70,7 +73,11 @@ describe('sessions bridge', () => {
             sessionId: 'conv-1',
             agentId: 'planner',
             requests: 2,
-            context: [{ engine: 'ollama', model: 'qwen3:0.6b', tokens: 39 }]
+            context: expect.arrayContaining([
+                { engine: 'ollama', model: 'qwen3:0.6b', tokens: 39, postRoomTokens: 6105 },
+                // Served by another node: its room is unknown here.
+                { engine: 'llamacpp', model: 'other', tokens: 5, postRoomTokens: null }
+            ])
         })
     })
 

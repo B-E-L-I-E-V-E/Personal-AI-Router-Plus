@@ -78,22 +78,11 @@ func (f *facade) admitSession(ctx context.Context, id string, sess sessionView, 
 	others = append(others, cands[local+1:]...)
 
 	if lim.SessionShare > 0 {
-		// With a reply budget, the conversation may use only the rest of the
-		// window, so the model always has room to answer.
-		limit := lim.SessionShare
-		if lim.MessageTokens > 0 {
-			limit = lim.MessageTokens
-		}
-		if c, ok := sess.Context[k.Engine]; ok && c.Model == model && c.Tokens >= limit && bodyLen >= c.BodyBytes {
+		if c, ok := sess.Context[k.Engine]; ok && c.Model == model && c.Tokens >= lim.conversationLimit() && bodyLen >= c.BodyBytes {
 			if len(others) > 0 {
 				return others, lim, 0, nil
 			}
-			if lim.MessageTokens > 0 {
-				return nil, lim, 0, fmt.Errorf("%w: it holds %d tokens, and each session's %d-token window keeps %d for the reply, leaving %d for the conversation; shorten the conversation or end the session",
-					errContextExceeded, c.Tokens, lim.SessionShare, lim.ReplyTokens, lim.MessageTokens)
-			}
-			return nil, lim, 0, fmt.Errorf("%w: it holds %d tokens against a share of %d; shorten the conversation or end the session",
-				errContextExceeded, c.Tokens, lim.SessionShare)
+			return nil, lim, 0, lim.exceeded(c.Tokens, "")
 		}
 	}
 	if lim.MaxSessions == 0 {
@@ -124,4 +113,35 @@ func (f *facade) admitSession(ctx context.Context, id string, sess sessionView, 
 		return nil, lim, waited, err
 	}
 	return cands, lim, waited, nil
+}
+
+// conversationLimit is the most a session's conversation may hold on this
+// node: the window less the reply budget when one is set, so the model always
+// has room to answer; else the whole window.
+func (lim modelCapacity) conversationLimit() int64 {
+	if lim.MessageTokens > 0 {
+		return lim.MessageTokens
+	}
+	return lim.SessionShare
+}
+
+// postRoom is how many tokens the session's next post may add before its
+// conversation reaches the limit, given what it holds now. Zero when the
+// limit is unknown or reached.
+func (lim modelCapacity) postRoom(holds int64) int64 {
+	if room := lim.conversationLimit() - holds; room > 0 {
+		return room
+	}
+	return 0
+}
+
+// exceeded is the refusal for a conversation holding tokens at or past the
+// limit; where names the node, when it is not the one the client called.
+func (lim modelCapacity) exceeded(tokens int64, where string) error {
+	if lim.MessageTokens > 0 {
+		return fmt.Errorf("%w%s: it holds %d tokens, and each session's %d-token window keeps %d for the reply, leaving %d for the conversation; shorten the conversation or end the session",
+			errContextExceeded, where, tokens, lim.SessionShare, lim.ReplyTokens, lim.MessageTokens)
+	}
+	return fmt.Errorf("%w%s: it holds %d tokens against a window of %d; shorten the conversation or end the session",
+		errContextExceeded, where, tokens, lim.SessionShare)
 }

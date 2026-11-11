@@ -45,6 +45,43 @@ type sessionContextJSON struct {
 	PromptTokens     int64  `json:"promptTokens"`
 	CompletionTokens int64  `json:"completionTokens"`
 	UpdatedAt        string `json:"updatedAt"`
+	// The limits on this node, present when this node serves the session
+	// and the model's window is known: the session's window, the part kept
+	// for replies, what the conversation may hold (window less reply), and
+	// how many tokens the next post may add before reaching it.
+	WindowTokens            int64  `json:"windowTokens,omitempty"`
+	ReplyTokens             int64  `json:"replyTokens,omitempty"`
+	ConversationLimitTokens int64  `json:"conversationLimitTokens,omitempty"`
+	PostRoomTokens          *int64 `json:"postRoomTokens,omitempty"`
+}
+
+// sessionJSON is v's wire form with this node's limits on each context it
+// serves (see sessionContextJSON).
+func (p *Proxy) sessionJSON(v sessionView) sessionJSON {
+	out := toSessionJSON(v)
+	for engine, c := range out.Context {
+		if !v.Local[engine] {
+			continue
+		}
+		var f *facade
+		for _, candidate := range p.enabledFacades() {
+			if candidate.profile.Name == engine {
+				f = candidate
+			}
+		}
+		if f == nil {
+			continue
+		}
+		lim := p.limitFor(f, capacityKey{Engine: engine, Model: c.Model})
+		if lim.SessionShare <= 0 {
+			continue
+		}
+		room := lim.postRoom(c.Tokens)
+		c.WindowTokens, c.ReplyTokens, c.ConversationLimitTokens, c.PostRoomTokens =
+			lim.SessionShare, lim.ReplyTokens, lim.conversationLimit(), &room
+		out.Context[engine] = c
+	}
+	return out
 }
 
 func toSessionJSON(v sessionView) sessionJSON {
@@ -117,7 +154,7 @@ func (f *facade) serveSessionsAPI(w http.ResponseWriter, r *http.Request) bool {
 			views := store.list(filter)
 			out := make([]sessionJSON, len(views))
 			for i, v := range views {
-				out[i] = toSessionJSON(v)
+				out[i] = f.host.sessionJSON(v)
 			}
 			writeSessionJSON(w, http.StatusOK, map[string]any{"sessions": out})
 		default:
@@ -129,7 +166,7 @@ func (f *facade) serveSessionsAPI(w http.ResponseWriter, r *http.Request) bool {
 		switch r.Method {
 		case http.MethodGet:
 			v, err := store.get(id)
-			respondSession(w, v, err, http.StatusOK)
+			f.respondSession(w, r, v, err, http.StatusOK)
 		case http.MethodPatch:
 			var body struct {
 				IdleTimeoutSeconds *int `json:"idleTimeoutSeconds"`
@@ -143,7 +180,7 @@ func (f *facade) serveSessionsAPI(w http.ResponseWriter, r *http.Request) bool {
 				return true
 			}
 			v, err := store.setIdleTimeout(id, agentID, time.Duration(*body.IdleTimeoutSeconds)*time.Second)
-			respondSession(w, v, err, http.StatusOK)
+			f.respondSession(w, r, v, err, http.StatusOK)
 		case http.MethodDelete:
 			if err := store.remove(id, agentID); err != nil {
 				writeSessionError(w, err)
@@ -161,7 +198,7 @@ func (f *facade) serveSessionsAPI(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		v, err := store.keepalive(parts[0], agentID)
-		respondSession(w, v, err, http.StatusOK)
+		f.respondSession(w, r, v, err, http.StatusOK)
 
 	default:
 		writeSessionJSON(w, http.StatusNotFound, map[string]string{"error": "unknown session API path"})
@@ -199,7 +236,7 @@ func (f *facade) createSession(w http.ResponseWriter, r *http.Request, headerAge
 		return
 	}
 	v, err := f.host.sessions.create(id, agentID, time.Duration(body.IdleTimeoutSeconds)*time.Second)
-	respondSession(w, v, err, http.StatusCreated)
+	f.respondSession(w, r, v, err, http.StatusCreated)
 }
 
 // decodeSessionBody decodes an optional JSON body, rejecting unknown fields so
@@ -216,13 +253,13 @@ func decodeSessionBody(r *http.Request, dst any) error {
 	return nil
 }
 
-func respondSession(w http.ResponseWriter, v sessionView, err error, status int) {
+func (f *facade) respondSession(w http.ResponseWriter, r *http.Request, v sessionView, err error, status int) {
 	if err != nil {
 		writeSessionError(w, err)
 		return
 	}
 	w.Header().Set(sessionExpiresAtHeader, v.ExpiresAt.UTC().Format(time.RFC3339))
-	writeSessionJSON(w, status, toSessionJSON(v))
+	writeSessionJSON(w, status, f.host.sessionJSON(v))
 }
 
 func writeSessionError(w http.ResponseWriter, err error) {

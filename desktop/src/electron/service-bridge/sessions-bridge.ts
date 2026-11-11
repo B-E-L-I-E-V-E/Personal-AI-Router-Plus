@@ -75,7 +75,12 @@ function parseSessions(value: JsonValue | undefined): SessionSummary[] {
         for (const engine of Object.keys(ctx ?? {})) {
             const use = objectValue(ctx?.[engine])
             if (!use) continue
-            context.push({ engine, model: stringValue(use.model), tokens: numberValue(use.tokens) })
+            context.push({
+                engine,
+                model: stringValue(use.model),
+                tokens: numberValue(use.tokens),
+                postRoomTokens: typeof use.postRoomTokens === 'number' ? use.postRoomTokens : null
+            })
         }
         out.push({
             sessionId,

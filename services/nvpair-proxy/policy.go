@@ -123,7 +123,7 @@ func (p *Proxy) sessionsListResult(raw json.RawMessage) (map[string]any, error) 
 	views := p.sessions.list(params.AgentID)
 	out := make([]sessionJSON, len(views))
 	for i, v := range views {
-		out[i] = toSessionJSON(v)
+		out[i] = p.sessionJSON(v)
 	}
 	return map[string]any{"sessions": out}, nil
 }

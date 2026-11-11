@@ -416,3 +416,29 @@ func TestAdmission_SessionRequestsCarryThisNodesBudget(t *testing.T) {
 		}
 	})
 }
+
+func TestSessionAPI_ReportsThisNodesLimitsAndPostRoom(t *testing.T) {
+	forEachEngine(t, func(t *testing.T, tc engineCase) {
+		fx := newAdmitFixture(t, tc, false)
+		fx.setCapacityWithReply(8192, 1, 2048) // 6144 for the conversation
+		fx.prompt.Store(4000)
+		wantStatus(t, fx.send(context.Background(), "conv-1", 0), http.StatusOK)
+
+		req := httptest.NewRequest(http.MethodGet, sessionsAPIPrefix+"/conv-1", nil)
+		req.RemoteAddr = "127.0.0.1:5555"
+		w := httptest.NewRecorder()
+		if !fx.proxy.soleFacade().serveSessionsAPI(w, req) {
+			t.Fatal("the session API did not answer")
+		}
+		wantStatus(t, w, http.StatusOK)
+		var got sessionJSON
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("body %s: %v", w.Body.String(), err)
+		}
+		c := got.Context[tc.profile.Name]
+		// 4000 prompt + 10 completion measured; 6144 - 4010 = 2134 left.
+		if c.WindowTokens != 8192 || c.ReplyTokens != 2048 || c.ConversationLimitTokens != 6144 || c.PostRoomTokens == nil || *c.PostRoomTokens != 2134 {
+			t.Fatalf("context = %+v, want window 8192, reply 2048, limit 6144, room 2134", c)
+		}
+	})
+}
