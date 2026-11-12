@@ -18,7 +18,9 @@ import type {
     SavedCapacityPlan
 } from '@/shared/types/sessions'
 import getErrorString from '@/shared/utils/get-error-string'
+import { multiGpuLaunch, multiGpuLaunchText } from '@/shared/utils/capacity-gpus'
 import {
+    gpuBars,
     kvStops,
     labelledStops,
     MAX_SESSIONS,
@@ -275,6 +277,29 @@ function MemoryBar({
     )
 }
 
+/** How the model and its context are split across the GPUs, in words. */
+function splitText(engine: string, bars: ReturnType<typeof gpuBars>): string {
+    const alone = bars.findIndex(b => !b.idle && b.share === 1)
+    if (alone >= 0 && bars.some(b => b.idle)) {
+        return `Ollama keeps this model and its context on GPU ${alone} alone, since they fit there; more sessions than that spread it across all ${bars.length} GPUs.`
+    }
+    const parts = bars
+        .map((b, i) =>
+            b.layers > 0
+                ? `${b.layers} layers on GPU ${i}`
+                : `${Math.round(b.share * 100)}% on GPU ${i}`
+        )
+        .join(', ')
+    const even = bars.every(b => Math.abs(b.share - bars[0].share) < 0.02)
+    return `The model is split by layers: ${parts}${
+        even ? '' : ', in proportion to each GPU’s memory'
+    }. Each layer’s part of every session’s context stays on its GPU, so a session fits only when its part fits on each GPU.${
+        engine === 'lmstudio'
+            ? ' Set LM Studio to offload every layer and split across all GPUs.'
+            : ''
+    }`
+}
+
 export default function CapacityPlanner({
     nodeId,
     engine,
@@ -390,7 +415,10 @@ export default function CapacityPlanner({
     )
     const chosen = Math.min(sessions ?? 1, sessionsMax)
     const use = plan && !plan.error ? memoryUse(plan, chosen) : null
-    const over = use ? use.gpuOver || use.ramOver : false
+    const bars = plan && !plan.error ? gpuBars(plan, chosen, engine) : []
+    // One GPU can run out while the total still has room.
+    const over = use ? use.gpuOver || use.ramOver || bars.some(b => b.over) : false
+    const gpuLaunch = plan ? multiGpuLaunchText(multiGpuLaunch(engine, plan, chosen)) : ''
     // Settings past the hardware can still be saved; the sliders and bars
     // turn red to say so.
     const usable =
@@ -433,7 +461,11 @@ export default function CapacityPlanner({
             .finally(() => setBusy(false))
     }
 
-    const gpuLabel = use?.shared ? 'Memory (shared by GPU and system)' : 'GPU memory'
+    const gpuLabel = use?.shared
+        ? 'Memory (shared by GPU and system)'
+        : bars.length > 0
+          ? `GPU memory · all ${bars.length} GPUs`
+          : 'GPU memory'
 
     return (
         <Stack gap="3" className="pair-paper p-3">
@@ -671,6 +703,36 @@ export default function CapacityPlanner({
                             .filter(Boolean)
                             .join(' · ')}
                     />
+                    {bars.length > 0 && (
+                        <Text kind="body/regular/sm" className="text-subtle-color">
+                            {splitText(engine, bars)}
+                        </Text>
+                    )}
+                    {bars.map(bar => (
+                        <MemoryBar
+                            key={bar.label}
+                            label={bar.label}
+                            needed={bar.needed}
+                            total={bar.total}
+                            over={bar.over}
+                            detail={
+                                bar.idle
+                                    ? `not used by this model · kept free ${gb(bar.reserveBytes)}`
+                                    : [
+                                          bar.layers > 0
+                                              ? `${bar.layers} layers, model ${gb(bar.weightsBytes)}`
+                                              : `model ${gb(bar.weightsBytes)}`,
+                                          bar.otherModelsBytes > 0
+                                              ? `other models ${gb(bar.otherModelsBytes)}`
+                                              : '',
+                                          `context ${gb(bar.contextBytes)}`,
+                                          `kept free ${gb(bar.reserveBytes)}`
+                                      ]
+                                          .filter(Boolean)
+                                          .join(' · ')
+                            }
+                        />
+                    ))}
                     {!use.shared && use.ramTotal > 0 && (
                         <MemoryBar
                             label="System memory"
@@ -722,6 +784,7 @@ export default function CapacityPlanner({
                     Applying restarts{' '}
                     {engine === 'ollama' ? 'Ollama (every model it runs)' : 'llama.cpp'} with these
                     settings; requests in progress on it are interrupted.
+                    {gpuLaunch ? ` For the GPUs it also sets ${gpuLaunch}.` : ''}
                 </Text>
             )}
         </Stack>

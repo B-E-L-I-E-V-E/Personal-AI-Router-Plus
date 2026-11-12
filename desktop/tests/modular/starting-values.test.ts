@@ -28,6 +28,7 @@ function spec(defaults: ModelDefaults, extra: Partial<ModelSpec> = {}): ModelSpe
         kvBytesPerToken: 32768,
         expertCount: 0,
         expertBytes: 0,
+        layers: 0,
         defaults,
         notes: [],
         ...extra

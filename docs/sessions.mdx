@@ -248,12 +248,40 @@ As you drag, the memory bars show what the settings need:
 | Bar | What it adds up |
 | --- | --- |
 | GPU memory | The model's weights in memory (on the GPU), sessions × one session's context, and the reserve |
+| GPU 0, GPU 1, … | On a node with several GPUs, each GPU's layers of the model, its part of every session's context, and its own reserve |
 | System memory | Expert weights kept there (see below), and a quarter of it (at least 4 GB) kept free for the system |
 
 ![The lower half of the dialog: the sessions-at-once and keep-free sliders, the cache precision buttons, and the memory bar showing 124.4 GB of 128 GB for 21 sessions of 40,960 tokens.](assets/onboarding/sessions/03-sessions-and-memory.png)
 
 On Apple silicon the GPU and the system share one memory, shown as a single
 bar.
+
+#### Several GPUs
+
+On a node with more than one GPU the engines split a model by layers: each GPU
+holds whole layers, and each layer's part of the context cache stays on the GPU
+that holds the layer. Every GPU you add adds memory for both the model and the
+context, so a second GPU raises the window or the number of sessions, but each
+GPU keeps its own reserve, and a session fits only when its part fits on every
+GPU. PAIR splits the layers in proportion to the memory each GPU has after its
+reserve, so a 24 GB and a 12 GB GPU take two thirds and one third, and sizes
+each GPU on its own. The dialog shows a bar per GPU, such as
+**GPU 0 · RTX 4090**, beside the total, and says how the model is split; a GPU
+that runs out turns red even while the total has room.
+
+Ollama keeps a model on one GPU when the model and every session fit there, and
+spreads it only when they do not, so for Ollama the bars show one GPU holding
+everything until you choose more sessions than it holds.
+
+Applying a plan on such a node also sets the split, and only there:
+
+| Engine | Multi-GPU setting |
+| --- | --- |
+| llama.cpp | `--split-mode layer --tensor-split` with the layers per GPU, replacing your own split options |
+| Ollama | `OLLAMA_SCHED_SPREAD=1` when the sessions need more than one GPU. PAIR never removes it once set, since spreading is harmless to a smaller plan |
+| LM Studio | Not set; offload every layer and split across all GPUs when you load the model |
+
+The dialog lists what applying will set below its buttons.
 
 When the settings need more than the node has, the sliders and the bar turn
 red. You can still save and apply such a plan; the engine may then spill onto

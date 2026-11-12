@@ -271,6 +271,50 @@ describe('capacity planner bridge', () => {
         expect(parsePlanner({ autoReload: false }).autoReload).toBe(false)
     })
 
+    it('splits llama.cpp across GPUs only when the plan does', () => {
+        const split = { ...plan, tensorSplit: '32,32' }
+        expect(llamaCppLaunchText('-sm row -ts 3,1 --temp 0.7', split)).toBe(
+            '--temp 0.7 --ctx-size 131072 --parallel 4 --split-mode layer --tensor-split 32,32'
+        )
+        // Without a split the user's own GPU options stay.
+        expect(llamaCppLaunchText('-ts 3,1', plan)).toBe('-ts 3,1 --ctx-size 131072 --parallel 4')
+    })
+
+    it('tells Ollama to spread across GPUs once, and never removes it', () => {
+        expect(ollamaLaunchText('', { ...plan, spreadGpus: true })).toBe(
+            'OLLAMA_CONTEXT_LENGTH=32768 OLLAMA_NUM_PARALLEL=4 OLLAMA_SCHED_SPREAD=1'
+        )
+        expect(ollamaLaunchText('OLLAMA_SCHED_SPREAD=1', { ...plan, spreadGpus: true })).toBe(
+            'OLLAMA_SCHED_SPREAD=1 OLLAMA_CONTEXT_LENGTH=32768 OLLAMA_NUM_PARALLEL=4'
+        )
+        expect(ollamaLaunchText('OLLAMA_SCHED_SPREAD=1', plan)).toContain('OLLAMA_SCHED_SPREAD=1')
+    })
+
+    it('writes the GPU split the node needs now when applying', async () => {
+        const gpu = { name: 'NVIDIA RTX 5090', totalBytes: 32 * 1024 ** 3, share: 0.5, layers: 32 }
+        callProxy.mockImplementation(async (_engine: string, method: string) => {
+            if (method === 'capacity/planner') return plannerState()
+            if (method === 'capacity/plan')
+                return { spec: { notes: [] }, gpus: [gpu, gpu], tensorSplit: '32,32' }
+            return {}
+        })
+        callProcess.mockImplementation(async (_target: string, method: string) => {
+            if (method === 'engine:get-settings')
+                return settingsSnapshot('--temp 0.7', { appliedRevision: 8 })
+            if (method === 'engine:apply-settings') return { revision: 8, phase: 'succeeded' }
+            return null
+        })
+        const result = await applyPlan({ engine: 'llamacpp', model: 'm' })
+        expect(result.message).toContain('--tensor-split 32,32')
+        const sized = callProxy.mock.calls.find(c => c[1] === 'capacity/plan')
+        expect(sized?.[2]).toMatchObject({ engine: 'llamacpp', model: 'm', windowTokens: 32768 })
+        expect(sized?.[2].gpus).toHaveLength(2)
+        const apply = callProcess.mock.calls.find(c => c[1] === 'engine:apply-settings')
+        expect(apply?.[2].settings.launchText).toBe(
+            '--temp 0.7 --ctx-size 131072 --parallel 4 --split-mode layer --tensor-split 32,32'
+        )
+    })
+
     it('applies a plan by rewriting launch settings and recording it', async () => {
         callProxy.mockImplementation(async (_engine: string, method: string) =>
             method === 'capacity/planner' ? plannerState() : {}

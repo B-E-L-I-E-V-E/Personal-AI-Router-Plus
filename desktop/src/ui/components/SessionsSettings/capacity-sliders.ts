@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { CapacityPlan } from '@/shared/types/sessions'
+import { oneGpuIndex } from '@/shared/utils/capacity-gpus'
 
 /** The smallest window the planner saves. */
 export const MIN_WINDOW_TOKENS = 2048
@@ -79,6 +80,61 @@ export function memoryUse(plan: CapacityPlan, sessions: number): MemoryUse {
         ramOver: plan.offloadExperts && plan.ramTotalBytes > 0 && ramNeeded > plan.ramTotalBytes,
         shared: plan.unified
     }
+}
+
+interface GpuBar {
+    /** "GPU 0 · RTX 4090" */
+    label: string
+    /** What this GPU holds for the settings, its reserve included. */
+    needed: number
+    total: number
+    over: boolean
+    /** The model's layers on it (0 when unknown) and its share of the model. */
+    layers: number
+    share: number
+    weightsBytes: number
+    otherModelsBytes: number
+    /** Its part of all sessions' context. */
+    contextBytes: number
+    reserveBytes: number
+    /** Holds none of this model: Ollama keeps the model on another GPU. */
+    idle: boolean
+}
+
+/** A GPU's name without the vendor's brand words: "NVIDIA GeForce RTX 4090" → "RTX 4090". */
+export function shortGpuName(name: string): string {
+    return name.replace(/\b(NVIDIA|GeForce|AMD|Radeon)\b\s*/gi, '').trim() || name
+}
+
+/**
+ * Each GPU's part of sessions sessions, for a node with more than one GPU
+ * (empty otherwise). Ollama keeps the model on one GPU when it fits there, so
+ * that GPU holds everything and the others hold only their reserve.
+ */
+export function gpuBars(plan: CapacityPlan, sessions: number, engine: string): GpuBar[] {
+    if (plan.gpus.length < 2) return []
+    const alone = oneGpuIndex(engine, plan, sessions)
+    return plan.gpus.map((gpu, i) => {
+        const whole = alone === i
+        const idle = alone >= 0 && !whole
+        const weightsBytes = whole ? plan.gpuWeightsBytes : idle ? 0 : gpu.weightsBytes
+        const contextBytes =
+            (whole ? plan.bytesPerSession : idle ? 0 : gpu.bytesPerSession) * sessions
+        const needed = weightsBytes + gpu.otherModelsBytes + contextBytes + gpu.reserveBytes
+        return {
+            label: `GPU ${i} · ${shortGpuName(gpu.name)}`,
+            needed,
+            total: gpu.totalBytes,
+            over: needed > gpu.totalBytes,
+            layers: whole ? plan.spec.layers : idle ? 0 : gpu.layers,
+            share: whole ? 1 : idle ? 0 : gpu.share,
+            weightsBytes,
+            otherModelsBytes: gpu.otherModelsBytes,
+            contextBytes,
+            reserveBytes: gpu.reserveBytes,
+            idle
+        }
+    })
 }
 
 /** Short token counts for slider labels: 4K, 32K, 40,960 → 40K, 1M. */

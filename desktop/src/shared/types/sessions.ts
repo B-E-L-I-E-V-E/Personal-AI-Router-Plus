@@ -111,6 +111,8 @@ export interface ModelSpec {
     expertCount: number
     /** Size of the expert weights, which llama.cpp can keep in system memory. */
     expertBytes: number
+    /** The model's layer count; 0 when unknown. */
+    layers: number
     /** Starting values the engine, its launch settings or the model report. */
     defaults: ModelDefaults
     notes: string[]
@@ -166,6 +168,23 @@ export interface CapacityPlanRequest {
     withLaunchDefaults?: boolean
 }
 
+/** One GPU's part of a plan on a node with several GPUs. */
+export interface CapacityPlanGpu {
+    name: string
+    totalBytes: number
+    reserveBytes: number
+    /** The model's layers on this GPU; 0 when the layer count is unknown. */
+    layers: number
+    /** This GPU's fraction of the model and of each session's context. */
+    share: number
+    weightsBytes: number
+    otherModelsBytes: number
+    /** This GPU's part of one session's context. */
+    bytesPerSession: number
+    /** Sessions this GPU's part has room for. */
+    sessions: number
+}
+
 export interface CapacityPlan {
     spec: ModelSpec
     totalBytes: number
@@ -203,6 +222,16 @@ export interface CapacityPlan {
     ramReserveBytes: number
     ramUsedBytes: number
     ramFits: boolean
+    /** Each GPU's part: the model's layers split by memory after the reserve. */
+    gpus: CapacityPlanGpu[]
+    /** llama.cpp --tensor-split for the split; empty with one GPU. */
+    tensorSplit: string
+    /**
+     * Ollama loads a model on one GPU when it fits there: this many sessions
+     * fit on GPU oneGpuIndex alone (0 when the model needs more than one).
+     */
+    oneGpuIndex: number
+    oneGpuSessions: number
     warnings: string[]
     /** The planner's refusal, when it could not size the model. */
     error: string
