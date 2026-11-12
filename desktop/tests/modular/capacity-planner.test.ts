@@ -513,6 +513,21 @@ describe('starting values from launch settings', () => {
         })
     })
 
+    it('ignores launch settings of an engine PAIR does not manage', async () => {
+        callProxy.mockResolvedValueOnce({ spec: { notes: [] }, sessions: 3, windowTokens: 8192 })
+        callProcess.mockImplementation(async (_target: string, method: string) =>
+            method === 'engine:get-settings'
+                ? settingsSnapshot('OLLAMA_NUM_PARALLEL=77', { editable: false, adopted: true })
+                : null
+        )
+        const result = await planCapacity({
+            engine: 'ollama',
+            model: 'm',
+            withLaunchDefaults: true
+        })
+        expect(result.spec.defaults).toEqual({})
+    })
+
     it('reads launch settings only when asked', async () => {
         callProxy.mockResolvedValueOnce({ spec: { notes: [] }, sessions: 3, windowTokens: 8192 })
         const result = await planCapacity({ engine: 'ollama', model: 'm' })

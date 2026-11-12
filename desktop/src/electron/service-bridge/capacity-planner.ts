@@ -441,14 +441,16 @@ interface LaunchSource {
     text: string
 }
 
-/** The launch text the node's engine runs with, or null when unknown. */
+/** The launch text the node's engine runs with, or null when PAIR does not manage it. */
 async function launchTextFor(engine: string, targetId?: string): Promise<LaunchSource | null> {
     if (engine !== 'ollama' && engine !== 'llamacpp') return null
     const nodeId = isSelfNode(targetId) ? getModularBridgeState().getSelfId() : targetId
     if (!nodeId) return null
     try {
         const snap = await readSettings(nodeId, engine)
-        return { engine, text: snap.settings.launchText }
+        // An engine PAIR did not start (adopted from another app) runs with
+        // its own settings, not the launch text PAIR keeps for it.
+        return snap.editable ? { engine, text: snap.settings.launchText } : null
     } catch {
         return null
     }
