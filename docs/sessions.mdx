@@ -183,8 +183,22 @@ everything happens on that node.
   the plan from here.
 - **Remove plan** removes it on that node and lifts the limit there.
 
-A node on PAIR Plus 1.3.0 or older offers no **Context & sessions…** for its
-models from other nodes; update it first.
+When this machine cannot reach the other node's planner, **Context &
+sessions…** says why instead of offering the sliders, with **Try again**. Two
+things are needed:
+
+- **PAIR Plus 1.3.1 or later** on that node.
+- **Its firewall open to this machine** on the engine ports PAIR's cluster link
+  uses: 11434 (Ollama), 1234 (LM Studio) and 8080 (llama.cpp), besides
+  14318–14323. On Windows, from an Administrator Command Prompt, for a home
+  network of `192.168.1.x`:
+
+  ```bat
+  netsh advfirewall firewall add rule name="PAIR engines" dir=in action=allow protocol=TCP localport=11434,1234,8080 remoteip=192.168.1.0/24
+  ```
+
+Pausing, stopping, **About this model…** and running a benchmark on that node
+use the same link.
 
 ![A model row on the Overview with its summary: 4 sessions, 40,960 per session, 8,192 response, 32,768 post.](assets/onboarding/sessions/07-model-row-summary.png)
 

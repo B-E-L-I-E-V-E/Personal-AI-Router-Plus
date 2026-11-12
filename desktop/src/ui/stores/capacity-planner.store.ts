@@ -3,6 +3,7 @@
 
 import { create } from 'zustand'
 import type { ModelCapacity, PlannerState, SavedCapacityPlan } from '@/shared/types/sessions'
+import getErrorString from '@/shared/utils/get-error-string'
 
 /**
  * This node's saved capacity plans and the capacity its proxy enforces, shared
@@ -20,6 +21,8 @@ interface CapacityPlannerStore {
      * node: it runs an older PAIR Plus, or did not answer.
      */
     peerPlanner: Record<string, PlannerState>
+    /** Why a peer's planner could not be read, by node ID, until it can. */
+    peerPlannerError: Record<string, string>
     setPlanner: (state: PlannerState) => void
     setPeerPlanner: (nodeId: string, state: PlannerState) => void
     refresh: () => Promise<void>
@@ -37,6 +40,7 @@ export const useCapacityPlannerStore = create<CapacityPlannerStore>(set => ({
     capacity: null,
     peerCapacity: {},
     peerPlanner: {},
+    peerPlannerError: {},
     setPlanner: planner => set({ planner }),
     setPeerPlanner: (nodeId, state) =>
         set(s => ({ peerPlanner: { ...s.peerPlanner, [nodeId]: state } })),
@@ -74,13 +78,26 @@ export const useCapacityPlannerStore = create<CapacityPlannerStore>(set => ({
                 window.pairApi.sessions
                     .getPlanner(nodeId)
                     .then(planner =>
-                        set(s => ({ peerPlanner: { ...s.peerPlanner, [nodeId]: planner } }))
+                        set(s => {
+                            const { [nodeId]: _ok, ...errors } = s.peerPlannerError
+                            return {
+                                peerPlanner: { ...s.peerPlanner, [nodeId]: planner },
+                                peerPlannerError: errors
+                            }
+                        })
                     )
-                    .catch(() =>
-                        // An older or unreachable peer cannot be planned from here.
+                    .catch(err =>
+                        // An older or unreachable peer cannot be planned from
+                        // here; keep why, so its menu can say so.
                         set(s => {
                             const { [nodeId]: _gone, ...rest } = s.peerPlanner
-                            return { peerPlanner: rest }
+                            return {
+                                peerPlanner: rest,
+                                peerPlannerError: {
+                                    ...s.peerPlannerError,
+                                    [nodeId]: getErrorString(err) ?? 'it did not answer'
+                                }
+                            }
                         })
                     )
             ])

@@ -909,6 +909,16 @@ stays busy. Benchmark requests carry `X-PAIR-Benchmark: 1` (stripped before
 forwarding) and a run-scoped `X-Request-ID`; their records go to the run, never
 into the live figures. The last 20 runs are kept, in memory.
 
+A run may name a node (`nodeId` in either form): this node's own discovery ID
+or a reachable cluster member's, refused otherwise before anything is sent.
+Its steps then also carry `X-PAIR-Benchmark-Node: <nodeId>`, read only next to
+`X-PAIR-Benchmark` and stripped before forwarding, and the facade keeps only
+that node among the candidates, in the first round and every retry round. A
+step the node cannot serve (not advertising the model, paused or stopped, or
+unreachable) is answered `502` `benchmark-node` at once, or ends its retries,
+so the step fails instead of running elsewhere. The run reports the node as
+`nodeId`. Nothing is needed on the chosen node beyond the cluster link.
+
 ### 5.17 Model details
 
 `model/details` `{"engine","model","nodeId"?}` returns what the engine and the

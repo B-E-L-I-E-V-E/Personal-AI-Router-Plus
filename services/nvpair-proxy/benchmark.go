@@ -29,6 +29,9 @@ const (
 	// benchmarkHeader marks a request as the benchmark's, so its record goes
 	// to the run instead of the live figures.
 	benchmarkHeader = "X-PAIR-Benchmark"
+	// benchmarkNodeHeader names the node a benchmark step must run on. Only
+	// read alongside benchmarkHeader.
+	benchmarkNodeHeader = "X-PAIR-Benchmark-Node"
 	// benchmarkIdleWait bounds how long a step waits for other requests to
 	// finish before it is skipped.
 	benchmarkIdleWait = 2 * time.Minute
@@ -124,9 +127,12 @@ type benchmarkStep struct {
 }
 
 type benchmarkRun struct {
-	ID         string          `json:"id"`
-	Engine     string          `json:"engine"`
-	Model      string          `json:"model"`
+	ID     string `json:"id"`
+	Engine string `json:"engine"`
+	Model  string `json:"model"`
+	// NodeID is the node chosen to serve every step; empty lets PAIR route
+	// each step as it would any request.
+	NodeID     string          `json:"nodeId,omitempty"`
 	State      string          `json:"state"`
 	StartedAt  int64           `json:"startedAt"`
 	FinishedAt int64           `json:"finishedAt,omitempty"`
@@ -134,7 +140,21 @@ type benchmarkRun struct {
 	Steps      []benchmarkStep `json:"steps"`
 }
 
-var errBenchmarkRunning = errors.New("a benchmark is already running; wait for it to finish")
+var (
+	errBenchmarkRunning = errors.New("a benchmark is already running; wait for it to finish")
+	errBenchmarkNode    = errors.New("the chosen node cannot serve this model now: it does not have it, is paused or stopped, or cannot be reached")
+)
+
+// pinCandidates keeps only the chosen node.
+func pinCandidates(cands []candidate, nodeID string) []candidate {
+	out := cands[:0:0]
+	for _, c := range cands {
+		if c.id == nodeID {
+			out = append(out, c)
+		}
+	}
+	return out
+}
 
 func (s *perfStore) benchmarkSnapshot() []benchmarkRun {
 	s.benchMu.Lock()
@@ -156,7 +176,7 @@ func (s *perfStore) updateRun(run *benchmarkRun, change func(*benchmarkRun)) {
 }
 
 // beginRun registers a new run, refusing while another is in progress.
-func (s *perfStore) beginRun(engine, model string) (*benchmarkRun, error) {
+func (s *perfStore) beginRun(engine, model, nodeID string) (*benchmarkRun, error) {
 	s.benchMu.Lock()
 	defer s.benchMu.Unlock()
 	if s.running != nil {
@@ -166,6 +186,7 @@ func (s *perfStore) beginRun(engine, model string) (*benchmarkRun, error) {
 		ID:        "bench-" + newRequestID()[:8],
 		Engine:    engine,
 		Model:     model,
+		NodeID:    nodeID,
 		State:     benchRunning,
 		StartedAt: time.Now().UnixMilli(),
 	}
@@ -210,6 +231,9 @@ func (s *perfStore) unwait(requestID string) {
 type benchmarkParams struct {
 	Engine string `json:"engine"`
 	Model  string `json:"model"`
+	// NodeID, when set, runs every step on that node: this one or a cluster
+	// peer. Empty lets PAIR choose per step.
+	NodeID string `json:"nodeId,omitempty"`
 }
 
 // startBenchmark validates a request and starts the run in the background.
@@ -226,11 +250,17 @@ func (p *Proxy) startBenchmark(params benchmarkParams) (benchmarkRun, error) {
 	if port <= 0 {
 		return benchmarkRun{}, fmt.Errorf("engine %q is not listening yet", params.Engine)
 	}
-	run, err := p.perf.beginRun(params.Engine, params.Model)
+	params.NodeID = strings.TrimSpace(params.NodeID)
+	if params.NodeID != "" {
+		if peers, self := p.clusterPeers(params.NodeID); !self && len(peers) == 0 {
+			return benchmarkRun{}, fmt.Errorf("node %s is not this node or a reachable member of its cluster", params.NodeID)
+		}
+	}
+	run, err := p.perf.beginRun(params.Engine, params.Model, params.NodeID)
 	if err != nil {
 		return benchmarkRun{}, err
 	}
-	slog.Info("benchmark started", "run", run.ID, "engine", params.Engine, "model", params.Model)
+	slog.Info("benchmark started", "run", run.ID, "engine", params.Engine, "model", params.Model, "node_id", params.NodeID)
 	snapshot := *run
 	snapshot.Steps = append([]benchmarkStep(nil), run.Steps...)
 	go p.runBenchmark(run, f.profile.Name, port)
@@ -287,13 +317,13 @@ func (p *Proxy) benchmarkStep(client *http.Client, base, engine string, run *ben
 	defer p.perf.unwait(requestID)
 
 	path, body := benchmarkRequest(engine, run.ID, run.Model, prompt, thinking)
-	status, errText := postBenchmark(client, base+path, requestID, body)
+	status, errText := postBenchmark(client, base+path, requestID, run.NodeID, body)
 	if status >= 400 && status < 500 && thinking != "default" {
 		if thinking == "on" {
 			return nil, benchSkipped, "the model does not support thinking"
 		}
 		_, body = benchmarkRequest(engine, run.ID, run.Model, prompt, "default")
-		status, errText = postBenchmark(client, base+path, requestID, body)
+		status, errText = postBenchmark(client, base+path, requestID, run.NodeID, body)
 	}
 	if errText != "" {
 		return nil, benchFailed, errText
@@ -306,7 +336,7 @@ func (p *Proxy) benchmarkStep(client *http.Client, base, engine string, run *ben
 	}
 }
 
-func postBenchmark(client *http.Client, url, requestID string, body []byte) (int, string) {
+func postBenchmark(client *http.Client, url, requestID, nodeID string, body []byte) (int, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), benchmarkStepTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
@@ -316,6 +346,9 @@ func postBenchmark(client *http.Client, url, requestID string, body []byte) (int
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(requestIDHeader, requestID)
 	req.Header.Set(benchmarkHeader, "1")
+	if nodeID != "" {
+		req.Header.Set(benchmarkNodeHeader, nodeID)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, err.Error()

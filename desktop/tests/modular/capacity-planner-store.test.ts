@@ -48,7 +48,8 @@ beforeEach(() => {
         planner: null,
         capacity: null,
         peerCapacity: {},
-        peerPlanner: {}
+        peerPlanner: {},
+        peerPlannerError: {}
     })
     vi.stubGlobal('window', {
         pairApi: {
@@ -160,6 +161,15 @@ describe('capacity planner store', () => {
         await useCapacityPlannerStore.getState().refreshPeer('node-b')
         expect(useCapacityPlannerStore.getState().peerPlanner).toEqual({})
         expect(useCapacityPlannerStore.getState().peerCapacity).toEqual({ 'node-b': [] })
+        // The reason is kept for the dialog, and cleared once the peer answers.
+        expect(useCapacityPlannerStore.getState().peerPlannerError['node-b']).toContain(
+            'without remote Context & sessions'
+        )
+        getPlanner.mockResolvedValueOnce(state)
+        await useCapacityPlannerStore.getState().refreshPeer('node-b')
+        expect(useCapacityPlannerStore.getState().peerPlannerError).toEqual({})
+        expect(useCapacityPlannerStore.getState().peerPlanner).toEqual({ 'node-b': state })
+        useCapacityPlannerStore.setState({ peerPlanner: {} })
 
         useCapacityPlannerStore.getState().setPeerPlanner('node-c', state)
         expect(useCapacityPlannerStore.getState().peerPlanner).toEqual({ 'node-c': state })
