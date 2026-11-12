@@ -801,6 +801,45 @@ not install (`editable: false`) is not restarted. With `autoReload` on, the
 desktop applies a pending plan after two consecutive idle checks 30 s apart,
 and retries a failed one after 10 minutes.
 
+### 5.16 Node state
+
+A node is `running`, `paused` or `stopped` (`nodestate.go`). The state governs
+what the node's own engine serves, not what the node routes.
+
+- **Local path.** `resolveCandidates` leaves out this node's own candidate
+  while it is not running, and a peer this node holds as paused or stopped;
+  it counts what it left out. With no candidate left and something held, the
+  request is refused with `503` and *every node that can serve this request
+  is paused or stopped*; a retry round that re-resolves to the same is
+  refused the same way rather than waiting out the job deadline. An attempt
+  on the local engine is recorded before dispatch; the record re-checks the
+  state, so a request racing a pause is either refused here or counted as
+  running.
+- **Ingress.** A paused or stopped node answers every peer request with
+  `503`, `Retry-After: 5` and `X-PAIR-Node-State`. The caller fails over
+  (§5.4) and holds the peer as that state for 60 s. A request taken is
+  recorded, including while it waits for a slot (§5.14).
+- **Pause** lets recorded requests finish. Requests waiting for a slot here
+  are woken and refused with `503`.
+- **Stop** also cancels every recorded request and frees every slot sessions
+  hold here. A local attempt cancelled before commit fails over like any
+  attempt; after commit it ends the stream, and the proxy names the error
+  *this node was stopped*.
+- **Sessions.** A session pinned here is moved by its next turn (§5.10), and
+  the move releases its slot here (§5.14).
+- **Announcements.** On a change, and every 20 s while not running, the node
+  sends `POST /pair/v1/peer/node/notice {"state"}` to each pinned peer over
+  mTLS. A receiver holds the sender's state, keyed by its cluster UUID, for
+  60 s; `running` clears it.
+- **Remote control.** `GET`/`PUT /pair/v1/peer/node/state` on the mTLS ingress
+  read and set the node's state for any pinned peer. `node/state` with a
+  `nodeId` reaches a peer that way and runs off the read loop; `node/states`
+  reports this node and the peers held as paused or stopped.
+- **Persistence.** The state is saved to `node-state.json` beside the other
+  proxy files and restored at startup.
+- **Loopback API.** `GET`/`PUT /pair/v1/node/state` on the plaintext
+  personality. The idle check's `activity` carries `state`.
+
 ## 6. Reservations
 
 A reservation is one in-flight dispatch this process has made since the last

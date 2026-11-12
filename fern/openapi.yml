@@ -371,6 +371,52 @@ paths:
           description: The setting was cleared and nothing else is known about the model.
         default:
           $ref: "#/components/responses/ErrorResponse"
+  /pair/v1/node/state:
+    get:
+      tags:
+        - Sessions
+      operationId: getNodeState
+      summary: Report whether this node takes requests
+      responses:
+        "200":
+          description: This node's state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NodeState"
+    put:
+      tags:
+        - Sessions
+      operationId: setNodeState
+      summary: Pause, stop or resume this node
+      description: >
+        `paused` takes no new requests, from this node's clients or from other
+        nodes, and lets the requests already running finish. `stopped` also
+        cancels every request this node is serving, and any waiting here for
+        a context slot, and frees the slots sessions hold here. `running`
+        resumes. New requests route to other nodes that can serve them; with
+        none left, they are refused with 503. The state survives a restart.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [state]
+              properties:
+                state:
+                  type: string
+                  enum: [running, paused, stopped]
+      responses:
+        "200":
+          description: This node's state after the change.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NodeState"
+        default:
+          $ref: "#/components/responses/ErrorResponse"
   /v1/node-info:
     get:
       tags:
@@ -582,6 +628,26 @@ components:
                 description: >
                   How many tokens the next post may add before the conversation
                   reaches conversationLimitTokens; 0 when it has.
+    NodeState:
+      type: object
+      required: [state, serving]
+      properties:
+        nodeId:
+          type: string
+          description: Set only when the state is another node's.
+        state:
+          type: string
+          enum: [running, paused, stopped]
+        since:
+          type: string
+          format: date-time
+          description: When the node entered this state; absent if it was never changed.
+        serving:
+          type: integer
+          description: Requests the node's engine is serving now.
+        cancelled:
+          type: integer
+          description: Requests a stop cancelled; present only on the stop that did.
     ModelCapacity:
       type: object
       required: [engine, model, configured, detected, contextTokens, maxSessions, sessionContextTokens, source, activeSessions, usedContextTokens, heldSlots, queued]

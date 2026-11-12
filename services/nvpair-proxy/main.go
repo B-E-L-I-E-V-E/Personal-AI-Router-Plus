@@ -97,6 +97,18 @@ func main() {
 			slog.Warn("ignoring unreadable capacity plans", "path", path, "err", err)
 		}
 	}
+	// A paused or stopped node stays so across a restart (nodestate.go). A
+	// file that cannot be read leaves the node running.
+	if path, err := appdir.Path(nodeStateFileName); err != nil {
+		slog.Warn("node state will not persist", "err", err)
+	} else {
+		proxy.node.path = path
+		if err := proxy.node.load(); err != nil {
+			slog.Warn("ignoring unreadable node state", "path", path, "err", err)
+		} else if st := proxy.node.current(); st != nodeRunning {
+			slog.Info("node starts out of service, as it was left", "state", st)
+		}
+	}
 	// Context capacity settings persist beside the proxy's port files. A file
 	// that cannot be read leaves the settings empty, and so detection-only,
 	// rather than stopping the router.

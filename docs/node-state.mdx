@@ -1,0 +1,84 @@
+---
+title: Pausing and Stopping a Node
+description: Take a node out of service in PAIR Plus, either letting its running requests finish (pause) or cancelling them (stop), and bring it back (resume).
+---
+
+{/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+*/}
+
+Every PAIR Plus node is in one of three states:
+
+| State | New requests | Requests already running |
+|-------|--------------|--------------------------|
+| **Running** | Taken as usual | — |
+| **Paused** | Not taken, from this node's own clients or from other nodes | Finish normally |
+| **Stopped** | Not taken | Cancelled at once |
+
+**Resume** returns a paused or stopped node to running.
+
+## From the Desktop
+
+Each node card has **Pause**, **Resume** and **Stop** buttons beside its
+performance and engine-settings buttons. A paused or stopped node shows a
+**Paused** or **Stopped** badge under its name. Stop asks you to confirm,
+because it cancels work.
+
+Any member of a cluster can pause, stop or resume any other member, the same
+way any member manages any node's engines. The call travels over the
+cluster's mutual-TLS link, so a node outside the cluster, or a manually added
+node, can be managed only from itself.
+
+## Where Requests Go
+
+A paused or stopped node still routes its own clients' requests: it just never
+sends one to its own engine.
+
+- **Another node can serve the model.** The request goes there. A client sees
+  nothing different.
+- **No other node can.** The request is refused with `503`, `Retry-After`, and
+  the error *every node that can serve this request is paused or stopped*.
+- **A session pinned to the node.** Its next turn goes to another node, and
+  the node it left frees the slot the session held there. The turn after that
+  stays on the new node. Resuming the old node does not move the session back.
+- **A request waiting for a context slot on the node** is refused with `503`,
+  so the client's retry can go elsewhere.
+- **Stop** also frees every slot sessions hold on the node, and cancels
+  requests other nodes routed to it. A request cancelled before its first
+  byte reached the client is retried on another node; one already streaming
+  ends where it is.
+
+Other nodes stop sending requests to a paused node at once: the node tells
+every cluster member when its state changes, and repeats it every 20 seconds
+while it is paused or stopped, so a member that was offline or joined later
+learns it too. A member that has not heard yet tries the node, is refused
+with `503`, and moves on to the next node without the client noticing. A
+member forgets a node's state 60 seconds after last hearing it, so a missed
+**Resume** delays the node's return by at most a minute.
+
+## Across a Restart
+
+The state survives a restart of PAIR or of the machine. Pausing or stopping a
+node is a deliberate choice to take it out of service, and an update or reboot
+should not put it back without you knowing. After a restart nothing is
+running, so a stopped node behaves like a paused one until it is resumed.
+
+## API
+
+The local proxy answers `GET` and `PUT /pair/v1/node/state` on any engine port,
+from loopback only:
+
+```bash
+curl -X PUT http://127.0.0.1:<port>/pair/v1/node/state \
+  -H 'Content-Type: application/json' -d '{"state":"paused"}'
+```
+
+The answer is the node's state, when it entered it, how many requests its
+engine is serving now and, after a stop, how many it cancelled. The desktop
+uses the proxy's JSON-RPC methods `node/state` (with an optional `nodeId` for
+another cluster member) and `node/states` (this node plus every member known
+to be paused or stopped). The OpenAPI reference lists the shapes.
+
+PAIR 1.0 nodes have no node state. They keep routing to a paused PAIR Plus
+node, are refused with `503`, and try their next node.

@@ -4,7 +4,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -93,7 +95,7 @@ func (f *facade) handlePlain(w http.ResponseWriter, r *http.Request) {
 	}
 	// PAIR's own session API is answered here and never forwarded. Being on
 	// the plaintext personality makes it loopback-only, like inference.
-	if f.serveSessionsAPI(w, r) || f.serveCapacityAPI(w, r) {
+	if f.serveSessionsAPI(w, r) || f.serveCapacityAPI(w, r) || f.serveNodeStateAPI(w, r) {
 		return
 	}
 	f.handleHTTP(w, r)
@@ -124,6 +126,24 @@ func (f *facade) handleClusterIngress(w http.ResponseWriter, r *http.Request) {
 	if f.servePeerRelease(w, r, peer) {
 		return
 	}
+	// Any cluster member may read or set this node's state, and each tells
+	// the others when its own changes (nodestate.go).
+	if f.servePeerNodeState(w, r, peer) {
+		return
+	}
+	// A paused or stopped node takes nothing from other nodes. The 503 and
+	// its X-PAIR-Node-State header tell the calling node to try another, and
+	// to leave this one out until it runs again. A request taken is recorded
+	// so a stop can cancel it, including while it waits for a slot below.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	endServing, err := f.host.node.begin(cancel)
+	if err != nil {
+		writeNodeRefusal(w, f.host.node.current())
+		return
+	}
+	defer endServing()
+	r = r.WithContext(ctx)
 	target, ok := f.localBackendTarget()
 	if !ok {
 		writeIngressError(w, http.StatusServiceUnavailable, "no-local-backend",
@@ -136,6 +156,10 @@ func (f *facade) handleClusterIngress(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Debug("cluster ingress refused by context admission",
 			"peer", peer, "path", r.URL.Path, "status", status, "reason", err)
+		if errors.Is(err, errNodePaused) || errors.Is(err, errNodeStopped) {
+			writeNodeRefusal(w, f.host.node.current())
+			return
+		}
 		writePeerRefusal(w, status, err)
 		return
 	}

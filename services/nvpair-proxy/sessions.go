@@ -221,6 +221,9 @@ type sessionStore struct {
 	// arrival order. changed is closed and replaced whenever a slot frees.
 	queues  map[capacityKey][]*slotWaiter
 	changed chan struct{}
+	// refuse, when set, reports why this node takes no new work now. It is
+	// called with mu held, so it must not take the store's lock.
+	refuse func() error
 }
 
 func newSessionStore() *sessionStore {

@@ -43,6 +43,9 @@ navigation:
       - page: Sessions and Context Capacity
         path: ../docs/sessions.mdx
         slug: sessions
+      - page: Pausing and Stopping a Node
+        path: ../docs/node-state.mdx
+        slug: node-state
       - page: Terminal Interface
         path: ../docs/terminal-interface.mdx
         slug: terminal-interface

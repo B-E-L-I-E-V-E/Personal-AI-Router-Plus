@@ -13,6 +13,7 @@ import type { NodeItem } from '@/shared/types/nodes'
 import type { ServiceError } from '@/shared/types/errors'
 import type { NodeItemMetrics } from '@/shared/types/metrics'
 import type { Workload } from '@/shared/types/workloads'
+import type { NodeServingState, NodeStateInfo, NodeStatesSnapshot } from '@/shared/types/node-state'
 import type {
     ApplyPlanResult,
     CapacityChange,
@@ -133,6 +134,13 @@ export interface ISessionsApi {
     applyPlan(engine: string, model: string): Promise<ApplyPlanResult>
 }
 
+export interface INodeStateApi {
+    /** This node's state and every other node known to be paused or stopped. */
+    getAll(): Promise<NodeStatesSnapshot>
+    /** Pause, stop or resume a node; null is this node. */
+    set(nodeId: string | null, state: NodeServingState): Promise<NodeStateInfo>
+}
+
 export interface IMetricsApi {
     /** Periodic hardware metrics update (CPU, GPU, memory) for a node. */
     onUpdate(callback: (metrics: NodeItemMetrics) => void): () => void
@@ -157,6 +165,7 @@ export interface IPairApi {
     errors: IErrorsApi
     metrics: IMetricsApi
     sessions: ISessionsApi
+    nodeState: INodeStateApi
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +239,10 @@ export function createPairApi(transport: ServiceTransport): IPairApi {
             getPlanner: () => transport.invoke('capacity:get-planner'),
             setPlanner: change => transport.invoke('capacity:set-planner', change),
             applyPlan: (engine, model) => transport.invoke('capacity:apply-plan', { engine, model })
+        },
+        nodeState: {
+            getAll: () => transport.invoke('node-state:get-all'),
+            set: (nodeId, state) => transport.invoke('node-state:set', { nodeId, state })
         }
     }
 }

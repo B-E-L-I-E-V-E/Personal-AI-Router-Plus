@@ -42,6 +42,7 @@ import type { ServiceError } from '@/shared/types/errors'
 import type { NodeItem } from '@/shared/types/nodes'
 import type { NodeItemMetrics } from '@/shared/types/metrics'
 import type { Workload } from '@/shared/types/workloads'
+import type { NodeStateChange, NodeStateInfo, NodeStatesSnapshot } from '@/shared/types/node-state'
 import type {
     ApplyPlanResult,
     CapacityChange,
@@ -136,6 +137,10 @@ export interface WsInvokeChannelMap {
     'capacity:get-planner': { request: void; response: PlannerState }
     'capacity:set-planner': { request: PlannerChange; response: PlannerState }
     'capacity:apply-plan': { request: { engine: string; model: string }; response: ApplyPlanResult }
+
+    // Node state: pause, stop or resume a node (nvpair-proxy, relayed by the broker)
+    'node-state:get-all': { request: void; response: NodeStatesSnapshot }
+    'node-state:set': { request: NodeStateChange; response: NodeStateInfo }
 }
 
 export type WsInvokeChannel = keyof WsInvokeChannelMap

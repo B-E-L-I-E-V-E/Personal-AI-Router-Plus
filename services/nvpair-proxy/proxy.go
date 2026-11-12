@@ -440,6 +440,11 @@ type Proxy struct {
 	// activeRequests counts requests in progress on any facade or on the
 	// cluster ingress; the idle check reads it.
 	activeRequests atomic.Int64
+
+	// node is whether this node takes requests (running, paused, stopped),
+	// the requests its engine is serving, and other nodes' announced states.
+	// See nodestate.go.
+	node *nodeStateStore
 }
 
 // NewProxy builds a facade-less process host. Facades arrive via
@@ -452,8 +457,15 @@ func NewProxy(codec *Codec) *Proxy {
 		sessions: newSessionStore(),
 		capacity: newCapacityStore(),
 		planner:  newPlannerStore(),
+		node:     newNodeStateStore(),
 	}
 	p.sessions.onPeerRelease = p.sendPeerRelease
+	p.sessions.refuse = func() error {
+		if st := p.node.current(); st != nodeRunning {
+			return st.refusal()
+		}
+		return nil
+	}
 	return p
 }
 
@@ -542,6 +554,9 @@ func (p *Proxy) Run(ctx context.Context) error {
 	// Remove expired sessions in the background. Expiry is also enforced on
 	// every access, so this only reclaims memory from abandoned sessions.
 	go p.sessions.run(ctx)
+
+	// Tell other nodes, again and again, while this node is paused or stopped.
+	go p.runNodeNotices(ctx)
 
 	// No facade is brought up here: the process serves the JSON-RPC channel
 	// first and binds only when the broker enables an engine. A bind failure is
@@ -1295,7 +1310,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	bodyLen := len(bodyBytes)
 
-	candidates := f.resolveCandidates(routingModel)
+	candidates, heldNodes := f.resolveCandidatesHeld(routingModel)
 	if cors.IsPreflight(r) {
 		targets := make([]cors.Target, 0, len(candidates))
 		for _, cand := range candidates {
@@ -1402,6 +1417,19 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = f.notify("proxy/request", RequestEvent{
 			ID: reqID, RequestID: requestID, SessionID: sessionID, AgentID: agentID, Method: r.Method, Path: r.URL.Path, Target: "cluster",
 			Status: status, Duration: time.Since(start).Milliseconds(), Error: errText,
+		})
+		return
+	}
+	if len(candidates) == 0 && heldNodes > 0 {
+		// Nodes could serve this, but every one is paused or stopped. That is
+		// a temporary refusal, not a missing model, so it is a 503.
+		slog.Info("proxy request refused: every capable node is paused or stopped",
+			"id", reqID, "request_id", requestID, "method", r.Method, "path", r.URL.Path,
+			"held", heldNodes)
+		writeIngressError(w, http.StatusServiceUnavailable, "nodes-held", errNodesHeld.Error())
+		_ = f.notify("proxy/request", RequestEvent{
+			ID: reqID, RequestID: requestID, SessionID: sessionID, AgentID: agentID, Method: r.Method, Path: r.URL.Path,
+			Status: http.StatusServiceUnavailable, Duration: time.Since(start).Milliseconds(), Error: errNodesHeld.Error(),
 		})
 		return
 	}
@@ -1746,6 +1774,9 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	deadline := start.Add(jobDeadline)
 	dispatches := 0
+	// allHeld is set when a re-resolution found capable nodes but every one
+	// paused or stopped: the request is refused rather than left waiting.
+	allHeld := false
 	committed := false
 	respondedWithError := false
 	round := candidates
@@ -1779,11 +1810,16 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			if !waitBeforeRetry(r.Context(), backoffFor(dispatches, time.Until(deadline))) {
 				break
 			}
-			round = f.resolveCandidates(routingModel)
+			var roundHeld int
+			round, roundHeld = f.resolveCandidatesHeld(routingModel)
 			if isInf && model != "" {
 				round = takeHeld(round)
 			}
 			next = 0
+			if len(round) == 0 && roundHeld > 0 {
+				allHeld = true
+				break
+			}
 			if len(round) == 0 {
 				// Every owner went away mid-flight. Not a rejection: keep
 				// waiting for one to come back. This consumes no attempt, which
@@ -1793,6 +1829,10 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		cand := round[next]
 		next++
+		// This node was paused or stopped after the round was resolved.
+		if cand.local && !p.node.accepting() {
+			continue
+		}
 		dispatches++
 		// lastPermitted means no further dispatch can happen, so this attempt's
 		// failure is the client's answer. It is not "last candidate in the
@@ -1813,6 +1853,18 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		// classification both read r.Context(), the parent, so cancelling a
 		// child cannot be mistaken for the client going away.
 		attemptCtx, cancelAttempt := context.WithCancel(r.Context())
+		// An attempt on this node's own engine is recorded, so stopping the
+		// node cancels it (nodestate.go). Recording also re-checks the state,
+		// closing the race with a pause that landed since the check above.
+		endServing, stoppedHere := func() {}, &atomic.Bool{}
+		if cand.local {
+			var err error
+			if endServing, stoppedHere, err = p.trackLocal(cancelAttempt); err != nil {
+				cancelAttempt()
+				continue
+			}
+			defer endServing()
+		}
 		// claim decides, once, whether this attempt commits or is abandoned;
 		// see attemptClaim for why a pair of channels could not.
 		claim := &attemptClaim{}
@@ -1897,6 +1949,13 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				// the client response, so an upstream that echoes X-Request-ID
 				// back would otherwise produce a second value.
 				resp.Header.Del(requestIDHeader)
+				// A peer that refused because it is paused or stopped is left
+				// out of later rounds and requests until it says otherwise.
+				if cand.peerUUID != "" {
+					if st, err := parseNodeState(resp.Header.Get(nodeStateHeader)); err == nil {
+						p.node.markPeer(cand.peerUUID, st)
+					}
+				}
 				if !last && shouldRetry(resp.StatusCode) {
 					// Abort before streaming: ReverseProxy closes resp.Body and
 					// calls ErrorHandler with our sentinel, then we try next.
@@ -2047,12 +2106,18 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				if _, ok := err.(retrySignal); ok {
 					return // retryable status — the loop advances to the next candidate
 				}
-				// Transport/dial error (not a status-based retry): forget this
-				// node's confirmed address so the next request re-confirms and
-				// can fail over to another of its published addresses
-				// (multi-homed peer). The in-request failover below moves on to
-				// the next node.
-				f.targets.Forget(cand.id)
+				// Stopping this node cancelled the attempt: name that, and
+				// keep the node's confirmed address, which is not at fault.
+				if stoppedHere.Load() {
+					err = errNodeStopped
+				} else {
+					// Transport/dial error (not a status-based retry): forget this
+					// node's confirmed address so the next request re-confirms and
+					// can fail over to another of its published addresses
+					// (multi-homed peer). The in-request failover below moves on to
+					// the next node.
+					f.targets.Forget(cand.id)
+				}
 				if !last {
 					// Transport/dial error with candidates left: fail over.
 					retry = true
@@ -2091,6 +2156,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		proxy.ServeHTTP(sc, attemptReq)
+		endServing()
 		cancelAttempt()
 		if claim.abandoned() {
 			// Name the real reason rather than the bare "context canceled" the
@@ -2123,6 +2189,8 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		// which is the wait for an owner to come back.
 		reason := "no node advertising the requested model became available before the retry deadline"
 		switch {
+		case allHeld:
+			reason = errNodesHeld.Error()
 		case dispatches >= maxDispatches:
 			reason = "every dispatch attempt failed"
 		case len(round) > 0:
@@ -2163,6 +2231,14 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 // Returns an empty slice when no forwarding target is available; the caller
 // treats that as the rejection path.
 func (f *facade) resolveCandidates(model string) []candidate {
+	out, _ := f.resolveCandidatesHeld(model)
+	return out
+}
+
+// resolveCandidatesHeld is resolveCandidates, also counting the capable nodes
+// left out because they are paused or stopped (nodestate.go), so a request
+// with nowhere to go can say why.
+func (f *facade) resolveCandidatesHeld(model string) (out []candidate, held int) {
 	p := f.host
 	id := f.SelectedID()
 
@@ -2197,7 +2273,7 @@ func (f *facade) resolveCandidates(model string) []candidate {
 		byID[n.ID] = n
 	}
 
-	out := make([]candidate, 0, len(nodes))
+	out = make([]candidate, 0, len(nodes))
 	// Dedup by resolved backend host: the same physical node can appear under two
 	// IDs (e.g. a manually-added entry and its relay-discovered record), and
 	// routing to the same Ollama twice is wasteful.
@@ -2219,6 +2295,11 @@ func (f *facade) resolveCandidates(model string) []candidate {
 		switch {
 		case isSelfTarget(u, selfPort) || isAnyAliasSelfTarget(u, aliasBoundAddresses):
 			local = true
+			// A paused or stopped node sends nothing to its own engine.
+			if !p.node.accepting() {
+				held++
+				return
+			}
 			// Our own advertised endpoint (ol now points at this proxy). Serve
 			// it from the explicit local backend — the loopback engine — rather
 			// than dialing our own mTLS ingress, which would recurse. Ranking
@@ -2229,6 +2310,11 @@ func (f *facade) resolveCandidates(model string) []candidate {
 				return
 			}
 			u = lb
+		case p.mesh.HasPin(n.ClusterUUID) && p.node.peerState(n.ClusterUUID) != nodeRunning:
+			// A peer that announced it is paused or stopped, or refused a
+			// request saying so, is left out until it says otherwise.
+			held++
+			return
 		case p.mesh.HasPin(n.ClusterUUID):
 			// A pinned cluster peer: reach it only over mTLS to its promoted
 			// proxy (the ol port now advertises the proxy, not the engine).
@@ -2290,8 +2376,8 @@ func (f *facade) resolveCandidates(model string) []candidate {
 
 	slog.Debug("resolveCandidates resolved",
 		"selected", id, "priority", len(priority), "candidates", len(out),
-		"eligible", len(nodes), "known", known)
-	return out
+		"eligible", len(nodes), "known", known, "held", held)
+	return out, held
 }
 
 // reservation is one in-flight dispatch this proxy has made since the last
@@ -3149,6 +3235,35 @@ func (p *Proxy) handleMessage(msg *Message) {
 		}
 		if err := p.codec.Respond(msg.ID, result); err != nil {
 			log.Printf("failed to respond to capacity/planner-set: %v", err)
+		}
+
+	case "node/state":
+		// Reads or sets whether a node takes requests. No nodeId is this node;
+		// another cluster member's goes over its mTLS ingress, so the call runs
+		// off the read loop rather than holding every other method behind it.
+		var params nodeStateParams
+		if len(msg.Params) > 0 {
+			if err := json.Unmarshal(msg.Params, &params); err != nil {
+				p.codec.RespondError(msg.ID, -32602, `invalid params: expected {"nodeId"?,"state"?}`)
+				return
+			}
+		}
+		go func() {
+			ctx, cancel := context.WithTimeout(p.lifetime(), peerNodeCallTimeout)
+			defer cancel()
+			v, err := p.nodeStateCall(ctx, params)
+			if err != nil {
+				p.codec.RespondError(msg.ID, -32000, err.Error())
+				return
+			}
+			if err := p.codec.Respond(msg.ID, v); err != nil {
+				log.Printf("failed to respond to node/state: %v", err)
+			}
+		}()
+
+	case "node/states":
+		if err := p.codec.Respond(msg.ID, p.nodeStates()); err != nil {
+			log.Printf("failed to respond to node/states: %v", err)
 		}
 
 	case "shutdown":

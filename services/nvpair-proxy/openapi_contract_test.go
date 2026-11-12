@@ -91,3 +91,11 @@ func TestOpenAPI_DocumentsTheContextHeaders(t *testing.T) {
 		}
 	}
 }
+
+func TestOpenAPI_DocumentsTheNodeState(t *testing.T) {
+	doc := openAPIText(t)
+	wantDocumented(t, "NodeState", section(t, doc, "    NodeState:"), jsonFields(nodeStateJSON{}))
+	if !strings.Contains(doc, "  "+nodeStateAPIPath+":") {
+		t.Errorf("path %s is not in the OpenAPI reference", nodeStateAPIPath)
+	}
+}

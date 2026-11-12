@@ -246,12 +246,15 @@ type nodeActivity struct {
 	ActiveRequests int64 `json:"activeRequests"`
 	Queued         int   `json:"queued"`
 	Idle           bool  `json:"idle"`
+	// State is whether this node takes requests: running, paused or stopped.
+	State string `json:"state"`
 }
 
 func (p *Proxy) nodeActivity() nodeActivity {
 	a := nodeActivity{ActiveRequests: p.activeRequests.Load()}
 	a.Sessions, a.Queued = p.sessions.activityCounts()
 	a.Idle = a.Sessions == 0 && a.ActiveRequests == 0 && a.Queued == 0
+	a.State = string(p.node.current())
 	return a
 }
 
