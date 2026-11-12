@@ -2,28 +2,37 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { create } from 'zustand'
-import type { PlannerState, SavedCapacityPlan } from '@/shared/types/sessions'
+import type { ModelCapacity, PlannerState, SavedCapacityPlan } from '@/shared/types/sessions'
 
 /**
- * This node's saved capacity plans, shared by the model rows (which show each
- * model's plan) and Settings → Sessions. The proxy owns the plans; this only
- * caches its last answer.
+ * This node's saved capacity plans and the capacity its proxy enforces, shared
+ * by the model rows (which show each model's settings and plan) and Settings →
+ * Sessions. The proxy owns both; this only caches its last answers.
  */
 interface CapacityPlannerStore {
     planner: PlannerState | null
+    capacity: ModelCapacity[] | null
     setPlanner: (state: PlannerState) => void
     refresh: () => Promise<void>
 }
 
 export const useCapacityPlannerStore = create<CapacityPlannerStore>(set => ({
     planner: null,
+    capacity: null,
     setPlanner: planner => set({ planner }),
     refresh: async () => {
-        try {
-            set({ planner: await window.pairApi.sessions.getPlanner() })
-        } catch {
-            // The router is not reachable yet; rows simply show no plan.
-        }
+        // Each answer stands alone: the router not being reachable yet leaves
+        // the last one in place, and rows simply show what is known.
+        await Promise.all([
+            window.pairApi.sessions
+                .getPlanner()
+                .then(planner => set({ planner }))
+                .catch(() => undefined),
+            window.pairApi.sessions
+                .getCapacity()
+                .then(capacity => set({ capacity }))
+                .catch(() => undefined)
+        ])
     }
 }))
 
