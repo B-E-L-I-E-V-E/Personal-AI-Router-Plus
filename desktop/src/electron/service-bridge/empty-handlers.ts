@@ -32,6 +32,7 @@ import { removeManualNodeEntry, resolveManualNodeKey } from './manual-nodes-stor
 import {
     endSession,
     getCapacityReport,
+    getPeerCapacityReport,
     getSessionPolicy,
     listSessions,
     setCapacity,
@@ -745,6 +746,7 @@ const EMPTY_SERVICE_BRIDGE_HANDLERS: BridgeHandlerMap = {
     'sessions:list': () => listSessions(),
     'sessions:end': payload => endSession(payload),
     'capacity:get-report': () => getCapacityReport(),
+    'capacity:get-peer-report': payload => getPeerCapacityReport(payload),
     'capacity:set': payload => setCapacity(payload),
     'capacity:plan': payload => planCapacity(payload),
     'capacity:get-planner': () => getPlanner(),

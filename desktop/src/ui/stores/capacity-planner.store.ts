@@ -7,18 +7,29 @@ import type { ModelCapacity, PlannerState, SavedCapacityPlan } from '@/shared/ty
 /**
  * This node's saved capacity plans and the capacity its proxy enforces, shared
  * by the model rows (which show each model's settings and plan) and Settings →
- * Sessions. The proxy owns both; this only caches its last answers.
+ * Sessions, plus the capacity each peer enforces, keyed by node ID, for the
+ * peers' model rows. The proxies own all of it; this only caches their last
+ * answers.
  */
 interface CapacityPlannerStore {
     planner: PlannerState | null
     capacity: ModelCapacity[] | null
+    peerCapacity: Record<string, ModelCapacity[]>
     setPlanner: (state: PlannerState) => void
     refresh: () => Promise<void>
+    refreshPeer: (nodeId: string) => Promise<void>
 }
+
+/** How often open model rows re-read the capacity in force. */
+export const CAPACITY_REFRESH_MS = 15_000
+
+// One read per peer at a time, however many of its rows ask.
+const peerReads = new Set<string>()
 
 export const useCapacityPlannerStore = create<CapacityPlannerStore>(set => ({
     planner: null,
     capacity: null,
+    peerCapacity: {},
     setPlanner: planner => set({ planner }),
     refresh: async () => {
         // Each answer stands alone: the router not being reachable yet leaves
@@ -33,6 +44,22 @@ export const useCapacityPlannerStore = create<CapacityPlannerStore>(set => ({
                 .then(capacity => set({ capacity }))
                 .catch(() => undefined)
         ])
+    },
+    refreshPeer: async nodeId => {
+        if (peerReads.has(nodeId)) return
+        peerReads.add(nodeId)
+        try {
+            const report = await window.pairApi.sessions.getPeerCapacity(nodeId)
+            set(s => ({ peerCapacity: { ...s.peerCapacity, [nodeId]: report } }))
+        } catch {
+            // An unreachable peer shows no summary rather than old numbers.
+            set(s => {
+                const { [nodeId]: _gone, ...rest } = s.peerCapacity
+                return { peerCapacity: rest }
+            })
+        } finally {
+            peerReads.delete(nodeId)
+        }
     }
 }))
 

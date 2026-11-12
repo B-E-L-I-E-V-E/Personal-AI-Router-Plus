@@ -146,8 +146,7 @@ model Ollama runs, so planning one Ollama model replaces another's plan.
 
 ![An engine's model list with a model's menu open: Load, Eject, Context & sessions…, and Delete.](assets/onboarding/sessions/01-model-menu.png)
 
-Each of this node's model rows shows, under the model's name, what the router
-enforces for it: sessions at once (with how many are in use or waiting), the
+Each model row shows, under the model's name, what the router enforces for it: sessions at once (with how many are in use or waiting), the
 context window per session, the response context kept for the reply, and the
 post context left for a session's messages, for example `4 sessions (1 in use) ·
 40,960 per session · 8,192 response · 32,768 post`. With no setting, the row
@@ -155,8 +154,14 @@ shows only what the engine reports, marked *as the engine reports*, or nothing
 when the engine reports nothing. While a saved plan is not applied yet, the row
 reads *Now:* for what is in force and a second line for the plan and its state.
 The summary refreshes when you change a plan and every 15 seconds while the
-Overview is open. Models on other nodes show no summary: each node's router
-enforces its own capacity, and this application reads only its own node's.
+Overview is open.
+
+Models on other nodes show the same summary, for what *that* node enforces:
+each node's router enforces its own capacity, so this node's router asks the
+other node's over the cluster's encrypted connection. Other nodes' rows show no
+plan line, since plans are made and kept on each node. Their summary refreshes
+every 15 seconds while the node's **Engine settings** are open. A node that
+cannot be reached, or that runs PAIR 1.0, shows no summary.
 
 ![A model row on the Overview with its summary: 4 sessions, 40,960 per session, 8,192 response, 32,768 post.](assets/onboarding/sessions/07-model-row-summary.png)
 
@@ -323,7 +328,11 @@ OpenAPI reference lists the full request and response shapes.
 ## Across Nodes
 
 Every PAIR Plus node enforces its own capacity, including for sessions other
-nodes send it. A full node waits briefly for a slot, then answers `503`, and the
+nodes send it. A cluster member can read another node's capacity, but not change
+it: the node answers `GET /pair/v1/peer/capacity` over mTLS with the same report
+as `GET /pair/v1/capacity`, and refuses any other method there. The desktop
+reads it through the proxy's JSON-RPC method `capacity/peer-report`
+(`{"nodeId"}`). A full node waits briefly for a slot, then answers `503`, and the
 sending node tries the next one. When a session moves to another node or ends,
 the node it left frees the slot at once.
 

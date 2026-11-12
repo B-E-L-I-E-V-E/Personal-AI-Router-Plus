@@ -13,6 +13,7 @@ vi.mock('@/electron/service-bridge/modular-supervisor', () => ({
 import {
     endSession,
     getCapacityReport,
+    getPeerCapacityReport,
     getSessionPolicy,
     listSessions,
     setCapacity,
@@ -119,6 +120,29 @@ describe('sessions bridge', () => {
             detectedWindowTokens: 0,
             source: 'unknown'
         })
+    })
+
+    it('reads a peer’s capacity by node ID', async () => {
+        callProxy.mockResolvedValueOnce({
+            nodeId: 'node-b',
+            models: [
+                {
+                    engine: 'ollama',
+                    model: 'qwen3:0.6b',
+                    maxSessions: 4,
+                    sessionContextTokens: 10240,
+                    source: 'configured'
+                }
+            ]
+        })
+        const rows = await getPeerCapacityReport('node-b')
+        expect(callProxy.mock.calls[0]?.slice(1)).toEqual([
+            'capacity/peer-report',
+            { nodeId: 'node-b' }
+        ])
+        expect(rows[0]).toMatchObject({ maxSessions: 4, sessionContextTokens: 10240 })
+        await expect(getPeerCapacityReport()).resolves.toEqual([])
+        expect(callProxy).toHaveBeenCalledTimes(1)
     })
 
     it('passes capacity changes and session ends through', async () => {

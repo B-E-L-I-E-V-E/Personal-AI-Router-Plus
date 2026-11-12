@@ -393,7 +393,10 @@ function NodeCardDetails({ node }: NodeCardDetailsProps) {
                     >
                         {hasOpenedEngineSettings && (
                             <div className="mt-4">
-                                <NodeEngineSettings nodeId={node.id} />
+                                <NodeEngineSettings
+                                    nodeId={node.id}
+                                    expanded={isEngineSettingsExpanded}
+                                />
                             </div>
                         )}
                     </div>
