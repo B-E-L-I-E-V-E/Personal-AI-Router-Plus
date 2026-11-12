@@ -13,6 +13,14 @@ release workflow, with macOS builds signed and notarized; the app updates from
 those releases. A build made locally from source is unsigned unless built with
 `PAIR_MAC_SIGN=1`, and updates only once a release exists.
 
+## 1.3.7 — Split a mixture-of-experts model between GPU and system memory (#17)
+
+- **Context & sessions…** for a mixture-of-experts model now has an **Expert layers kept on the GPU** slider instead of an all-or-nothing switch. The GPU memory and system memory bars follow it, sized from each layer's exact expert weights in the model's tensor table (layers differ in mixed quantizations; dense leading layers have none).
+- The dialog shows total against active parameters ("284B total · 13.8B active per token") and explains that every expert must stay loaded while each token runs only a few. Experts in system memory run on the CPU and make each token slower; the dialog says so without inventing numbers.
+- llama.cpp plans are applied as `--n-cpu-moe N`. For LM Studio, whose REST load has no expert placement setting, applying tells you the value for **Number of layers for which to force MoE weights onto CPU**. Ollama and Apple silicon explain why no split is offered.
+- On a node with several GPUs, the model is split across them by what each layer keeps on the GPU, its context included. GPU 0 holds the first layers, whose experts move to system memory first, so it takes more layers and both GPUs fill evenly (for example 10,6 instead of 8,8, fitting 3 sessions instead of 2).
+- Breaking for `capacity/plan` and `capacity/planner-set` callers: the `offloadExperts` boolean is now `cpuExpertLayers` (llama.cpp's N; a value at or past the model's layer count means all of them). `spec` adds `expertUsedCount`, `expertLayerBytes`, `totalParams` and `activeParams`. Saved plans with `offloadExperts: true` load as every layer.
+
 ## 1.3.6 — Plan nodes with several GPUs per GPU (#18)
 
 - **Context & sessions…** on a node with more than one GPU now sizes each GPU separately. The model is split by whole layers in proportion to each GPU's memory after its own reserve, so mismatched GPUs split by ratio. Each layer's part of the context stays on its GPU, so a session fits only when its part fits on every GPU.
