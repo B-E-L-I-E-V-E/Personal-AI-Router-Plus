@@ -84,6 +84,21 @@ each one's next post has.
 
 ![Settings > Sessions: the session policy, and a live session with 2,220 tokens used and room for 30,548 more.](docs/assets/onboarding/sessions/06-sessions-settings.png)
 
+### Performance per model
+
+The **Performance** tab, with the stopwatch icon next to **Settings**, has a
+card per node: the models it is running right now, the models it has loaded,
+and for each model it has served, tokens in and out, reading and writing speed
+in tokens per second, time to first token and, for thinking models, the time
+spent reasoning before the answer. The stopwatch on each node card shows every
+request on that node in real time: model, session and agent, phase, tokens in
+and out as they stream, time to first token, writing speed and thinking so
+far. **Run benchmark** is a per-model test: four fixed prompts through PAIR, so
+models compare like for like. PAIR keeps only
+the counts and timings, never the text.
+
+![The Performance tab: a node's live and per-model figures, and a finished benchmark run.](docs/assets/onboarding/performance/01-performance.png)
+
 ### Use case: a harness for distributed agent work
 
 PAIR Plus suits an agent harness that runs long tasks across an office's
@@ -106,10 +121,14 @@ machines:
   harness can split or summarize input before it is too big. A full model
   answers `503` with `Retry-After`, an overgrown conversation `400` with the
   numbers, never a silently cut prompt.
+- **It knows what is fast.** `GET /pair/v1/performance` gives each model's
+  reading and writing speed, time to first token and thinking time per node,
+  measured from real requests or the built-in benchmark.
 - **It traces everything.** `X-Request-ID` ties each answer to its job and log
   lines on whichever node ran it.
 
-Read [Sessions and Context Capacity](docs/sessions.mdx) for the full API, and
+Read [Sessions and Context Capacity](docs/sessions.mdx) and
+[Model Performance and Benchmarks](docs/performance.mdx) for the full API, and
 the [API reference](fern/openapi.yml).
 
 ## About PAIR

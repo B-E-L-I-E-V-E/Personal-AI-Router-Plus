@@ -3,7 +3,7 @@
 
 import { memo } from 'react'
 import { Button, Flex, Panel, Tabs } from '@nvidia/foundations-react-core'
-import { AddCircle, Public } from '@/ui/components/icons'
+import { AddCircle, Public, Stopwatch } from '@/ui/components/icons'
 import { useOverviewUiStore } from '@/ui/stores/overview-ui.store'
 import type { OverviewTab } from '@/shared/types/overview'
 
@@ -14,11 +14,20 @@ interface ContentBarProps {
 
 const TAB_ITEMS = [
     { value: 'overview', children: 'Overview' },
+    {
+        value: 'performance',
+        children: (
+            <span className="inline-flex items-center gap-1" aria-label="Performance">
+                <Stopwatch style={{ fontSize: 15 }} aria-hidden />
+                Performance
+            </span>
+        )
+    },
     { value: 'settings', children: 'Settings' }
 ]
 
 function isOverviewTab(value: string): value is OverviewTab {
-    return value === 'overview' || value === 'settings'
+    return value === 'overview' || value === 'performance' || value === 'settings'
 }
 
 function ContentBar({ setAddNodeModalOpen, setEndPointModalOpen }: ContentBarProps) {

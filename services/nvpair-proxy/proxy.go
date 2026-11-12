@@ -437,6 +437,19 @@ type Proxy struct {
 	// may reload a model by itself once the node is idle.
 	planner *plannerStore
 
+	// perf holds the performance figures of the requests this node routes,
+	// and the benchmark runs (perf.go, benchmark.go).
+	perf *perfStore
+
+	// live lists the generation requests in progress on any facade or the
+	// cluster ingress, with their figures so far (perf_live.go).
+	live *liveRegistry
+
+	// selfNodeID is this node's ID as discovery knows it, learned the first
+	// time routing resolves a candidate to this node. Peer requests served
+	// here are attributed to it.
+	selfNodeID atomic.Value
+
 	// activeRequests counts requests in progress on any facade or on the
 	// cluster ingress; the idle check reads it.
 	activeRequests atomic.Int64
@@ -452,6 +465,8 @@ func NewProxy(codec *Codec) *Proxy {
 		sessions: newSessionStore(),
 		capacity: newCapacityStore(),
 		planner:  newPlannerStore(),
+		perf:     newPerfStore(),
+		live:     newLiveRegistry(),
 	}
 	p.sessions.onPeerRelease = p.sendPeerRelease
 	return p
@@ -1225,6 +1240,11 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Header.Set(requestIDHeader, requestID)
 	w.Header().Set(requestIDHeader, requestID)
 
+	// The benchmark marks its own requests so their figures go to the run, not
+	// the live ones. The mark is PAIR's, so it is not forwarded.
+	benchmark := r.Header.Get(benchmarkHeader) == "1"
+	r.Header.Del(benchmarkHeader)
+
 	// Parse the request's model before choosing a node. Model eligibility only
 	// applies to inference routes; control endpoints retain their existing
 	// routing behavior even when their JSON happens to contain a model field.
@@ -1294,6 +1314,19 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Header.Del("Content-Length")
 	}
 	bodyLen := len(bodyBytes)
+
+	// The live view shows a generation request from the moment it arrives.
+	var liveReq *liveEntry
+	measured := isInf && model != "" && isGenerationPath(r.URL.Path)
+	if measured {
+		var endLive func()
+		liveReq, endLive = p.live.begin(liveRequest{
+			RequestID: requestID, SessionID: sessionID, AgentID: agentID,
+			Engine: f.profile.Name, Model: model, Path: r.URL.Path,
+			Origin: liveOriginRouted, Benchmark: benchmark,
+		}, bodyLen)
+		defer endLive()
+	}
 
 	candidates := f.resolveCandidates(routingModel)
 	if cors.IsPreflight(r) {
@@ -1794,6 +1827,8 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		cand := round[next]
 		next++
 		dispatches++
+		attemptStart := time.Now()
+		p.live.dispatch(liveReq, cand.id, cand.local, attemptStart)
 		// lastPermitted means no further dispatch can happen, so this attempt's
 		// failure is the client's answer. It is not "last candidate in the
 		// round" any more: another round may follow.
@@ -1973,12 +2008,25 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				// Read the engine's token counts as the reply streams through,
 				// for the session's context size. Only the numbers are kept.
+				// The same frames give the request's performance figures; only
+				// numbers are kept here too (perf.go).
+				var usageDone func(tokenUsage)
 				if sessionID != "" && isInf {
 					engine := f.profile.Name
-					resp.Body = newUsageReader(resp.Body, resp.Header.Get("Content-Type"), func(u tokenUsage) {
+					usageDone = func(u tokenUsage) {
 						p.sessions.recordUsage(sessionID, engine, model, u, bodyLen)
-					})
+					}
 				}
+				var perf *perfTracker
+				if measured && resp.StatusCode < 300 {
+					perf = newPerfTracker(attemptStart, perfRecord{
+						RequestID: requestID, Engine: f.profile.Name, Model: model,
+						NodeID: cand.id, Local: cand.local, Path: r.URL.Path,
+						SessionID: sessionID, AgentID: agentID, Origin: liveOriginRouted,
+					}, func(rec perfRecord) { p.perf.add(rec, benchmark) })
+					perf.live, perf.liveReg = liveReq, p.live
+				}
+				resp.Body = newObservedBody(resp.Body, resp.Header.Get("Content-Type"), usageDone, perf)
 				// Committing to this candidate — body stream is about to begin.
 				ttfbMs = time.Since(start).Milliseconds()
 				servedNodeID = cand.id
@@ -2219,6 +2267,7 @@ func (f *facade) resolveCandidates(model string) []candidate {
 		switch {
 		case isSelfTarget(u, selfPort) || isAnyAliasSelfTarget(u, aliasBoundAddresses):
 			local = true
+			f.host.selfNodeID.Store(n.ID)
 			// Our own advertised endpoint (ol now points at this proxy). Serve
 			// it from the explicit local backend — the loopback engine — rather
 			// than dialing our own mTLS ingress, which would recurse. Ranking
@@ -3144,6 +3193,42 @@ func (p *Proxy) handleMessage(msg *Message) {
 		}
 		if err := p.codec.Respond(msg.ID, res); err != nil {
 			log.Printf("failed to respond to model/details: %v", err)
+		}
+
+	case "performance/report":
+		// Process-wide, like the session methods: any engine's relay reaches
+		// the same figures.
+		if err := p.codec.Respond(msg.ID, p.perf.report()); err != nil {
+			log.Printf("failed to respond to performance/report: %v", err)
+		}
+
+	case "performance/live":
+		if err := p.codec.Respond(msg.ID, p.performanceLive()); err != nil {
+			log.Printf("failed to respond to performance/live: %v", err)
+		}
+
+	case "performance/clear":
+		p.perf.clear()
+		if err := p.codec.Respond(msg.ID, map[string]bool{"cleared": true}); err != nil {
+			log.Printf("failed to respond to performance/clear: %v", err)
+		}
+
+	case "performance/benchmark":
+		var params benchmarkParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			p.codec.RespondError(msg.ID, -32602, `invalid params: expected {"engine","model"}`)
+			return
+		}
+		if params.Engine == "" {
+			params.Engine = engine
+		}
+		run, err := p.startBenchmark(params)
+		if err != nil {
+			p.codec.RespondError(msg.ID, -32000, err.Error())
+			return
+		}
+		if err := p.codec.Respond(msg.ID, map[string]any{"run": run}); err != nil {
+			log.Printf("failed to respond to performance/benchmark: %v", err)
 		}
 
 	case "capacity/planner":

@@ -43,6 +43,9 @@ navigation:
       - page: Sessions and Context Capacity
         path: ../docs/sessions.mdx
         slug: sessions
+      - page: Model Performance and Benchmarks
+        path: ../docs/performance.mdx
+        slug: performance
       - page: Terminal Interface
         path: ../docs/terminal-interface.mdx
         slug: terminal-interface
