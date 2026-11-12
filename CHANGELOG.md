@@ -13,6 +13,11 @@ release workflow, with macOS builds signed and notarized; the app updates from
 those releases. A build made locally from source is unsigned unless built with
 `PAIR_MAC_SIGN=1`, and updates only once a release exists.
 
+## 1.3.3 — Sessions at once no longer stops at 8 for models PAIR cannot size (#20)
+
+- In **Context & sessions…**, a model whose size or context cost PAIR does not know no longer gets a **Sessions at once** slider that stops at 8. The slider appears once the model can be sized (enter its context cost, or load it so PAIR can measure it), and then reaches past what fits, in red, as before.
+- PAIR now reads LM Studio models from the folder LM Studio's settings name (`downloadsFolder` in `~/.lmstudio/settings.json`), not only `~/.lmstudio/models`, so models kept on another drive are sized without entering their cost by hand.
+
 ## 1.3.2 — Run the benchmark on a chosen node (#15)
 
 - **Run benchmark** runs on the node you choose, this one or any other in the cluster. The model list shows each model on each node that has it, and **Benchmark** on a node card's model row runs on that node. Every step runs on that node, or fails if the node can't serve the model.
