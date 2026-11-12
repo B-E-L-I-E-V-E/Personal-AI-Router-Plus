@@ -13,6 +13,10 @@ release workflow, with macOS builds signed and notarized; the app updates from
 those releases. A build made locally from source is unsigned unless built with
 `PAIR_MAC_SIGN=1`, and updates only once a release exists.
 
+## 1.2.2 — Model settings on the Overview (#6)
+
+- Each of this node's model rows shows what is in force for the model: sessions at once (and how many are in use), the context window per session, the response context and the post context. A pending plan is shown apart from what is applied.
+
 ## 1.2.1 — Performance per model and a benchmark (#9)
 
 - A new Performance tab, with a stopwatch icon next to Settings, shows each model's speed per node: tokens in and out, reading and writing speed in tokens per second, time to first token and, for thinking models, the time spent reasoning.
