@@ -13,6 +13,13 @@ release workflow, with macOS builds signed and notarized; the app updates from
 those releases. A build made locally from source is unsigned unless built with
 `PAIR_MAC_SIGN=1`, and updates only once a release exists.
 
+## 1.3.4 — Sliders for the planner's model size and context cost, with exact size labels (#19)
+
+- **Context & sessions…** has two new sliders, **Model weights in memory** and **Context cache per token**. They snap to round values, have an exact field beside them, and are always shown. Both start at what the model reports, and moving one overrides it for the plan. **Use the model's** resets it. They replace the two text fields that only appeared when a value was unknown.
+- The dialog says what the size means. The plan counts the memory the weights take once loaded, not the download. It shows the download size and where it was read (Ollama's or LM Studio's model list, or the GGUF files). It shows the in-memory size (the weight tensors added up) and, for a model Ollama has loaded, what that copy takes now (weights, context cache and buffers together). It also says which size the plan uses. For MLX and safetensors models the download size is used as an estimate, and the dialog says so.
+- The per-token figure says where it came from (the architecture at f16, a measured loaded copy, or your value) and what the plan counts at the chosen cache precision.
+- `capacity/plan` adds `spec.downloadBytes`, `downloadSource`, `tensorBytes`, `weightsSource`, `loadedBytes`, `loadedVramBytes` and `loadedContextTokens`, plus the result's `weightsSource` and `kvSource`. An override no longer changes `spec.source`.
+
 ## 1.3.3 — Sessions at once no longer stops at 8 for models PAIR cannot size (#20)
 
 - In **Context & sessions…**, a model whose size or context cost PAIR does not know no longer gets a **Sessions at once** slider that stops at 8. The slider appears once the model can be sized (enter its context cost, or load it so PAIR can measure it), and then reaches past what fits, in red, as before.
