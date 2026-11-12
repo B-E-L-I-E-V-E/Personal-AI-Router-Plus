@@ -8,10 +8,12 @@ import type {
     CapacityPlan,
     CapacityPlanRequest,
     KvCacheType,
+    ModelDefaults,
     ModelSpec,
     PlannerChange,
     PlannerState,
-    SavedCapacityPlan
+    SavedCapacityPlan,
+    StartValue
 } from '@/shared/types/sessions'
 import type { EngineManagerName } from '@/shared/types/engines'
 import type { EngineSettingsReceipt, EngineSettingsSnapshot } from '@/shared/types/engine-settings'
@@ -66,6 +68,26 @@ function stringList(value: JsonValue | undefined): string[] {
     return arrayValue(value).filter((v): v is string => typeof v === 'string')
 }
 
+function parseStartValue(value: JsonValue | undefined): StartValue | undefined {
+    const obj = objectValue(value)
+    const n = numberValue(obj?.value)
+    const source = obj?.source
+    if (n <= 0 || (source !== 'engine' && source !== 'model')) return undefined
+    return { value: n, source }
+}
+
+function parseDefaults(value: JsonValue | undefined): ModelDefaults {
+    const obj = objectValue(value)
+    const out: ModelDefaults = {}
+    const window = parseStartValue(obj?.window)
+    const sessions = parseStartValue(obj?.sessions)
+    const reply = parseStartValue(obj?.reply)
+    if (window) out.window = window
+    if (sessions) out.sessions = sessions
+    if (reply) out.reply = reply
+    return out
+}
+
 function parseSpec(value: JsonValue | undefined): ModelSpec {
     const obj = objectValue(value)
     return {
@@ -90,6 +112,7 @@ function parseSpec(value: JsonValue | undefined): ModelSpec {
         kvBytesPerToken: numberValue(obj?.kvBytesPerToken),
         expertCount: numberValue(obj?.expertCount),
         expertBytes: numberValue(obj?.expertBytes),
+        defaults: parseDefaults(obj?.defaults),
         notes: stringList(obj?.notes)
     }
 }
@@ -213,7 +236,14 @@ export async function planCapacity(request?: CapacityPlanRequest): Promise<Capac
     if (request.cacheType) params.cacheType = request.cacheType
     if (request.offloadExperts) params.offloadExperts = true
     try {
-        return parsePlan(await callNodeProxy('capacity/plan', params, request.nodeId))
+        const plan = parsePlan(await callNodeProxy('capacity/plan', params, request.nodeId))
+        if (request.withLaunchDefaults) {
+            plan.spec.defaults = withLaunch(
+                plan.spec.defaults,
+                await launchTextFor(request.engine, request.nodeId)
+            )
+        }
+        return plan
     } catch (err) {
         return parsePlan(
             undefined,
@@ -362,6 +392,77 @@ export function llamaCppLaunchText(text: string, plan: PlanNumbers): string {
     // Experts on the CPU; attention and the context cache stay on the GPU.
     if (plan.offloadExperts) added.push('--cpu-moe')
     return [...env, ...kept, ...added].join(' ')
+}
+
+/** A positive whole number in a launch token's value, quotes allowed. */
+function launchNumber(value: string | undefined): number {
+    const n = Number((value ?? '').replace(/^["']|["']$/g, ''))
+    return Number.isInteger(n) && n > 0 ? n : 0
+}
+
+/**
+ * The window and slot count an engine's launch text sets, where it sets them:
+ * Ollama's OLLAMA_CONTEXT_LENGTH and OLLAMA_NUM_PARALLEL; llama.cpp's
+ * --ctx-size split across --parallel slots (a size without a slot count says
+ * nothing about one session's window).
+ */
+export function launchDefaults(
+    engine: string,
+    text: string
+): { windowTokens: number; sessions: number } {
+    const { env, args } = splitEnv(splitLaunchTokens(text))
+    if (engine === 'ollama') {
+        const value = (name: string) =>
+            launchNumber(env.find(token => envName(token) === name)?.slice(name.length + 1))
+        return {
+            windowTokens: value('OLLAMA_CONTEXT_LENGTH'),
+            sessions: value('OLLAMA_NUM_PARALLEL')
+        }
+    }
+    if (engine !== 'llamacpp') return { windowTokens: 0, sessions: 0 }
+    const option = (names: string[]): number => {
+        let found = 0
+        for (let i = 0; i < args.length; i++) {
+            const eq = args[i].indexOf('=')
+            const name = eq > 0 ? args[i].slice(0, eq) : args[i]
+            if (!names.includes(name)) continue
+            found = launchNumber(eq > 0 ? args[i].slice(eq + 1) : args[i + 1])
+        }
+        return found
+    }
+    const total = option(LLAMA_VALUE_OPTIONS[0])
+    const sessions = option(LLAMA_VALUE_OPTIONS[1])
+    return { windowTokens: sessions > 0 ? Math.floor(total / sessions) : 0, sessions }
+}
+
+/** Fills what the engine and the model did not report from its launch text. */
+function withLaunch(defaults: ModelDefaults, launch: LaunchSource | null): ModelDefaults {
+    if (!launch) return defaults
+    const { windowTokens, sessions } = launchDefaults(launch.engine, launch.text)
+    const out = { ...defaults }
+    if (!out.window && windowTokens > 0) out.window = { value: windowTokens, source: 'launch' }
+    if (!out.sessions && sessions > 0) out.sessions = { value: sessions, source: 'launch' }
+    return out
+}
+
+interface LaunchSource {
+    engine: string
+    text: string
+}
+
+/** The launch text the node's engine runs with, or null when PAIR does not manage it. */
+async function launchTextFor(engine: string, targetId?: string): Promise<LaunchSource | null> {
+    if (engine !== 'ollama' && engine !== 'llamacpp') return null
+    const nodeId = isSelfNode(targetId) ? getModularBridgeState().getSelfId() : targetId
+    if (!nodeId) return null
+    try {
+        const snap = await readSettings(nodeId, engine)
+        // An engine PAIR did not start (adopted from another app) runs with
+        // its own settings, not the launch text PAIR keeps for it.
+        return snap.editable ? { engine, text: snap.settings.launchText } : null
+    } catch {
+        return null
+    }
 }
 
 const SETTINGS_SETTLE_TIMEOUT_MS = 180_000

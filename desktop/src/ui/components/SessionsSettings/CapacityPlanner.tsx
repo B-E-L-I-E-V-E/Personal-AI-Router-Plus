@@ -39,6 +39,12 @@ import {
 } from './capacity-sliders'
 import { kvFact, kvUsed, loadedFact, sizeFacts, weightsUsed } from './model-size'
 import TextFitDetails from './TextFitDetails'
+import {
+    STARTING_LABEL,
+    startingValues,
+    type StartingValues,
+    withStartStop
+} from './starting-values'
 
 const GB = 1024 ** 3
 
@@ -60,6 +66,22 @@ const CACHE_TYPES: { id: KvCacheType; label: string }[] = [
 const FALLBACK_WINDOW = 32768
 
 const DANGER_TEXT = { color: 'var(--text-color-feedback-danger)' }
+
+/** Where a slider's starting value came from, while it still sits there. */
+function StartMark({
+    start,
+    now
+}: {
+    start: { value: number; source: keyof typeof STARTING_LABEL } | undefined
+    now: number
+}) {
+    if (!start || start.value !== now) return null
+    return (
+        <Text kind="body/regular/sm" className="text-subtle-color">
+            {STARTING_LABEL[start.source]}
+        </Text>
+    )
+}
 
 function Choice<T extends string>({
     options,
@@ -283,6 +305,9 @@ export default function CapacityPlanner({
     const [kvOverride, setKvOverride] = useState<number | null>(null)
     const [plan, setPlan] = useState<CapacityPlan | null>(null)
     const [busy, setBusy] = useState(false)
+    // A model with no saved plan starts from what its engine and the model
+    // report; null until the first answer says what that is.
+    const [starts, setStarts] = useState<StartingValues | null>(saved ? {} : null)
 
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -296,9 +321,24 @@ export default function CapacityPlanner({
                     windowTokens: windowTokens ?? undefined,
                     offloadExperts: offload || undefined,
                     weightsBytes: weightsOverride ?? undefined,
-                    kvBytesPerToken: kvOverride ?? undefined
+                    kvBytesPerToken: kvOverride ?? undefined,
+                    withLaunchDefaults: starts === null || undefined
                 })
                 .then(result => {
+                    if (starts === null) {
+                        const found = startingValues(result.spec)
+                        setStarts(found)
+                        if (found.sessions) {
+                            setSessions(found.sessions.value)
+                            setSessionsTouched(true)
+                        }
+                        if (found.reply) setReply(found.reply.value)
+                        if (found.window && found.window.value !== result.windowTokens) {
+                            // Size the model again for its starting window.
+                            setWindowTokens(found.window.value)
+                            return
+                        }
+                    }
                     // A model that does not report its maximum needs a window
                     // to be sized at all.
                     if (windowTokens === null && /maximum context is unknown/.test(result.error)) {
@@ -325,16 +365,20 @@ export default function CapacityPlanner({
         weightsOverride,
         kvOverride,
         sessionsTouched,
+        starts,
         onError
     ])
 
     const stops = useMemo(
-        () => windowStops(plan?.spec.maxContextTokens ?? 0),
-        [plan?.spec.maxContextTokens]
+        () => withStartStop(windowStops(plan?.spec.maxContextTokens ?? 0), starts?.window?.value),
+        [plan?.spec.maxContextTokens, starts?.window?.value]
     )
     const windowIndex = nearestStop(stops, windowTokens ?? stops[stops.length - 1])
     const windowNow = stops[windowIndex]
-    const replyOptions = useMemo(() => replyStops(windowNow), [windowNow])
+    const replyOptions = useMemo(
+        () => withStartStop(replyStops(windowNow), starts?.reply?.value),
+        [windowNow, starts?.reply?.value]
+    )
     const replyIndex = nearestStop(replyOptions, replyBudget(windowNow, reply))
     const replyNow = replyOptions[replyIndex]
     const messageTokens = windowNow - replyNow
@@ -401,7 +445,10 @@ export default function CapacityPlanner({
             <Stack gap="1">
                 <Flex justify="between" gap="3">
                     <Text kind="body/semibold/sm">Context window per session</Text>
-                    <Text kind="body/semibold/sm">{tokens(stops[windowIndex])} tokens</Text>
+                    <Flex gap="2" align="center">
+                        <StartMark start={starts?.window} now={windowNow} />
+                        <Text kind="body/semibold/sm">{tokens(stops[windowIndex])} tokens</Text>
+                    </Flex>
                 </Flex>
                 <SliderTone over={over}>
                     <Slider
@@ -420,7 +467,10 @@ export default function CapacityPlanner({
             <Stack gap="1">
                 <Flex justify="between" gap="3">
                     <Text kind="body/semibold/sm">Room for the reply</Text>
-                    <Text kind="body/semibold/sm">{tokens(replyNow)} tokens</Text>
+                    <Flex gap="2" align="center">
+                        <StartMark start={starts?.reply} now={replyNow} />
+                        <Text kind="body/semibold/sm">{tokens(replyNow)} tokens</Text>
+                    </Flex>
                 </Flex>
                 <Slider
                     min={0}
@@ -445,12 +495,15 @@ export default function CapacityPlanner({
                 <Flex justify="between" gap="3">
                     <Text kind="body/semibold/sm">Sessions at once</Text>
                     {known !== null && (
-                        <Text
-                            kind="body/semibold/sm"
-                            style={chosen > known ? DANGER_TEXT : undefined}
-                        >
-                            {chosen} ({known} fit)
-                        </Text>
+                        <Flex gap="2" align="center">
+                            <StartMark start={starts?.sessions} now={chosen} />
+                            <Text
+                                kind="body/semibold/sm"
+                                style={chosen > known ? DANGER_TEXT : undefined}
+                            >
+                                {chosen} ({known} fit)
+                            </Text>
+                        </Flex>
                     )}
                 </Flex>
                 {known === null ? (

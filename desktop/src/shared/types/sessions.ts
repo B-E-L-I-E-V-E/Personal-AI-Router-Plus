@@ -111,7 +111,31 @@ export interface ModelSpec {
     expertCount: number
     /** Size of the expert weights, which llama.cpp can keep in system memory. */
     expertBytes: number
+    /** Starting values the engine, its launch settings or the model report. */
+    defaults: ModelDefaults
     notes: string[]
+}
+
+/**
+ * Where a starting value came from: what the running engine uses for this
+ * model now ('engine'), the engine's launch settings ('launch'), or the
+ * model's own default parameter ('model').
+ */
+export type StartSource = 'engine' | 'launch' | 'model'
+
+export interface StartValue {
+    value: number
+    source: StartSource
+}
+
+/** A value nothing reports is left out. */
+export interface ModelDefaults {
+    /** Each session's context window. */
+    window?: StartValue
+    /** Requests the engine runs at once (its slots). */
+    sessions?: StartValue
+    /** The model's default reply length. */
+    reply?: StartValue
 }
 
 export type KvCacheType = 'f16' | 'q8_0' | 'q4_0'
@@ -138,6 +162,8 @@ export interface CapacityPlanRequest {
     otherModelsBytes?: number
     weightsBytes?: number
     kvBytesPerToken?: number
+    /** Also read the engine's launch settings into spec.defaults. */
+    withLaunchDefaults?: boolean
 }
 
 export interface CapacityPlan {
