@@ -30,6 +30,7 @@ vi.mock('@/electron/service-bridge/modular-state', () => ({
 import {
     applyPlan,
     getPlanner,
+    launchDefaults,
     llamaCppLaunchText,
     ollamaLaunchText,
     parsePlanner,
@@ -447,5 +448,79 @@ describe('capacity planner bridge', () => {
         await runAutoReloadCheckForTest()
         await runAutoReloadCheckForTest()
         expect(callProcess).not.toHaveBeenCalled()
+    })
+})
+
+describe('starting values from launch settings', () => {
+    it.each([
+        {
+            name: 'Ollama environment',
+            engine: 'ollama',
+            text: 'OLLAMA_CONTEXT_LENGTH=40960 OLLAMA_FLASH_ATTENTION=1 OLLAMA_NUM_PARALLEL="4"',
+            want: { windowTokens: 40960, sessions: 4 }
+        },
+        {
+            name: 'Ollama without the variables',
+            engine: 'ollama',
+            text: 'OLLAMA_KEEP_ALIVE=5m',
+            want: { windowTokens: 0, sessions: 0 }
+        },
+        {
+            name: 'llama.cpp size split across slots',
+            engine: 'llamacpp',
+            text: '--temp 0.7 -c 65536 --parallel=4',
+            want: { windowTokens: 16384, sessions: 4 }
+        },
+        {
+            name: 'llama.cpp size without a slot count',
+            engine: 'llamacpp',
+            text: '--ctx-size 65536',
+            want: { windowTokens: 0, sessions: 0 }
+        }
+    ])('reads $name', ({ engine, text, want }) => {
+        expect(launchDefaults(engine, text)).toEqual(want)
+    })
+
+    it('fills only what the engine and the model did not report', async () => {
+        callProxy.mockResolvedValueOnce({
+            spec: {
+                notes: [],
+                defaults: {
+                    window: { value: 8192, source: 'model' },
+                    reply: { value: 0, source: 'model' }
+                }
+            },
+            sessions: 3,
+            windowTokens: 8192
+        })
+        callProcess.mockImplementation(async (_target: string, method: string) =>
+            method === 'engine:get-settings'
+                ? settingsSnapshot('OLLAMA_CONTEXT_LENGTH=40960 OLLAMA_NUM_PARALLEL=6')
+                : null
+        )
+        const result = await planCapacity({
+            engine: 'ollama',
+            model: 'm',
+            withLaunchDefaults: true
+        })
+        expect(result.spec.defaults).toEqual({
+            window: { value: 8192, source: 'model' },
+            sessions: { value: 6, source: 'launch' }
+        })
+        expect(callProcess).toHaveBeenCalledWith('broker', 'engine:get-settings', {
+            nodeId: 'node-1',
+            engine: 'ollama'
+        })
+    })
+
+    it('reads launch settings only when asked', async () => {
+        callProxy.mockResolvedValueOnce({ spec: { notes: [] }, sessions: 3, windowTokens: 8192 })
+        const result = await planCapacity({ engine: 'ollama', model: 'm' })
+        expect(result.spec.defaults).toEqual({})
+        expect(callProcess).not.toHaveBeenCalledWith(
+            'broker',
+            'engine:get-settings',
+            expect.anything()
+        )
     })
 })

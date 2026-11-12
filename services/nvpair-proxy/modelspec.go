@@ -60,6 +60,11 @@ type modelSpec struct {
 	ExpertCount int   `json:"expertCount,omitempty"`
 	ExpertBytes int64 `json:"expertBytes,omitempty"`
 
+	// Defaults are the window, slots and reply length the engine runs this
+	// model with now, or the model's own defaults, for the planner to start
+	// from.
+	Defaults *modelDefaults `json:"defaults,omitempty"`
+
 	Layers          int `json:"layers,omitempty"`
 	AttentionLayers int `json:"attentionLayers,omitempty"`
 	KVHeads         int `json:"kvHeads,omitempty"`
@@ -340,9 +345,10 @@ func (c *specClient) describe(ctx context.Context, engine string, base *url.URL,
 
 func (c *specClient) describeOllama(ctx context.Context, base *url.URL, s *modelSpec, knownParallel int) error {
 	var show struct {
-		ModelInfo map[string]any `json:"model_info"`
-		Tensors   []ollamaTensor `json:"tensors"`
-		Details   struct {
+		Parameters string         `json:"parameters"`
+		ModelInfo  map[string]any `json:"model_info"`
+		Tensors    []ollamaTensor `json:"tensors"`
+		Details    struct {
 			Format string `json:"format"`
 		} `json:"details"`
 	}
@@ -369,12 +375,6 @@ func (c *specClient) describeOllama(ctx context.Context, base *url.URL, s *model
 			}
 		}
 	}
-	if s.Source != "" {
-		return nil
-	}
-
-	// No usable architecture metadata (safetensors/MLX models, and some
-	// newer GGUF ones): measure a loaded copy instead.
 	var ps struct {
 		Models []struct {
 			Name          string `json:"name"`
@@ -382,7 +382,26 @@ func (c *specClient) describeOllama(ctx context.Context, base *url.URL, s *model
 			ContextLength int64  `json:"context_length"`
 		} `json:"models"`
 	}
-	if err := c.do(ctx, http.MethodGet, base, "/api/ps", nil, nil, &ps); err == nil {
+	psErr := c.do(ctx, http.MethodGet, base, "/api/ps", nil, nil, &ps)
+	// The window a loaded copy runs with is in force; the model's num_ctx
+	// is what Ollama loads it with otherwise.
+	if psErr == nil {
+		for _, m := range ps.Models {
+			if m.Name == s.Model {
+				s.setDefault(defaultWindow, m.ContextLength, "engine")
+			}
+		}
+	}
+	params := ollamaParameters(show.Parameters)
+	s.setDefault(defaultWindow, params["num_ctx"], "model")
+	s.setDefault(defaultReply, params["num_predict"], "model")
+	if s.Source != "" {
+		return nil
+	}
+
+	// No usable architecture metadata (safetensors/MLX models, and some
+	// newer GGUF ones): measure a loaded copy instead.
+	if psErr == nil {
 		for _, m := range ps.Models {
 			if m.Name != s.Model || m.ContextLength <= 0 || s.WeightsBytes <= 0 || m.Size <= s.WeightsBytes {
 				continue
@@ -439,12 +458,11 @@ func fileSpec(path string, s *modelSpec) error {
 }
 
 func (c *specClient) describeLlamaCPP(ctx context.Context, base *url.URL, s *modelSpec) error {
-	var props struct {
-		ModelPath string `json:"model_path"`
-	}
+	var props llamaCPPProps
 	if err := c.do(ctx, http.MethodGet, base, "/props", url.Values{"model": {s.Model}}, nil, &props); err != nil {
 		return err
 	}
+	s.applyLlamaCPPDefaults(props)
 	if props.ModelPath == "" {
 		s.Notes = append(s.Notes, "llama.cpp did not report the model file; load the model first")
 		return nil
@@ -455,11 +473,12 @@ func (c *specClient) describeLlamaCPP(ctx context.Context, base *url.URL, s *mod
 func (c *specClient) describeLMStudio(ctx context.Context, base *url.URL, s *modelSpec) error {
 	var list struct {
 		Models []struct {
-			Key              string `json:"key"`
-			Path             string `json:"path"`
-			Format           string `json:"format"`
-			SizeBytes        int64  `json:"size_bytes"`
-			MaxContextLength int64  `json:"max_context_length"`
+			Key              string             `json:"key"`
+			Path             string             `json:"path"`
+			Format           string             `json:"format"`
+			SizeBytes        int64              `json:"size_bytes"`
+			MaxContextLength int64              `json:"max_context_length"`
+			LoadedInstances  []lmStudioInstance `json:"loaded_instances"`
 		} `json:"models"`
 	}
 	if err := c.do(ctx, http.MethodGet, base, "/api/v1/models", nil, nil, &list); err != nil {
@@ -472,6 +491,7 @@ func (c *specClient) describeLMStudio(ctx context.Context, base *url.URL, s *mod
 		s.WeightsBytes = m.SizeBytes
 		s.MaxContextTokens = m.MaxContextLength
 		s.Format = m.Format
+		s.applyLMStudioDefaults(m.LoadedInstances)
 		if path := c.lmStudioFile(m.Path); path != "" {
 			saved := *s
 			if err := fileSpec(path, s); err != nil {

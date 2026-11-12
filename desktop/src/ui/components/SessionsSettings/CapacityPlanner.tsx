@@ -31,6 +31,7 @@ import {
     windowStops
 } from './capacity-sliders'
 import TextFitDetails from './TextFitDetails'
+import { STARTING_LABEL, startingValues, type StartingValues, withStop } from './starting-values'
 
 const GB = 1024 ** 3
 
@@ -64,6 +65,22 @@ const SOURCE_TEXT: Record<string, string> = {
 const FALLBACK_WINDOW = 32768
 
 const DANGER_TEXT = { color: 'var(--text-color-feedback-danger)' }
+
+/** Where a slider's starting value came from, while it still sits there. */
+function StartMark({
+    start,
+    now
+}: {
+    start: { value: number; source: keyof typeof STARTING_LABEL } | undefined
+    now: number
+}) {
+    if (!start || start.value !== now) return null
+    return (
+        <Text kind="body/regular/sm" className="text-subtle-color">
+            {STARTING_LABEL[start.source]}
+        </Text>
+    )
+}
 
 function Choice<T extends string>({
     options,
@@ -179,6 +196,9 @@ export default function CapacityPlanner({
     const [kbPerToken, setKbPerToken] = useState('')
     const [plan, setPlan] = useState<CapacityPlan | null>(null)
     const [busy, setBusy] = useState(false)
+    // A model with no saved plan starts from what its engine and the model
+    // report; null until the first answer says what that is.
+    const [starts, setStarts] = useState<StartingValues | null>(saved ? {} : null)
 
     const weightsN = weightsGb.trim() === '' ? 0 : decimal(weightsGb)
     const kbN = kbPerToken.trim() === '' ? 0 : decimal(kbPerToken)
@@ -197,9 +217,24 @@ export default function CapacityPlanner({
                     windowTokens: windowTokens ?? undefined,
                     offloadExperts: offload || undefined,
                     weightsBytes: weightsN ? Math.round(weightsN * GB) : undefined,
-                    kvBytesPerToken: kbN ? Math.round(kbN * 1024) : undefined
+                    kvBytesPerToken: kbN ? Math.round(kbN * 1024) : undefined,
+                    withLaunchDefaults: starts === null || undefined
                 })
                 .then(result => {
+                    if (starts === null) {
+                        const found = startingValues(result.spec)
+                        setStarts(found)
+                        if (found.sessions) {
+                            setSessions(found.sessions.value)
+                            setSessionsTouched(true)
+                        }
+                        if (found.reply) setReply(found.reply.value)
+                        if (found.window && found.window.value !== result.windowTokens) {
+                            // Size the model again for its starting window.
+                            setWindowTokens(found.window.value)
+                            return
+                        }
+                    }
                     // A model that does not report its maximum needs a window
                     // to be sized at all.
                     if (windowTokens === null && /maximum context is unknown/.test(result.error)) {
@@ -227,16 +262,20 @@ export default function CapacityPlanner({
         kbN,
         manualValid,
         sessionsTouched,
+        starts,
         onError
     ])
 
     const stops = useMemo(
-        () => windowStops(plan?.spec.maxContextTokens ?? 0),
-        [plan?.spec.maxContextTokens]
+        () => withStop(windowStops(plan?.spec.maxContextTokens ?? 0), starts?.window?.value),
+        [plan?.spec.maxContextTokens, starts?.window?.value]
     )
     const windowIndex = nearestStop(stops, windowTokens ?? stops[stops.length - 1])
     const windowNow = stops[windowIndex]
-    const replyOptions = useMemo(() => replyStops(windowNow), [windowNow])
+    const replyOptions = useMemo(
+        () => withStop(replyStops(windowNow), starts?.reply?.value),
+        [windowNow, starts?.reply?.value]
+    )
     const replyIndex = nearestStop(replyOptions, replyBudget(windowNow, reply))
     const replyNow = replyOptions[replyIndex]
     const messageTokens = windowNow - replyNow
@@ -294,7 +333,10 @@ export default function CapacityPlanner({
             <Stack gap="1">
                 <Flex justify="between" gap="3">
                     <Text kind="body/semibold/sm">Context window per session</Text>
-                    <Text kind="body/semibold/sm">{tokens(stops[windowIndex])} tokens</Text>
+                    <Flex gap="2" align="center">
+                        <StartMark start={starts?.window} now={windowNow} />
+                        <Text kind="body/semibold/sm">{tokens(stops[windowIndex])} tokens</Text>
+                    </Flex>
                 </Flex>
                 <SliderTone over={over}>
                     <Slider
@@ -313,7 +355,10 @@ export default function CapacityPlanner({
             <Stack gap="1">
                 <Flex justify="between" gap="3">
                     <Text kind="body/semibold/sm">Room for the reply</Text>
-                    <Text kind="body/semibold/sm">{tokens(replyNow)} tokens</Text>
+                    <Flex gap="2" align="center">
+                        <StartMark start={starts?.reply} now={replyNow} />
+                        <Text kind="body/semibold/sm">{tokens(replyNow)} tokens</Text>
+                    </Flex>
                 </Flex>
                 <Slider
                     min={0}
@@ -337,12 +382,15 @@ export default function CapacityPlanner({
             <Stack gap="1">
                 <Flex justify="between" gap="3">
                     <Text kind="body/semibold/sm">Sessions at once</Text>
-                    <Text
-                        kind="body/semibold/sm"
-                        style={chosen > fit && plan && !plan.error ? DANGER_TEXT : undefined}
-                    >
-                        {chosen} {plan && !plan.error ? `(${fit} fit)` : ''}
-                    </Text>
+                    <Flex gap="2" align="center">
+                        <StartMark start={starts?.sessions} now={chosen} />
+                        <Text
+                            kind="body/semibold/sm"
+                            style={chosen > fit && plan && !plan.error ? DANGER_TEXT : undefined}
+                        >
+                            {chosen} {plan && !plan.error ? `(${fit} fit)` : ''}
+                        </Text>
+                    </Flex>
                 </Flex>
                 <SliderTone over={over}>
                     <Slider

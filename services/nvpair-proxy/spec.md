@@ -806,6 +806,19 @@ reading the model:
   `windowTokens`, `replyTokens`, `conversationLimitTokens` and
   `postRoomTokens`; `capacity/plan` takes `replyTokens` and returns
   `replyTokens` and `postTokens`.
+- **Starting values** (`spec.defaults`): what the engine runs the model with
+  now, or the model's own defaults, for the desktop to start a model with no
+  saved plan from. Each of `window`, `sessions` and `reply` is
+  `{"value","source"}` with `source` `engine` (in force now) or `model` (the
+  model's parameter), and is left out when nothing reports it. Ollama: the
+  loaded copy's `/api/ps` `context_length`, else `num_ctx` from `/api/show`
+  `parameters`; `num_predict` (when positive) for the reply. llama.cpp:
+  `/props` `default_generation_settings.n_ctx` (per slot; top-level `n_ctx` on
+  older servers), `total_slots`, and a positive `n_predict`. LM Studio: the
+  first loaded instance's `config.context_length` and `config.parallel` from
+  `/api/v1/models`. The desktop fills what is still missing from the engine's
+  launch settings (`OLLAMA_CONTEXT_LENGTH`, `OLLAMA_NUM_PARALLEL`; llama.cpp
+  `--ctx-size` ÷ `--parallel`) with `source` `launch`.
 - A model that cannot be sized returns a result with `error` and whatever
   `spec` was learned, not a JSON-RPC error.
 

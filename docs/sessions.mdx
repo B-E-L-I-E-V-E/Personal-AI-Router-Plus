@@ -188,6 +188,15 @@ models from other nodes; update it first.
 
 ![A model row on the Overview with its summary: 4 sessions, 40,960 per session, 8,192 response, 32,768 post.](assets/onboarding/sessions/07-model-row-summary.png)
 
+A model with no saved plan opens on what is in force for it, not on generic
+values: the window, session count and reply length its engine runs it with
+now, from the loaded model or the engine's launch settings, or else the
+model's own defaults. A small marker beside each value says where it came
+from (*engine now*, *engine settings*, *model default*, or *model maximum*
+for the window the model was trained for) while the slider still sits there.
+A value nothing reports keeps the planner's own default: as many sessions as
+fit, and 8,192 tokens for the reply.
+
 In the dialog:
 
 1. Drag **Context window per session**. It stops at 2K, 4K, 8K and so on up
@@ -342,7 +351,8 @@ the model's `messageTokens`; after it, `postRoomTokens` on the session.
 
 The planner is available to the desktop through the proxy's JSON-RPC methods
 `capacity/plan` (which takes and returns `replyTokens`, and returns
-`postTokens`), `capacity/planner` and `capacity/planner-set` (plans carry
+`postTokens` and, in `spec.defaults`, the window, slots and reply length the
+engine runs the model with now or the model sets), `capacity/planner` and `capacity/planner-set` (plans carry
 `replyTokens`).
 
 Calls that change a session must send the owner's `X-PAIR-Agent-ID`. The
