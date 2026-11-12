@@ -89,6 +89,14 @@ func main() {
 	if err := proxy.sessions.configure(sessionFlags(policy)); err != nil {
 		log.Fatalf("invalid session flags: %v", err)
 	}
+	if path, err := appdir.Path(webFactsFileName); err != nil {
+		slog.Warn("web lookups of model pages will not persist", "err", err)
+	} else {
+		proxy.webFacts.path = path
+		if err := proxy.webFacts.load(); err != nil {
+			slog.Warn("ignoring unreadable web lookups", "path", path, "err", err)
+		}
+	}
 	if path, err := appdir.Path(plannerFileName); err != nil {
 		slog.Warn("capacity plans will not persist", "err", err)
 	} else {

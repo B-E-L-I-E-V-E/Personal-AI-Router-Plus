@@ -42,7 +42,12 @@ import type { ServiceError } from '@/shared/types/errors'
 import type { NodeItem } from '@/shared/types/nodes'
 import type { NodeItemMetrics } from '@/shared/types/metrics'
 import type { Workload } from '@/shared/types/workloads'
-import type { ModelDetails, ModelDetailsRequest } from '@/shared/types/model-details'
+import type {
+    ModelDetails,
+    ModelDetailsRequest,
+    WebFactsRequest,
+    WebFactsStatus
+} from '@/shared/types/model-details'
 import type {
     ApplyPlanResult,
     CapacityChange,
@@ -151,6 +156,10 @@ export interface WsInvokeChannelMap {
         request: { engine: string; model: string }
         response: BenchmarkRun
     }
+
+    // Filling gaps from the model's web page (nvpair-proxy model/web-facts)
+    'engine:model-web-facts': { request: WebFactsRequest; response: WebFactsStatus }
+    'engine:model-web-facts-start': { request: WebFactsRequest; response: WebFactsStatus }
 }
 
 export type WsInvokeChannel = keyof WsInvokeChannelMap

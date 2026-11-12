@@ -44,7 +44,7 @@ import {
     planCapacity,
     setPlanner
 } from '@/electron/service-bridge/capacity-planner'
-import { getModelDetails } from './model-details'
+import { getModelDetails, getModelWebFacts, startModelWebFacts } from './model-details'
 import {
     clearPerformance,
     getPerformanceLive,
@@ -756,7 +756,9 @@ const EMPTY_SERVICE_BRIDGE_HANDLERS: BridgeHandlerMap = {
     'performance:get-report': () => getPerformanceReport(),
     'performance:get-live': () => getPerformanceLive(),
     'performance:clear': () => clearPerformance(),
-    'performance:run-benchmark': payload => runBenchmark(payload)
+    'performance:run-benchmark': payload => runBenchmark(payload),
+    'engine:model-web-facts': payload => getModelWebFacts(payload),
+    'engine:model-web-facts-start': payload => startModelWebFacts(payload)
 }
 
 export function handleServiceBridgeInvoke<C extends WsInvokeChannel>(

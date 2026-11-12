@@ -53,3 +53,68 @@ export interface ModelDetailsRequest {
     nodeId: string
     model: string
 }
+
+/** A value read from a model's page: text, a number or a flag. */
+export type WebFactValue = string | number | boolean
+
+/**
+ * One value a small local model read from the model's web page
+ * (nvpair-proxy `model/web-facts`). `fills` names the model-details field it
+ * fills because the engine left that field empty; it is '' when the engine
+ * already reported the field, whose answer wins.
+ */
+export interface WebFact {
+    field: string
+    value: WebFactValue
+    /** The page the value was read from. */
+    source: string
+    fills: string
+}
+
+/** Two or more pages, or parts of one, that gave different values. */
+export interface WebFactConflict {
+    field: string
+    values: { value: WebFactValue; source: string }[]
+}
+
+export interface WebFactsPage {
+    url: string
+    chunks: number
+    note: string
+}
+
+/** One web lookup's result, kept apart from what the engine reported. */
+export interface WebFacts {
+    /** The model that read the pages. */
+    reader: string
+    readAt: number
+    pages: WebFactsPage[]
+    facts: WebFact[]
+    conflicts: WebFactConflict[]
+    notes: string[]
+}
+
+export type WebFactsJobState = 'running' | 'done' | 'failed'
+
+export interface WebFactsJob {
+    state: WebFactsJobState
+    phase: string
+    reader: string
+    chunksTotal: number
+    chunksRead: number
+    error: string
+}
+
+export interface WebFactsStatus {
+    /** The Ollama model this node reads pages with (a setting). */
+    readerModel: string
+    job: WebFactsJob | null
+    result: WebFacts | null
+    /** Why the status could not be read, in plain words. */
+    error: string
+}
+
+export interface WebFactsRequest extends ModelDetailsRequest {
+    /** Starting only: the reader model to use and save; '' keeps the setting. */
+    readerModel?: string
+}

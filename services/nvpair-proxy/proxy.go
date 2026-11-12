@@ -450,6 +450,9 @@ type Proxy struct {
 	// here are attributed to it.
 	selfNodeID atomic.Value
 
+	// webFacts holds web lookups of models' pages (model/web-facts).
+	webFacts *webFactsStore
+
 	// activeRequests counts requests in progress on any facade or on the
 	// cluster ingress; the idle check reads it.
 	activeRequests atomic.Int64
@@ -467,6 +470,7 @@ func NewProxy(codec *Codec) *Proxy {
 		planner:  newPlannerStore(),
 		perf:     newPerfStore(),
 		live:     newLiveRegistry(),
+		webFacts: newWebFactsStore(),
 	}
 	p.sessions.onPeerRelease = p.sendPeerRelease
 	return p
@@ -3234,6 +3238,26 @@ func (p *Proxy) handleMessage(msg *Message) {
 		}
 		if err := p.codec.Respond(msg.ID, map[string]any{"run": run}); err != nil {
 			log.Printf("failed to respond to performance/benchmark: %v", err)
+		}
+
+	case "model/web-facts-start":
+		res, err := p.startWebFacts(msg.Params)
+		if err != nil {
+			p.codec.RespondError(msg.ID, -32602, "invalid params: "+err.Error())
+			return
+		}
+		if err := p.codec.Respond(msg.ID, res); err != nil {
+			log.Printf("failed to respond to model/web-facts-start: %v", err)
+		}
+
+	case "model/web-facts":
+		res, err := p.webFactsStatus(msg.Params)
+		if err != nil {
+			p.codec.RespondError(msg.ID, -32602, "invalid params: "+err.Error())
+			return
+		}
+		if err := p.codec.Respond(msg.ID, res); err != nil {
+			log.Printf("failed to respond to model/web-facts: %v", err)
 		}
 
 	case "capacity/planner":
