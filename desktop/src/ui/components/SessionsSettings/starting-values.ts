@@ -53,7 +53,7 @@ export function startingValues(spec: ModelSpec): StartingValues {
 }
 
 /** Slider stops with value added in order, so a starting value is a stop. */
-export function withStop(stops: number[], value: number | undefined): number[] {
+export function withStartStop(stops: number[], value: number | undefined): number[] {
     if (!value || stops.includes(value) || value > stops[stops.length - 1]) return stops
     return [...stops, value].sort((a, b) => a - b)
 }

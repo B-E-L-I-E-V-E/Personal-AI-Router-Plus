@@ -32,8 +32,29 @@ type modelSpec struct {
 	Architecture string `json:"architecture,omitempty"`
 	Format       string `json:"format,omitempty"`
 
-	WeightsBytes     int64 `json:"weightsBytes"`
-	MaxContextTokens int64 `json:"maxContextTokens,omitempty"`
+	// WeightsBytes is the memory the weights take once loaded, which the
+	// planner counts: TensorBytes when the tensor table gives it, else the
+	// download size as an estimate. WeightsSource says which ("tensors",
+	// "download", or "" when neither is known).
+	WeightsBytes  int64  `json:"weightsBytes"`
+	WeightsSource string `json:"weightsSource,omitempty"`
+	// DownloadBytes is the model's size on disk, as the engine lists it
+	// (DownloadSource: "ollama-tags", "lmstudio-models") or as the GGUF files
+	// add up ("gguf-files").
+	DownloadBytes  int64  `json:"downloadBytes,omitempty"`
+	DownloadSource string `json:"downloadSource,omitempty"`
+	// TensorBytes is the sum of the weight tensors in the model's tensor
+	// table: what the weights occupy in memory once loaded, since quantized
+	// tensors load as stored. Zero when a tensor type is unknown (MLX and
+	// other non-GGUF formats) or the table is unavailable.
+	TensorBytes int64 `json:"tensorBytes,omitempty"`
+	// Loaded* is what Ollama's /api/ps reports for a copy loaded now: its
+	// whole footprint (weights, context cache and working buffers), the part
+	// on the GPU, and the context it was loaded with.
+	LoadedBytes         int64 `json:"loadedBytes,omitempty"`
+	LoadedVRAMBytes     int64 `json:"loadedVramBytes,omitempty"`
+	LoadedContextTokens int64 `json:"loadedContextTokens,omitempty"`
+	MaxContextTokens    int64 `json:"maxContextTokens,omitempty"`
 	// ContextSource is "web" when MaxContextTokens was read from the model's
 	// page (model/web-facts) because the engine and the file gave none;
 	// ContextPage is that page and ContextReader the model that read it.
@@ -237,6 +258,25 @@ func max64(a, b int64) int64 {
 	return b
 }
 
+// downloadOverTensors is how much more than the weight tensors a download may
+// hold (tokenizer and other metadata) before the rest is taken to be files
+// that load too, such as a vision projector.
+const downloadOverTensors = 1.10
+
+// settleWeights chooses the weight size the planner counts from the download
+// size and the tensor sum, and says where it came from.
+func (s *modelSpec) settleWeights() {
+	switch {
+	case s.TensorBytes > 0 && float64(s.DownloadBytes) > float64(s.TensorBytes)*downloadOverTensors:
+		s.WeightsBytes, s.WeightsSource = s.DownloadBytes, "download"
+		s.Notes = append(s.Notes, fmt.Sprintf("the download holds %.1f GB more than the weight tensors (such as a vision projector), which may load too; the plan counts the download size", float64(s.DownloadBytes-s.TensorBytes)/float64(gib)))
+	case s.TensorBytes > 0:
+		s.WeightsBytes, s.WeightsSource = s.TensorBytes, "tensors"
+	case s.DownloadBytes > 0:
+		s.WeightsBytes, s.WeightsSource = s.DownloadBytes, "download"
+	}
+}
+
 // jsonToMeta converts Ollama's model_info (JSON numbers, strings and arrays) to the
 // GGUF value form applyArchitecture reads.
 func jsonToMeta(info map[string]any) map[string]ggufValue {
@@ -361,6 +401,9 @@ func (c *specClient) describeOllama(ctx context.Context, base *url.URL, s *model
 	if tensors, ok := ollamaTensors(show.Tensors); ok {
 		s.applyExperts(meta, tensors)
 	}
+	if b, ok := ollamaTensorBytes(show.Tensors); ok {
+		s.TensorBytes = b
+	}
 
 	var tags struct {
 		Models []struct {
@@ -371,14 +414,20 @@ func (c *specClient) describeOllama(ctx context.Context, base *url.URL, s *model
 	if err := c.do(ctx, http.MethodGet, base, "/api/tags", nil, nil, &tags); err == nil {
 		for _, m := range tags.Models {
 			if m.Name == s.Model {
-				s.WeightsBytes = m.Size
+				s.DownloadBytes, s.DownloadSource = m.Size, "ollama-tags"
 			}
 		}
 	}
+	s.settleWeights()
+
+	// A loaded copy: its footprint is reported, and when the architecture
+	// is missing (safetensors/MLX models, and some newer GGUF ones) it is
+	// measured for the per-token cost.
 	var ps struct {
 		Models []struct {
 			Name          string `json:"name"`
 			Size          int64  `json:"size"`
+			SizeVRAM      int64  `json:"size_vram"`
 			ContextLength int64  `json:"context_length"`
 		} `json:"models"`
 	}
@@ -395,15 +444,13 @@ func (c *specClient) describeOllama(ctx context.Context, base *url.URL, s *model
 	params := ollamaParameters(show.Parameters)
 	s.setDefault(defaultWindow, params["num_ctx"], "model")
 	s.setDefault(defaultReply, params["num_predict"], "model")
-	if s.Source != "" {
-		return nil
-	}
-
-	// No usable architecture metadata (safetensors/MLX models, and some
-	// newer GGUF ones): measure a loaded copy instead.
 	if psErr == nil {
 		for _, m := range ps.Models {
-			if m.Name != s.Model || m.ContextLength <= 0 || s.WeightsBytes <= 0 || m.Size <= s.WeightsBytes {
+			if m.Name != s.Model {
+				continue
+			}
+			s.LoadedBytes, s.LoadedVRAMBytes, s.LoadedContextTokens = m.Size, m.SizeVRAM, m.ContextLength
+			if s.Source != "" || m.ContextLength <= 0 || s.WeightsBytes <= 0 || m.Size <= s.WeightsBytes {
 				continue
 			}
 			slots := knownParallel
@@ -424,7 +471,8 @@ func (c *specClient) describeOllama(ctx context.Context, base *url.URL, s *model
 
 var shardSuffix = regexp.MustCompile(`-(\d{5})-of-(\d{5})\.gguf$`)
 
-// fileSpec reads a GGUF model file (and its shards' sizes) into s.
+// fileSpec reads a GGUF model file (and its shards' sizes) into s; the
+// caller settles the weight size.
 func fileSpec(path string, s *modelSpec) error {
 	meta, tensors, err := readGGUFFile(path)
 	if err != nil {
@@ -441,6 +489,7 @@ func fileSpec(path string, s *modelSpec) error {
 		shards, _ = filepath.Glob(prefix + "-*-of-" + m[2] + ".gguf")
 	}
 	var total int64
+	complete := true
 	for _, p := range shards {
 		if st, err := os.Stat(p); err == nil {
 			total += st.Size()
@@ -450,9 +499,15 @@ func fileSpec(path string, s *modelSpec) error {
 		}
 		if _, more, err := readGGUFFile(p); err == nil {
 			tensors = append(tensors, more...)
+		} else {
+			complete = false
 		}
 	}
-	s.WeightsBytes = total
+	s.DownloadBytes, s.DownloadSource = total, "gguf-files"
+	s.TensorBytes = 0
+	if b, ok := tensorBytes(tensors); ok && complete {
+		s.TensorBytes = b
+	}
 	s.applyExperts(meta, tensors)
 	return nil
 }
@@ -467,7 +522,11 @@ func (c *specClient) describeLlamaCPP(ctx context.Context, base *url.URL, s *mod
 		s.Notes = append(s.Notes, "llama.cpp did not report the model file; load the model first")
 		return nil
 	}
-	return fileSpec(props.ModelPath, s)
+	if err := fileSpec(props.ModelPath, s); err != nil {
+		return err
+	}
+	s.settleWeights()
+	return nil
 }
 
 func (c *specClient) describeLMStudio(ctx context.Context, base *url.URL, s *modelSpec) error {
@@ -488,7 +547,7 @@ func (c *specClient) describeLMStudio(ctx context.Context, base *url.URL, s *mod
 		if m.Key != s.Model {
 			continue
 		}
-		s.WeightsBytes = m.SizeBytes
+		s.DownloadBytes, s.DownloadSource = m.SizeBytes, "lmstudio-models"
 		s.MaxContextTokens = m.MaxContextLength
 		s.Format = m.Format
 		s.applyLMStudioDefaults(m.LoadedInstances)
@@ -498,13 +557,16 @@ func (c *specClient) describeLMStudio(ctx context.Context, base *url.URL, s *mod
 				*s = saved
 				s.Notes = append(s.Notes, "could not read the model file: "+err.Error())
 			}
-			if saved.WeightsBytes > 0 {
-				s.WeightsBytes = saved.WeightsBytes
+			// LM Studio's listed size covers the whole model folder (a
+			// vision projector included); the GGUF read gives the tensors.
+			if saved.DownloadBytes > 0 {
+				s.DownloadBytes, s.DownloadSource = saved.DownloadBytes, saved.DownloadSource
 			}
 			if saved.MaxContextTokens > 0 && s.MaxContextTokens == 0 {
 				s.MaxContextTokens = saved.MaxContextTokens
 			}
 		}
+		s.settleWeights()
 		if s.Source == "" {
 			s.Notes = append(s.Notes, "LM Studio's model file could not be read; enter the context cost per token")
 		}
@@ -512,6 +574,19 @@ func (c *specClient) describeLMStudio(ctx context.Context, base *url.URL, s *mod
 	}
 	s.Notes = append(s.Notes, "LM Studio does not list this model")
 	return nil
+}
+
+// lmStudioModelsDir is LM Studio's models folder: the one its settings name
+// (users often move it to a bigger drive), else the default under home.
+func lmStudioModelsDir(home string) string {
+	var settings struct {
+		DownloadsFolder string `json:"downloadsFolder"`
+	}
+	if raw, err := os.ReadFile(filepath.Join(home, ".lmstudio", "settings.json")); err == nil &&
+		json.Unmarshal(raw, &settings) == nil && filepath.IsAbs(settings.DownloadsFolder) {
+		return filepath.Clean(settings.DownloadsFolder)
+	}
+	return filepath.Join(home, ".lmstudio", "models")
 }
 
 // lmStudioFile resolves LM Studio's relative model path to a GGUF file in its
@@ -524,7 +599,7 @@ func (c *specClient) lmStudioFile(rel string) string {
 	if err != nil {
 		return ""
 	}
-	root := filepath.Join(home, ".lmstudio", "models")
+	root := lmStudioModelsDir(home)
 	p := filepath.Join(root, filepath.FromSlash(rel))
 	if !strings.HasPrefix(p, root+string(filepath.Separator)) {
 		return ""

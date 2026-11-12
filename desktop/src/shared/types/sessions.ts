@@ -79,7 +79,22 @@ export interface ModelSpec {
     source: string
     architecture: string
     format: string
+    /**
+     * The weights' size the planner counts: in memory once loaded when the
+     * tensor table gives it, else the download size as an estimate.
+     */
     weightsBytes: number
+    /** 'tensors', 'download', or '' when the size is unknown. */
+    weightsSource: string
+    /** Size on disk, and where it was read ('ollama-tags', 'lmstudio-models', 'gguf-files'). */
+    downloadBytes: number
+    downloadSource: string
+    /** Sum of the weight tensors: what the weights take in memory once loaded (0 when unknown). */
+    tensorBytes: number
+    /** A copy loaded now (Ollama /api/ps): its whole footprint, the GPU part, its context. */
+    loadedBytes: number
+    loadedVramBytes: number
+    loadedContextTokens: number
     maxContextTokens: number
     /**
      * 'web' when maxContextTokens was read from the model's page because the
@@ -156,6 +171,10 @@ export interface CapacityPlan {
     totalBytes: number
     reserveBytes: number
     weightsBytes: number
+    /** Where weightsBytes came from: the spec's weightsSource, or 'manual'. */
+    weightsSource: string
+    /** Where the per-token cost came from: the spec's source, or 'manual'. */
+    kvSource: string
     /** The weights on the GPU: all, or all but the experts when offloaded. */
     gpuWeightsBytes: number
     otherModelsBytes: number

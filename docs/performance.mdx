@@ -101,10 +101,19 @@ change the live figures.
 
 ## Benchmark
 
-The benchmark is a per-model test. Choose a model in **Model benchmark** and
-**Run benchmark**, or use **Benchmark** on a model's row. It sends four fixed
-requests to the model through PAIR, one at a time, and records the same
-figures; each run shows the node that served it:
+The benchmark is a per-model test on the node you choose. In **Model
+benchmark**, the list offers each model on each node that has it (for example
+`qwen3:0.6b · Ollama · ULTRON`); choose one and **Run benchmark**. **Benchmark**
+on a model's row in a node's card runs it on that node. It sends four fixed
+requests to the model on that node, one at a time, and records the same
+figures. Every step runs on the chosen node, whether it is this one or another
+in the cluster: PAIR never sends a step elsewhere, so the figures are that
+node's. A node that cannot serve the model (it does not have it, is paused or
+stopped, or cannot be reached) fails the step at once.
+
+Running a benchmark on another node needs nothing new on that node, only that
+this machine can reach it over the cluster link (see the firewall note in
+[Sessions and Context Capacity](sessions.mdx#planning-another-nodes-models)):
 
 | Step | Request | Thinking | Measures |
 |---|---|---|---|
@@ -140,9 +149,15 @@ The same figures are available from any engine port on this machine:
 curl -s http://127.0.0.1:11434/pair/v1/performance
 curl -s -X POST http://127.0.0.1:11434/pair/v1/performance/benchmark \
   -d '{"model":"qwen3:0.6b"}'
+# On a chosen node, by the node ID PAIR shows for it:
+curl -s -X POST http://127.0.0.1:11434/pair/v1/performance/benchmark \
+  -d '{"model":"qwen3:0.6b","nodeId":"7c9e6679-7425-40de-944b-e07fc1f90ae7"}'
 curl -s -X DELETE http://127.0.0.1:11434/pair/v1/performance
 ```
 
 `POST …/benchmark` runs on the engine whose port you call and answers `202`
-with the run; poll `GET /pair/v1/performance` for its progress. See the API
+with the run. With `nodeId`, every step runs on that node, and the run reports
+it as `nodeId`; without, PAIR routes each step as it would any request. A
+`nodeId` that is neither this node nor a reachable cluster member is refused
+with `400`; poll `GET /pair/v1/performance` for its progress. See the API
 reference for the full report.

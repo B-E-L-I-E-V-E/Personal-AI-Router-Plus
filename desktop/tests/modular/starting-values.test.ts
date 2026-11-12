@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { ModelDefaults, ModelSpec } from '@/shared/types/sessions'
-import { startingValues, withStop } from '@/ui/components/SessionsSettings/starting-values'
+import { startingValues, withStartStop } from '@/ui/components/SessionsSettings/starting-values'
 
 function spec(defaults: ModelDefaults, extra: Partial<ModelSpec> = {}): ModelSpec {
     return {
@@ -13,6 +13,13 @@ function spec(defaults: ModelDefaults, extra: Partial<ModelSpec> = {}): ModelSpe
         architecture: 'qwen3_5',
         format: 'gguf',
         weightsBytes: 3 * 1024 ** 3,
+        weightsSource: 'download',
+        downloadBytes: 3 * 1024 ** 3,
+        downloadSource: 'ollama-tags',
+        tensorBytes: 0,
+        loadedBytes: 0,
+        loadedVramBytes: 0,
+        loadedContextTokens: 0,
         maxContextTokens: 262144,
         contextSource: '',
         contextPage: '',
@@ -78,15 +85,15 @@ describe('the planner’s starting values for a model with no saved plan', () =>
     })
 })
 
-describe('withStop', () => {
+describe('withStartStop', () => {
     it('adds a starting value between the slider’s stops', () => {
-        expect(withStop([2048, 32768, 65536], 40960)).toEqual([2048, 32768, 40960, 65536])
+        expect(withStartStop([2048, 32768, 65536], 40960)).toEqual([2048, 32768, 40960, 65536])
     })
 
     it('leaves the stops alone for a value already there, past the top, or none', () => {
         const stops = [2048, 4096]
-        expect(withStop(stops, 4096)).toBe(stops)
-        expect(withStop(stops, 8192)).toBe(stops)
-        expect(withStop(stops, undefined)).toBe(stops)
+        expect(withStartStop(stops, 4096)).toBe(stops)
+        expect(withStartStop(stops, 8192)).toBe(stops)
+        expect(withStartStop(stops, undefined)).toBe(stops)
     })
 })

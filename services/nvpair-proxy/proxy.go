@@ -1263,6 +1263,14 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// the live ones. The mark is PAIR's, so it is not forwarded.
 	benchmark := r.Header.Get(benchmarkHeader) == "1"
 	r.Header.Del(benchmarkHeader)
+	// A benchmark run for a chosen node may be served only by that node, so
+	// its figures are that node's. Honored only on the benchmark's own
+	// requests, and never forwarded.
+	pinNode := ""
+	if benchmark {
+		pinNode = r.Header.Get(benchmarkNodeHeader)
+	}
+	r.Header.Del(benchmarkNodeHeader)
 
 	// Parse the request's model before choosing a node. Model eligibility only
 	// applies to inference routes; control endpoints retain their existing
@@ -1348,6 +1356,19 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	candidates, heldNodes := f.resolveCandidatesHeld(routingModel)
+	if pinNode != "" {
+		candidates = pinCandidates(candidates, pinNode)
+		if len(candidates) == 0 {
+			slog.Info("benchmark request refused: the chosen node cannot serve it",
+				"id", reqID, "request_id", requestID, "node_id", pinNode, "model", model)
+			writeIngressError(w, http.StatusBadGateway, "benchmark-node", errBenchmarkNode.Error())
+			_ = f.notify("proxy/request", RequestEvent{
+				ID: reqID, RequestID: requestID, Method: r.Method, Path: r.URL.Path,
+				Status: http.StatusBadGateway, Duration: time.Since(start).Milliseconds(), Error: errBenchmarkNode.Error(),
+			})
+			return
+		}
+	}
 	if cors.IsPreflight(r) {
 		targets := make([]cors.Target, 0, len(candidates))
 		for _, cand := range candidates {
@@ -1849,6 +1870,13 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			var roundHeld int
 			round, roundHeld = f.resolveCandidatesHeld(routingModel)
+			if pinNode != "" {
+				// A pinned benchmark step does not wait for its node to come
+				// back: the step fails and the run goes on.
+				if round = pinCandidates(round, pinNode); len(round) == 0 {
+					break
+				}
+			}
 			if isInf && model != "" {
 				round = takeHeld(round)
 			}
