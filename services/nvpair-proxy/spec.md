@@ -757,13 +757,28 @@ that.
 (the desktop passes this node's GPUs from node-info). It is pure apart from
 reading the model:
 
+- **Weights' size**: `spec.weightsBytes` is the memory the weights take once
+  loaded. `spec.downloadBytes` is the size on disk (`downloadSource`:
+  `ollama-tags`, `lmstudio-models`, or `gguf-files` for the GGUF files and
+  shards added up); `spec.tensorBytes` is the sum of the weight tensors from
+  the tensor table (Ollama `/api/show` verbose, or the GGUF), zero when any
+  tensor's type is not a ggml one (MLX). `weightsBytes` is `tensorBytes`
+  (`weightsSource: "tensors"`), else `downloadBytes` as an estimate
+  (`"download"`); a download more than 10% larger than the tensors (a vision
+  projector) is counted instead, with a note. For an Ollama model loaded now,
+  `loadedBytes`, `loadedVramBytes` and `loadedContextTokens` are `/api/ps`
+  `size`, `size_vram` and `context_length`: weights, context cache and buffers
+  together. A request's `weightsBytes` and `kvBytesPerToken` (f16) override
+  the spec's; the result's `weightsSource` and `kvSource` are the spec's
+  sources or `"manual"`, and `spec` keeps the model's own values.
 - **Model description** (`modelSpec`). Ollama: `/api/show` (verbose) for the
-  architecture and `/api/tags` for the weights' size; when the architecture is
+  architecture and `/api/tags` for the download size; when the architecture is
   missing (MLX/safetensors models), a loaded copy is measured from `/api/ps`
   as (size − weights) ÷ (context × configured slots). llama.cpp: the GGUF file
   named by `/props?model=` (shards summed). LM Studio: `/api/v1/models` for
-  size and maximum context, and the GGUF in `~/.lmstudio/models` when present.
-  The GGUF reader parses only the metadata section, with bounds on key count,
+  size and maximum context, and the GGUF in LM Studio's models folder when
+  present (the `downloadsFolder` in `~/.lmstudio/settings.json`, else
+  `~/.lmstudio/models`). The GGUF reader parses only the metadata section, with bounds on key count,
   string length and array size.
 - **Cost per token** (f16): Σ over attention layers of KV heads × (key length
   + value length) × 2 bytes. Per-layer `head_count_kv` arrays and
@@ -923,6 +938,16 @@ stays busy. Benchmark requests carry `X-PAIR-Benchmark: 1` (stripped before
 forwarding) and a run-scoped `X-Request-ID`; their records go to the run, never
 into the live figures. The last 20 runs are kept, in memory.
 
+A run may name a node (`nodeId` in either form): this node's own discovery ID
+or a reachable cluster member's, refused otherwise before anything is sent.
+Its steps then also carry `X-PAIR-Benchmark-Node: <nodeId>`, read only next to
+`X-PAIR-Benchmark` and stripped before forwarding, and the facade keeps only
+that node among the candidates, in the first round and every retry round. A
+step the node cannot serve (not advertising the model, paused or stopped, or
+unreachable) is answered `502` `benchmark-node` at once, or ends its retries,
+so the step fails instead of running elsewhere. The run reports the node as
+`nodeId`. Nothing is needed on the chosen node beyond the cluster link.
+
 ### 5.17 Model details
 
 `model/details` `{"engine","model","nodeId"?}` returns what the engine and the
@@ -939,7 +964,8 @@ is omitted, never filled in.
   note says so.
 - **LM Studio**: `/api/v1/models` for type, publisher, display name,
   architecture, quantization, size, parameter string, maximum and loaded
-  context and capabilities, and the GGUF in `~/.lmstudio/models` when present.
+  context and capabilities, and the GGUF in LM Studio's models folder (as for
+  the capacity planner) when present.
   The engine's own answer wins where it and the file disagree.
 - **GGUF** `general.*` keys: `name`, `description`, `author`/`organization`,
   `license`, `size_label`, `parameter_count`, `file_type` (named as llama.cpp

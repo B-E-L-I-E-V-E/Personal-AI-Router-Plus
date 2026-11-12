@@ -149,7 +149,8 @@ export interface IPerformanceApi {
     /** Forget the figures and finished benchmark runs. */
     clear(): Promise<null>
     /** Run the fixed benchmark on a model; engine is the proxy's engine name. */
-    runBenchmark(engine: string, model: string): Promise<BenchmarkRun>
+    /** Start the benchmark; with a node ID, every step runs on that node. */
+    runBenchmark(engine: string, model: string, nodeId?: string): Promise<BenchmarkRun>
 }
 
 export interface INodeStateApi {
@@ -265,8 +266,8 @@ export function createPairApi(transport: ServiceTransport): IPairApi {
             getReport: () => transport.invoke('performance:get-report'),
             getLive: () => transport.invoke('performance:get-live'),
             clear: () => transport.invoke('performance:clear'),
-            runBenchmark: (engine, model) =>
-                transport.invoke('performance:run-benchmark', { engine, model })
+            runBenchmark: (engine, model, nodeId) =>
+                transport.invoke('performance:run-benchmark', { engine, model, nodeId })
         },
         nodeState: {
             getAll: () => transport.invoke('node-state:get-all'),

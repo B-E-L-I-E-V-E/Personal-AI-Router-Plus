@@ -223,6 +223,7 @@ function parseRun(value: JsonValue | undefined): BenchmarkRun | null {
         id,
         engine: stringValue(obj.engine),
         model: stringValue(obj.model),
+        nodeId: stringValue(obj.nodeId),
         state: stateValue(obj.state),
         startedAt: numberValue(obj.startedAt),
         finishedAt: optionalNumber(obj.finishedAt),
@@ -265,17 +266,20 @@ export async function clearPerformance(): Promise<null> {
     return null
 }
 
-/** Start the benchmark for a model on the engine (proxy name) that serves it. */
+/**
+ * Start the benchmark for a model on the engine (proxy name) that serves it.
+ * With a node ID every step runs on that node, this one or a cluster peer.
+ */
 export async function runBenchmark(request?: {
     engine: string
     model: string
+    nodeId?: string
 }): Promise<BenchmarkRun> {
     const engine = proxyEngineFromManagerId(request?.engine ?? '')
     if (!engine || !request?.model) throw new Error('Choose a model to benchmark')
-    const result = await getModularSupervisor().callProxy(engine, 'performance/benchmark', {
-        engine: request.engine,
-        model: request.model
-    })
+    const params: JsonObject = { engine: request.engine, model: request.model }
+    if (request.nodeId) params.nodeId = request.nodeId
+    const result = await getModularSupervisor().callProxy(engine, 'performance/benchmark', params)
     const run = parseRun(objectValue(result)?.run)
     if (!run) throw new Error('The router did not start the benchmark')
     return run

@@ -157,7 +157,7 @@ export interface WsInvokeChannelMap {
     'performance:get-live': { request: void; response: PerformanceLive }
     'performance:clear': { request: void; response: null }
     'performance:run-benchmark': {
-        request: { engine: string; model: string }
+        request: { engine: string; model: string; nodeId?: string }
         response: BenchmarkRun
     }
 

@@ -138,6 +138,8 @@ export interface BenchmarkRun {
     id: string
     engine: string
     model: string
+    /** The node chosen to serve every step, or '' when PAIR chose per step. */
+    nodeId: string
     state: BenchmarkState
     startedAt: number
     finishedAt: number | null

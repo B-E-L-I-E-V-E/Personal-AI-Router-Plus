@@ -91,6 +91,11 @@ type planResult struct {
 	TotalBytes   int64 `json:"totalBytes"`
 	ReserveBytes int64 `json:"reserveBytes"`
 	WeightsBytes int64 `json:"weightsBytes"`
+	// WeightsSource and KVSource say where the counted weight size and
+	// per-token cost came from: the spec's source, or "manual" when the
+	// request overrode it.
+	WeightsSource string `json:"weightsSource"`
+	KVSource      string `json:"kvSource"`
 	// GPUWeightsBytes is the part of the weights on the GPU: all of them,
 	// or all but the experts when they are offloaded.
 	GPUWeightsBytes int64 `json:"gpuWeightsBytes"`
@@ -211,9 +216,9 @@ func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 		}
 	}
 
-	res.WeightsBytes = spec.WeightsBytes
+	res.WeightsBytes, res.WeightsSource = spec.WeightsBytes, spec.WeightsSource
 	if req.WeightsBytes > 0 {
-		res.WeightsBytes = req.WeightsBytes
+		res.WeightsBytes, res.WeightsSource = req.WeightsBytes, "manual"
 	}
 	res.Unified = req.Unified
 	res.ExpertBytes = spec.ExpertBytes
@@ -252,9 +257,9 @@ func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 	}
 	res.RAMFits = !res.OffloadExperts || res.RAMUsedBytes+res.RAMReserveBytes <= res.RAMTotalBytes
 	perF16 := spec.KVBytesPerToken
+	res.KVSource = spec.Source
 	if req.KVBytesPerToken > 0 {
-		perF16 = req.KVBytesPerToken
-		res.Spec.Source = "manual"
+		perF16, res.KVSource = req.KVBytesPerToken, "manual"
 	}
 	if res.WeightsBytes <= 0 {
 		return res, errors.New("the model's size is unknown; enter it (weightsBytes)")
@@ -265,7 +270,7 @@ func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 	// A measured cost was taken at the engine's own cache type and already
 	// includes it; only scale what was computed from the architecture.
 	perToken := perF16
-	if res.Spec.Source != "measured" {
+	if res.KVSource != "measured" {
 		perToken = int64(float64(perF16) * factor)
 	}
 	if perToken < 1 {
@@ -326,7 +331,7 @@ func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 	if res.OffloadExperts {
 		res.Warnings = append(res.Warnings, "expert weights in system memory run on the CPU, so each token is slower")
 	}
-	if res.Spec.Source == "measured" && cache != "f16" {
+	if res.KVSource == "measured" && cache != "f16" {
 		res.Warnings = append(res.Warnings, "the cost was measured at the engine's current cache type; re-measure after applying "+cache)
 	}
 	if strings.EqualFold(req.Engine, "ollama") {

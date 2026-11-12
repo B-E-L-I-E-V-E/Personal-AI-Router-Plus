@@ -39,6 +39,46 @@ var ggmlTypeID = map[string]uint32{
 	"TQ2_0": 35, "MXFP4": 39,
 }
 
+// tensorSize is the stored size of one tensor, and false for an unknown type.
+func tensorSize(t ggufTensor) (int64, bool) {
+	size, known := ggmlTypeSize[t.Type]
+	if !known {
+		return 0, false
+	}
+	return int64((t.Elements + size[0] - 1) / size[0] * size[1]), true
+}
+
+// tensorBytes sums every tensor: the weights' size once loaded. ok is false
+// for an empty table or an unknown type, so a partial sum is never reported.
+func tensorBytes(tensors []ggufTensor) (total int64, ok bool) {
+	for _, t := range tensors {
+		b, known := tensorSize(t)
+		if !known {
+			return 0, false
+		}
+		total += b
+	}
+	return total, len(tensors) > 0
+}
+
+// ollamaTensorBytes sums Ollama's /api/show tensor list; ok is false when a
+// type is not a ggml one (MLX models report types such as nvfp4).
+func ollamaTensorBytes(list []ollamaTensor) (int64, bool) {
+	tensors := make([]ggufTensor, 0, len(list))
+	for _, t := range list {
+		id, ok := ggmlTypeID[strings.ToUpper(t.Type)]
+		if !ok {
+			return 0, false
+		}
+		n := uint64(1)
+		for _, d := range t.Shape {
+			n *= d
+		}
+		tensors = append(tensors, ggufTensor{Name: t.Name, Type: id, Elements: n})
+	}
+	return tensorBytes(tensors)
+}
+
 // expertBytes sums the routed-expert tensors. ok is false when a tensor's
 // type is unknown, so a partial sum is never mistaken for the whole.
 func expertBytes(tensors []ggufTensor) (total int64, ok bool) {
@@ -46,11 +86,11 @@ func expertBytes(tensors []ggufTensor) (total int64, ok bool) {
 		if !expertTensor.MatchString(t.Name) {
 			continue
 		}
-		size, known := ggmlTypeSize[t.Type]
+		b, known := tensorSize(t)
 		if !known {
 			return 0, false
 		}
-		total += int64((t.Elements + size[0] - 1) / size[0] * size[1])
+		total += b
 	}
 	return total, true
 }

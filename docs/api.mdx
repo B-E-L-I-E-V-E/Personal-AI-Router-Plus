@@ -590,6 +590,14 @@ HTTP/1.1 202 Accepted
 }
 ```
 
+To run it on a particular node, add that node's ID. Every step then runs on
+that node, and the run says so in `nodeId`; a step the node cannot serve fails
+with `benchmark-node` rather than going elsewhere:
+
+```json
+{ "model": "qwen3:0.6b", "nodeId": "7c9e6679-7425-40de-944b-e07fc1f90ae7" }
+```
+
 The run sends four fixed prompts through this engine's endpoint, one at a
 time, each after the node goes idle. It uses the model, and loads it if
 needed. Poll `GET /pair/v1/performance`: the run in `benchmarks` moves to
