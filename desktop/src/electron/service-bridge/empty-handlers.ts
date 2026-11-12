@@ -44,6 +44,12 @@ import {
     setPlanner
 } from '@/electron/service-bridge/capacity-planner'
 import { getModelDetails, getModelWebFacts, startModelWebFacts } from './model-details'
+import {
+    clearPerformance,
+    getPerformanceLive,
+    getPerformanceReport,
+    runBenchmark
+} from '@/electron/service-bridge/performance-bridge'
 
 type BridgeHandler<C extends WsInvokeChannel> = (
     payload?: WsInvokeRequest<C>
@@ -745,6 +751,10 @@ const EMPTY_SERVICE_BRIDGE_HANDLERS: BridgeHandlerMap = {
     'capacity:set-planner': payload => setPlanner(payload),
     'capacity:apply-plan': payload => applyPlan(payload),
     'engine:model-details': payload => getModelDetails(payload),
+    'performance:get-report': () => getPerformanceReport(),
+    'performance:get-live': () => getPerformanceLive(),
+    'performance:clear': () => clearPerformance(),
+    'performance:run-benchmark': payload => runBenchmark(payload),
     'engine:model-web-facts': payload => getModelWebFacts(payload),
     'engine:model-web-facts-start': payload => startModelWebFacts(payload)
 }

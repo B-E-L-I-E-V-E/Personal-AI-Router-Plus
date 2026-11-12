@@ -59,6 +59,7 @@ import type {
     SessionPolicy,
     SessionSummary
 } from '@/shared/types/sessions'
+import type { BenchmarkRun, PerformanceLive, PerformanceReport } from '@/shared/types/performance'
 import type {
     AvailableNode,
     ClusterIdentityPayload,
@@ -145,6 +146,16 @@ export interface WsInvokeChannelMap {
 
     // Model details (nvpair-proxy model/details, for this node or a peer)
     'engine:model-details': { request: ModelDetailsRequest; response: ModelDetails }
+
+    // Per-model performance and benchmarks (nvpair-proxy, relayed by the broker)
+    'performance:get-report': { request: void; response: PerformanceReport }
+    'performance:get-live': { request: void; response: PerformanceLive }
+    'performance:clear': { request: void; response: null }
+    'performance:run-benchmark': {
+        request: { engine: string; model: string }
+        response: BenchmarkRun
+    }
+
     // Filling gaps from the model's web page (nvpair-proxy model/web-facts)
     'engine:model-web-facts': { request: WebFactsRequest; response: WebFactsStatus }
     'engine:model-web-facts-start': { request: WebFactsRequest; response: WebFactsStatus }

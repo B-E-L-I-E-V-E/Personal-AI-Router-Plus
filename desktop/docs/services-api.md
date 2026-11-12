@@ -226,6 +226,10 @@
 | `node/set-local-backend` | request (we call) | ⚠️ not called |
 | `node/set-priority` | request (we call) | ✅ yes |
 | `nodes/list` | request (we call) | ✅ yes |
+| `performance/benchmark` | request (we call) | ✅ yes |
+| `performance/clear` | request (we call) | ✅ yes |
+| `performance/live` | request (we call) | ✅ yes |
+| `performance/report` | request (we call) | ✅ yes |
 | `sessions/configure` | request (we call) | ✅ yes |
 | `sessions/end` | request (we call) | ✅ yes |
 | `sessions/list` | request (we call) | ✅ yes |
