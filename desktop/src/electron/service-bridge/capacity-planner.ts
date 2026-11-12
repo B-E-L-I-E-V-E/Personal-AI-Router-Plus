@@ -113,7 +113,11 @@ function parseSpec(value: JsonValue | undefined): ModelSpec {
         webMoe: obj?.webMoe === true,
         kvBytesPerToken: numberValue(obj?.kvBytesPerToken),
         expertCount: numberValue(obj?.expertCount),
+        expertUsedCount: numberValue(obj?.expertUsedCount),
         expertBytes: numberValue(obj?.expertBytes),
+        expertLayerBytes: arrayValue(obj?.expertLayerBytes).map(numberValue),
+        totalParams: numberValue(obj?.totalParams),
+        activeParams: numberValue(obj?.activeParams),
         layers: numberValue(obj?.layers),
         defaults: parseDefaults(obj?.defaults),
         notes: stringList(obj?.notes)
@@ -158,7 +162,7 @@ function parsePlan(value: JsonValue | undefined, error = ''): CapacityPlan {
         usedBytes: numberValue(obj?.usedBytes),
         fits: obj?.fits === true,
         canOffloadExperts: obj?.canOffloadExperts === true,
-        offloadExperts: obj?.offloadExperts === true,
+        cpuExpertLayers: numberValue(obj?.cpuExpertLayers),
         expertBytes: numberValue(obj?.expertBytes),
         offloadNote: stringValue(obj?.offloadNote),
         unified: obj?.unified === true,
@@ -187,7 +191,7 @@ function parseSavedPlan(value: JsonValue): SavedCapacityPlan | null {
         sessions: numberValue(obj.sessions),
         cacheType: cacheTypeValue(obj.cacheType),
         reservePercent: numberValue(obj.reservePercent),
-        offloadExperts: obj.offloadExperts === true,
+        cpuExpertLayers: numberValue(obj.cpuExpertLayers),
         replyTokens: numberValue(obj.replyTokens),
         applied: obj.applied === true,
         appliedAt: numberValue(obj.appliedAt),
@@ -250,13 +254,13 @@ export async function planCapacity(request?: CapacityPlanRequest): Promise<Capac
         'reservePercent',
         'otherModelsBytes',
         'weightsBytes',
-        'kvBytesPerToken'
+        'kvBytesPerToken',
+        'cpuExpertLayers'
     ] as const) {
         const v = request[key]
         if (typeof v === 'number' && v > 0) params[key] = v
     }
     if (request.cacheType) params.cacheType = request.cacheType
-    if (request.offloadExperts) params.offloadExperts = true
     try {
         const plan = parsePlan(await callNodeProxy('capacity/plan', params, request.nodeId))
         if (request.withLaunchDefaults) {
@@ -340,8 +344,8 @@ interface PlanNumbers {
     windowTokens: number
     sessions: number
     cacheType: KvCacheType
-    /** Keep expert weights in system memory (llama.cpp only). */
-    offloadExperts?: boolean
+    /** Layers whose expert weights stay in system memory (llama.cpp and LM Studio). */
+    cpuExpertLayers?: number
     /** llama.cpp: split layers across GPUs by this --tensor-split. */
     tensorSplit?: string
     /** Ollama: spread the model across every GPU. */
@@ -422,8 +426,11 @@ export function llamaCppLaunchText(text: string, plan: PlanNumbers): string {
             added.push('--flash-attn', 'on')
         }
     }
-    // Experts on the CPU; attention and the context cache stay on the GPU.
-    if (plan.offloadExperts) added.push('--cpu-moe')
+    // The first N layers' experts on the CPU; attention, shared experts and
+    // the context cache stay on the GPU. A count past the model's layers is
+    // all of them, as --cpu-moe would be.
+    if (plan.cpuExpertLayers && plan.cpuExpertLayers > 0)
+        added.push('--n-cpu-moe', String(plan.cpuExpertLayers))
     // Whole layers per GPU, each with its part of the context cache.
     if (plan.tensorSplit) added.push('--split-mode', 'layer', '--tensor-split', plan.tensorSplit)
     return [...env, ...kept, ...added].join(' ')
@@ -535,6 +542,21 @@ function replyBudget(plan: SavedCapacityPlan): number {
     return Math.min(plan.replyTokens || DEFAULT_REPLY_TOKENS, Math.floor(plan.windowTokens / 2))
 }
 
+/**
+ * What to set in LM Studio, which takes context, slots and expert placement
+ * per model load, outside PAIR's launch settings. Its REST load takes no
+ * expert placement, so the user sets it in the model's load settings.
+ */
+export function lmStudioMessage(model: string, plan: SavedCapacityPlan, gpuCount = 0): string {
+    const experts =
+        plan.cpuExpertLayers > 0
+            ? `, Number of layers for which to force MoE weights onto CPU to ${plan.cpuExpertLayers}`
+            : ''
+    const gpus =
+        gpuCount > 1 ? `, with every layer on the GPUs split across all ${gpuCount} of them` : ''
+    return `PAIR now limits ${model} to ${plan.sessions} sessions of ${plan.windowTokens} tokens. LM Studio sets these when it loads a model: in the model's load settings, set Context Length to ${plan.windowTokens} and Max Concurrent Predictions to ${plan.sessions}${experts}${gpus}, then reload it.`
+}
+
 let applying: Promise<ApplyPlanResult> | null = null
 
 /** Applies the saved plan for one model. Only one apply runs at a time. */
@@ -572,14 +594,14 @@ async function applyPlanNow(
         windowTokens: plan.windowTokens,
         cacheType: plan.cacheType,
         reservePercent: plan.reservePercent || undefined,
-        offloadExperts: plan.offloadExperts || undefined
+        cpuExpertLayers: plan.cpuExpertLayers || undefined
     })
     const gpus = multiGpuLaunch(engine, layout, plan.sessions)
     const numbers = {
         windowTokens: plan.windowTokens,
         sessions: plan.sessions,
         cacheType: plan.cacheType,
-        offloadExperts: plan.offloadExperts,
+        cpuExpertLayers: plan.cpuExpertLayers,
         ...gpus
     }
     const markApplied = async () => {
@@ -592,7 +614,7 @@ async function applyPlanNow(
                     windowTokens: plan.windowTokens,
                     sessions: plan.sessions,
                     cacheType: plan.cacheType,
-                    offloadExperts: plan.offloadExperts
+                    cpuExpertLayers: plan.cpuExpertLayers
                 }
             },
             remote
@@ -615,7 +637,11 @@ async function applyPlanNow(
         )
         return {
             applied: false,
-            message: `PAIR now limits ${model} to ${plan.sessions} sessions of ${plan.windowTokens} tokens. LM Studio sets context when it loads a model: load it with a ${plan.windowTokens}-token context and ${plan.sessions} parallel slots${plan.offloadExperts ? ', and turn on keeping expert weights on the CPU,' : ''}${layout.gpus.length > 1 && !layout.error ? `, with every layer on the GPUs split across all ${layout.gpus.length} of them,` : ''} to match.`
+            message: lmStudioMessage(
+                model,
+                plan,
+                layout.gpus.length > 1 && !layout.error ? layout.gpus.length : 0
+            )
         }
     }
     if (engine !== 'ollama' && engine !== 'llamacpp')
@@ -666,14 +692,14 @@ async function applyPlanNow(
             windowTokens: plan.windowTokens,
             sessions: plan.sessions,
             cacheType: plan.cacheType,
-            offloadExperts: plan.offloadExperts,
+            cpuExpertLayers: plan.cpuExpertLayers,
             tensorSplit: gpus.tensorSplit,
             spreadGpus: gpus.spreadGpus
         }
     })
     return {
         applied: true,
-        message: `${engine} restarted with ${plan.sessions} sessions of ${plan.windowTokens} tokens${plan.offloadExperts ? ', expert weights in system memory' : ''}${multiGpuLaunchText(gpus) ? `, ${multiGpuLaunchText(gpus)}` : ''}`
+        message: `${engine} restarted with ${plan.sessions} sessions of ${plan.windowTokens} tokens${plan.cpuExpertLayers > 0 ? `, the experts of the first ${plan.cpuExpertLayers} layers in system memory` : ''}${multiGpuLaunchText(gpus) ? `, ${multiGpuLaunchText(gpus)}` : ''}`
     }
 }
 

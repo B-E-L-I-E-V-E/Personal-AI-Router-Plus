@@ -802,7 +802,12 @@ reading the model:
   (other models spread by the same ratio), `bytesPerSession` and `sessions`;
   the plan's `sessions` is the smallest of them, never more than the pooled
   budget allows. With an unknown layer count the split is by the same ratio
-  without rounding. With two or more GPUs, `tensorSplit` is the matching
+  without rounding. A mixture-of-experts model with per-layer expert sizes
+  is split in layer order by each layer's GPU bytes (its share of the
+  non-expert weights, plus its experts unless `cpuExpertLayers` keeps them
+  in system memory) and its part of the sessions the pooled budget holds, so
+  GPU 0, which holds the first layers whose experts leave first, takes more
+  layers. With two or more GPUs, `tensorSplit` is the matching
   llama.cpp `--tensor-split` (layers per GPU, or GiB after the reserve), and
   for Ollama `oneGpuIndex`/`oneGpuSessions` give the GPU with the most room
   for the whole model and how many sessions fit there alone (0: it needs more
@@ -810,14 +815,24 @@ reading the model:
   llama.cpp, and `OLLAMA_SCHED_SPREAD=1` for Ollama when the planned sessions
   exceed `oneGpuSessions`.
 - **Expert offload**: for a mixture-of-experts model (`expert_count` > 1),
-  `spec.expertBytes` is the exact size of the routed-expert tensors
-  (`blk.N.ffn_{up,down,gate,gate_up}_exps`, shared experts excluded), summed
-  from the GGUF tensor table (every shard) or Ollama's `/api/show` tensor
-  list. With `offloadExperts` and `systemRamBytes`, those bytes count against
-  system memory (reserve: a quarter, at least 4 GiB) instead of GPU memory.
-  `canOffloadExperts` is false, with `offloadNote` saying why, on unified
-  memory, on Ollama, or when the size is unknown; asking anyway is an error.
-  Saved plans carry `offloadExperts`, applied to llama.cpp as `--cpu-moe`.
+  `spec.expertLayerBytes[i]` is the exact size of layer `i`'s routed-expert
+  tensors (`blk.i.ffn_{up,down,gate,gate_up}_exps`, shared experts excluded;
+  0 for a dense layer), summed from the GGUF tensor table (every shard) or
+  Ollama's `/api/show` tensor list, and `spec.expertBytes` their sum.
+  `spec.expertUsedCount` is `expert_used_count`; `spec.totalParams` counts
+  every tensor element and `spec.activeParams` those one token runs (all but
+  the routed experts, plus `expertUsedCount` of `expertCount` of them).
+  `cpuExpertLayers` N keeps the experts of layers 0..N−1 in system memory, as
+  llama.cpp's `--n-cpu-moe N` does; N at or above the layer count is all of
+  them (at most 1024). With `systemRamBytes`, those bytes count against system
+  memory (reserve: a quarter, at least 4 GiB) instead of GPU memory, and the
+  result echoes N clamped to the model's layers. `canOffloadExperts` is false,
+  with `offloadNote` saying why, on unified memory, on Ollama (no setting keeps
+  only the experts on the CPU), or when the per-layer size is unknown; asking
+  anyway is an error. Saved plans carry `cpuExpertLayers`, applied to
+  llama.cpp as `--n-cpu-moe N`; LM Studio's REST load takes no expert
+  placement, so applying tells the user the value to set. A plan saved with
+  the earlier `offloadExperts: true` loads as every layer.
 - **Reply budget**: a plan's `replyTokens` (default 8192, at most half the
   window) is kept from each session's window for replies. Applying the plan
   sets the model's capacity with `replyTokens`; `messageTokens` = share −

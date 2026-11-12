@@ -5,11 +5,15 @@ import { describe, expect, it } from 'vitest'
 import type { CapacityPlan, CapacityPlanGpu } from '@/shared/types/sessions'
 import { multiGpuLaunch, multiGpuLaunchText, oneGpuIndex } from '@/shared/utils/capacity-gpus'
 import {
+    cpuExpertBytes,
+    expertLayersOnCpu,
+    expertSplitStops,
     gpuBars,
     kvStops,
     labelledStops,
     memoryUse,
     nearestStop,
+    parameterLabel,
     parseAmount,
     perTokenLabel,
     replyBudget,
@@ -57,7 +61,11 @@ function plan(overrides: Partial<CapacityPlan> = {}): CapacityPlan {
             webMoe: false,
             kvBytesPerToken: 0,
             expertCount: 0,
+            expertUsedCount: 0,
             expertBytes: 0,
+            expertLayerBytes: [],
+            totalParams: 0,
+            activeParams: 0,
             layers: 48,
             defaults: {},
             notes: []
@@ -81,7 +89,7 @@ function plan(overrides: Partial<CapacityPlan> = {}): CapacityPlan {
         usedBytes: 0,
         fits: true,
         canOffloadExperts: false,
-        offloadExperts: false,
+        cpuExpertLayers: 0,
         expertBytes: 0,
         offloadNote: '',
         unified: false,
@@ -155,19 +163,57 @@ describe('memory calculator', () => {
         expect(memoryUse(plan(), 5).gpuOver).toBe(true)
     })
 
-    it('counts offloaded experts against system memory', () => {
-        const off = plan({ offloadExperts: true, gpuWeightsBytes: 2 * GiB, ramUsedBytes: 16 * GiB })
-        expect(memoryUse(off, 20)).toMatchObject({
+    it('counts the experts of the layers moved to system memory there, not on the GPU', () => {
+        const moe = plan()
+        // 16 expert layers of 1 GiB.
+        moe.spec.expertLayerBytes = Array.from({ length: 16 }, () => GiB)
+        expect(memoryUse(moe, 20, 16)).toMatchObject({
             gpuNeeded: 24 * GiB,
             gpuOver: false,
             ramNeeded: 32 * GiB,
             ramOver: false
         })
-        expect(memoryUse({ ...off, ramTotalBytes: 24 * GiB }, 1).ramOver).toBe(true)
+        // Half the experts in system memory: 8 GiB more on the GPU.
+        expect(memoryUse(moe, 4, 8)).toMatchObject({ gpuNeeded: 16 * GiB, ramNeeded: 24 * GiB })
+        expect(memoryUse(moe, 4, 0)).toMatchObject({ gpuNeeded: 24 * GiB, ramOver: false })
+        expect(memoryUse({ ...moe, ramTotalBytes: 24 * GiB }, 1, 16).ramOver).toBe(true)
     })
 
     it('treats Apple silicon memory as one shared pool', () => {
         expect(memoryUse(plan({ unified: true }), 1).shared).toBe(true)
+    })
+})
+
+describe('expert split slider', () => {
+    // Two dense layers, then three expert layers of different sizes.
+    const layers = [0, 0, 3 * GiB, 2 * GiB, 2 * GiB]
+
+    it('stops once per expert layer, skipping dense ones', () => {
+        expect(expertSplitStops(layers)).toEqual([0, 3, 4, 5])
+        expect(expertSplitStops([])).toEqual([0])
+    })
+
+    it('sums the experts of the first layers, as --n-cpu-moe does', () => {
+        expect(cpuExpertBytes(layers, 0)).toBe(0)
+        expect(cpuExpertBytes(layers, 3)).toBe(3 * GiB)
+        expect(cpuExpertBytes(layers, 5)).toBe(7 * GiB)
+        expect(cpuExpertBytes(layers, 1024)).toBe(7 * GiB)
+    })
+
+    it('reads a saved --n-cpu-moe count as expert layers', () => {
+        const stops = expertSplitStops(layers)
+        expect(expertLayersOnCpu(stops, 0)).toBe(0)
+        expect(expertLayersOnCpu(stops, 2)).toBe(0)
+        expect(expertLayersOnCpu(stops, 4)).toBe(2)
+        // A plan saved before the split kept every expert on the CPU.
+        expect(expertLayersOnCpu(stops, 1024)).toBe(3)
+    })
+
+    it('labels parameter counts as models are named', () => {
+        expect(parameterLabel(284_334_567_511)).toBe('284B')
+        expect(parameterLabel(30_532_122_624)).toBe('30.5B')
+        expect(parameterLabel(13_801_959_511)).toBe('13.8B')
+        expect(parameterLabel(600_000_000)).toBe('600M')
     })
 })
 

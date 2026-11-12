@@ -84,6 +84,40 @@ func splitLayers(free []int64, layers int) []int {
 	return counts
 }
 
+// splitLayersByBytes divides layers among GPUs in order, as llama.cpp
+// assigns them: GPU 0 takes the first ones. Each GPU takes layers until its
+// share of the bytes matches its share of free memory, so GPUs fill evenly
+// when layers differ in size, as they do when the first layers' experts are
+// kept in system memory (--n-cpu-moe).
+func splitLayersByBytes(free []int64, layerBytes []int64) []int {
+	counts := make([]int, len(free))
+	var freeSum, total int64
+	for _, f := range free {
+		freeSum += f
+	}
+	for _, b := range layerBytes {
+		total += b
+	}
+	if freeSum <= 0 || len(free) == 0 {
+		return counts
+	}
+	var cumFree, cum int64
+	next := 0
+	for i := 0; i < len(free)-1; i++ {
+		cumFree += free[i]
+		target := float64(total) * float64(cumFree) / float64(freeSum)
+		start := next
+		// A layer goes here when its middle falls within this GPU's part.
+		for next < len(layerBytes) && float64(cum)+float64(layerBytes[next])/2 <= target {
+			cum += layerBytes[next]
+			next++
+		}
+		counts[i] = next - start
+	}
+	counts[len(free)-1] = len(layerBytes) - next
+	return counts
+}
+
 // fitSessions is how many sessions of perSession fit in room, at most limit.
 func fitSessions(room, perSession, limit int64) int64 {
 	if room <= 0 {
@@ -98,14 +132,30 @@ func fitSessions(room, perSession, limit int64) int64 {
 // splitAcrossGPUs places weights (the part of the model on the GPUs) and
 // sessions of perSession bytes on the GPUs. other is memory taken by other
 // models, spread by the same ratio. reserves are each GPU's reserve.
-func splitAcrossGPUs(gpus []planGPU, reserves []int64, layers int, weights, other, perSession, limit int64) gpuSplit {
+// layerBytes, when known (one per layer, summing to weights), is what each
+// layer keeps on the GPU; the layers are then split so that each GPU fills
+// evenly with target sessions' context. Without it every layer counts the
+// same.
+func splitAcrossGPUs(gpus []planGPU, reserves []int64, layers int, layerBytes []int64, weights, other, perSession, limit, target int64) gpuSplit {
 	free := make([]int64, len(gpus))
 	var freeSum int64
 	for i, g := range gpus {
 		free[i] = max(0, g.VramBytes-reserves[i])
 		freeSum += free[i]
 	}
-	counts := splitLayers(free, layers)
+	byBytes := layers > 0 && len(layerBytes) == layers
+	var counts []int
+	if byBytes {
+		// A layer holds its weights and its part of every session's cache.
+		cost := make([]int64, layers)
+		for i, b := range layerBytes {
+			cost[i] = b + perSession*target/int64(layers)
+		}
+		counts = splitLayersByBytes(free, cost)
+	} else {
+		counts = splitLayers(free, layers)
+	}
+	first := 0
 	split := gpuSplit{Sessions: limit, OneGPUIndex: -1}
 	parts := make([]string, len(gpus))
 	for i, g := range gpus {
@@ -120,13 +170,21 @@ func splitAcrossGPUs(gpus []planGPU, reserves []int64, layers int, weights, othe
 		if freeSum > 0 {
 			otherHere = int64(float64(other) * float64(free[i]) / float64(freeSum))
 		}
+		weightsHere := int64(math.Ceil(float64(weights) * share))
+		if byBytes {
+			weightsHere = 0
+			for _, b := range layerBytes[first : first+counts[i]] {
+				weightsHere += b
+			}
+			first += counts[i]
+		}
 		use := planGPUUse{
 			Name:             g.Name,
 			TotalBytes:       g.VramBytes,
 			ReserveBytes:     reserves[i],
 			Layers:           counts[i],
 			Share:            share,
-			WeightsBytes:     int64(math.Ceil(float64(weights) * share)),
+			WeightsBytes:     weightsHere,
 			OtherModelsBytes: otherHere,
 			BytesPerSession:  int64(math.Ceil(float64(perSession) * share)),
 		}
@@ -158,7 +216,9 @@ func splitAcrossGPUs(gpus []planGPU, reserves []int64, layers int, weights, othe
 // applyGPUSplit records each GPU's part of the plan and returns how many
 // sessions fit on every GPU.
 func (res *planResult) applyGPUSplit(req planRequest, gpus []planGPU, reserves []int64, perSession, limit int64) int64 {
-	split := splitAcrossGPUs(gpus, reserves, res.Spec.Layers, res.GPUWeightsBytes, res.OtherBytes, perSession, limit)
+	// Balance the layers for the sessions the GPUs' memory holds in all.
+	target := fitSessions(res.ContextBytes, perSession, limit)
+	split := splitAcrossGPUs(gpus, reserves, res.Spec.Layers, res.gpuLayerBytes(), res.GPUWeightsBytes, res.OtherBytes, perSession, limit, target)
 	res.GPUs = split.GPUs
 	if len(gpus) < 2 {
 		return split.Sessions
@@ -174,4 +234,31 @@ func (res *planResult) applyGPUSplit(req planRequest, gpus []planGPU, reserves [
 		}
 	}
 	return split.Sessions
+}
+
+// gpuLayerBytes is what each layer of a mixture-of-experts model keeps on the
+// GPU: its share of the weights other than the routed experts, plus its
+// experts unless --n-cpu-moe keeps them in system memory. nil when the
+// per-layer expert sizes are unknown, so layers count the same.
+func (res *planResult) gpuLayerBytes() []int64 {
+	spec := res.Spec
+	if spec.Layers <= 0 || len(spec.ExpertLayerBytes) == 0 || len(spec.ExpertLayerBytes) > spec.Layers {
+		return nil
+	}
+	onGPU := spec.ExpertBytes - res.RAMUsedBytes
+	dense := res.GPUWeightsBytes - onGPU
+	if dense < 0 {
+		return nil
+	}
+	out := make([]int64, spec.Layers)
+	for i := range out {
+		out[i] = dense / int64(spec.Layers)
+		if i < len(spec.ExpertLayerBytes) && i >= res.CPUExpertLayers {
+			out[i] += spec.ExpertLayerBytes[i]
+		}
+	}
+	// The remainder of the even division goes to the last layer, so the
+	// layers add up to the weights on the GPUs exactly.
+	out[len(out)-1] += dense % int64(spec.Layers)
+	return out
 }

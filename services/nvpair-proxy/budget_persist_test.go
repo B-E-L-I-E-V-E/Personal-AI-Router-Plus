@@ -44,11 +44,11 @@ func TestSavedPlansKeepEverySettingAcrossRestarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := savedPlan{Engine: "llamacpp", Model: "moe", WindowTokens: 32768, Sessions: 3, CacheType: "q8_0",
-		ReservePercent: 15, OffloadExperts: true, ReplyTokens: 4096}
+		ReservePercent: 15, CPUExpertLayers: 12, ReplyTokens: 4096}
 	if err := first.put(want); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, err := first.markApplied("llamacpp", "moe", 32768, 3, "q8_0", true); !ok || err != nil {
+	if _, ok, err := first.markApplied("llamacpp", "moe", 32768, 3, "q8_0", 12); !ok || err != nil {
 		t.Fatalf("markApplied: %v %v", ok, err)
 	}
 
@@ -63,7 +63,7 @@ func TestSavedPlansKeepEverySettingAcrossRestarts(t *testing.T) {
 	}
 	got := st.Plans[0]
 	if got.WindowTokens != 32768 || got.Sessions != 3 || got.CacheType != "q8_0" || got.ReservePercent != 15 ||
-		!got.OffloadExperts || got.ReplyTokens != 4096 || !got.Applied {
+		got.CPUExpertLayers != 12 || got.ReplyTokens != 4096 || !got.Applied {
 		t.Fatalf("plan after restart = %+v, want every setting kept and still applied", got)
 	}
 }
@@ -85,5 +85,25 @@ func TestSavedPlansDropInvalidEntriesOnLoad(t *testing.T) {
 	}
 	if plans := s.snapshot().Plans; len(plans) != 1 || plans[0].Model != "ok" {
 		t.Fatalf("plans = %+v, want only the valid one", plans)
+	}
+}
+
+func TestSavedPlansFromBeforeTheExpertSplitKeepEveryExpertOnTheCPU(t *testing.T) {
+	path := filepath.Join(t.TempDir(), plannerFileName)
+	body := `{"autoReload":true,"plans":[
+		{"engine":"llamacpp","model":"moe","windowTokens":8192,"sessions":1,"cacheType":"f16","offloadExperts":true,"applied":true},
+		{"engine":"llamacpp","model":"dense","windowTokens":8192,"sessions":1,"cacheType":"f16"}]}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := newPlannerStore()
+	s.path = path
+	if err := s.load(); err != nil {
+		t.Fatal(err)
+	}
+	moe, _ := s.find("llamacpp", "moe")
+	dense, _ := s.find("llamacpp", "dense")
+	if moe.CPUExpertLayers != maxCPUExpertLayers || !moe.Applied || dense.CPUExpertLayers != 0 {
+		t.Fatalf("moe = %+v, dense = %+v; want every expert layer on the CPU for the old offload plan only", moe, dense)
 	}
 }

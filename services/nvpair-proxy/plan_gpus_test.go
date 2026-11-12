@@ -152,3 +152,73 @@ func TestSplitLayers_CountsAlwaysAddUp(t *testing.T) {
 		})
 	}
 }
+
+// A mixture-of-experts model of 16 layers: 2 GiB of other weights and 1 GiB
+// of experts per layer, 18 GiB in all.
+func moeLayeredSpec() modelSpec {
+	s := layeredSpec(18 * gib)
+	s.Layers = 16
+	s.ExpertCount = 128
+	s.ExpertUsedCount = 8
+	s.ExpertBytes = 16 * gib
+	s.ExpertLayerBytes = make([]int64, 16)
+	for i := range s.ExpertLayerBytes {
+		s.ExpertLayerBytes[i] = gib
+	}
+	return s
+}
+
+func TestPlanGPUSplit_ExpertsOnTheCPUShiftLayersToTheFirstGPU(t *testing.T) {
+	req := planRequest{Engine: "llamacpp", Model: "m", GPUs: twoRTX4090s(), WindowTokens: 8192, SystemRAMBytes: 128 * gib}
+	whole, err := computePlan(req, moeLayeredSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if whole.TensorSplit != "8,8" {
+		t.Fatalf("all experts on the GPUs: tensor split %q, want even", whole.TensorSplit)
+	}
+	// --n-cpu-moe 8 empties the first 8 layers' experts, so those layers
+	// weigh 1/8 GiB each and GPU 0 takes more of them, with their part of
+	// each session's cache, to fill evenly.
+	req.CPUExpertLayers = 8
+	split, err := computePlan(req, moeLayeredSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g0, g1 := split.GPUs[0], split.GPUs[1]
+	if g0.Layers+g1.Layers != 16 || g0.Layers <= 8 {
+		t.Fatalf("layers %d and %d, want more than 8 on GPU 0", g0.Layers, g1.Layers)
+	}
+	if g0.WeightsBytes+g1.WeightsBytes != split.GPUWeightsBytes {
+		t.Fatalf("GPU weights %d + %d, want %d on the GPUs in all", g0.WeightsBytes, g1.WeightsBytes, split.GPUWeightsBytes)
+	}
+	for i, g := range split.GPUs {
+		if g.Sessions < split.Sessions {
+			t.Fatalf("GPU %d holds %d sessions, fewer than the plan's %d", i, g.Sessions, split.Sessions)
+		}
+	}
+	if split.Sessions <= whole.Sessions {
+		t.Fatalf("sessions %d with 8 expert layers on the CPU, %d without", split.Sessions, whole.Sessions)
+	}
+}
+
+func TestSplitLayersByBytes_FillsGPUsInOrderByBytes(t *testing.T) {
+	tests := []struct {
+		name  string
+		free  []int64
+		bytes []int64
+		want  []int
+	}{
+		{name: "equal layers", free: []int64{10, 10}, bytes: []int64{1, 1, 1, 1}, want: []int{2, 2}},
+		{name: "light first layers", free: []int64{10, 10}, bytes: []int64{1, 1, 1, 1, 4, 4}, want: []int{5, 1}},
+		{name: "three GPUs", free: []int64{10, 10, 10}, bytes: []int64{2, 2, 2, 2, 2, 2}, want: []int{2, 2, 2}},
+		{name: "no memory", free: []int64{0, 0}, bytes: []int64{1, 1}, want: []int{0, 0}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := splitLayersByBytes(tt.free, tt.bytes); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

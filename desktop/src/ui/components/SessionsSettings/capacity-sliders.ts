@@ -63,23 +63,68 @@ interface MemoryUse {
     shared: boolean
 }
 
-/** What sessions sessions of plan's window need, against what the node has. */
-export function memoryUse(plan: CapacityPlan, sessions: number): MemoryUse {
+/**
+ * What sessions sessions of plan's window need, against what the node has,
+ * with the experts of the first cpuExpertLayers layers in system memory.
+ */
+export function memoryUse(
+    plan: CapacityPlan,
+    sessions: number,
+    cpuExpertLayers = plan.cpuExpertLayers
+): MemoryUse {
+    const inRam = cpuExpertBytes(plan.spec.expertLayerBytes, cpuExpertLayers)
     const gpuNeeded =
-        plan.gpuWeightsBytes +
+        plan.weightsBytes -
+        inRam +
         plan.otherModelsBytes +
         plan.bytesPerSession * sessions +
         plan.reserveBytes
-    const ramNeeded = plan.ramUsedBytes + plan.ramReserveBytes
+    const ramNeeded = inRam + plan.ramReserveBytes
     return {
         gpuNeeded,
         gpuTotal: plan.totalBytes,
         gpuOver: gpuNeeded > plan.totalBytes,
         ramNeeded,
         ramTotal: plan.ramTotalBytes,
-        ramOver: plan.offloadExperts && plan.ramTotalBytes > 0 && ramNeeded > plan.ramTotalBytes,
+        ramOver: inRam > 0 && plan.ramTotalBytes > 0 && ramNeeded > plan.ramTotalBytes,
         shared: plan.unified
     }
+}
+
+/**
+ * The expert weights llama.cpp's --n-cpu-moe n keeps in system memory: those
+ * of the first n layers.
+ */
+export function cpuExpertBytes(layerBytes: number[], n: number): number {
+    return layerBytes.slice(0, Math.max(0, n)).reduce((sum, b) => sum + b, 0)
+}
+
+/**
+ * The --n-cpu-moe values that move one more expert layer to system memory:
+ * element k keeps the experts of k layers there. Layers without experts (some
+ * models start with dense ones) are skipped, since moving them changes
+ * nothing.
+ */
+export function expertSplitStops(layerBytes: number[]): number[] {
+    const stops = [0]
+    layerBytes.forEach((b, i) => {
+        if (b > 0) stops.push(i + 1)
+    })
+    return stops
+}
+
+/** How many expert layers --n-cpu-moe n moves to system memory. */
+export function expertLayersOnCpu(stops: number[], n: number): number {
+    let k = 0
+    while (k + 1 < stops.length && stops[k + 1] <= n) k++
+    return k
+}
+
+/** Parameter counts as models are named: 284B, 30.5B, 3.3B, 600M. */
+export function parameterLabel(n: number): string {
+    if (n >= 100e9) return `${Math.round(n / 1e9)}B`
+    if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`
+    return `${Math.round(n / 1e6)}M`
 }
 
 interface GpuBar {

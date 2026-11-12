@@ -32,9 +32,12 @@ const (
 	unifiedMemoryGPUShare = 0.75
 	// System memory kept free for the OS and other programs when expert
 	// weights move there: a quarter of it, at least 4 GiB.
-	ramReserveShare        = 0.25
-	minRAMReserve          = 4 * gib
-	maxPlannedSessions     = 256
+	ramReserveShare    = 0.25
+	minRAMReserve      = 4 * gib
+	maxPlannedSessions = 256
+	// A plan keeps the experts of at most this many layers in system memory;
+	// any count at or above a model's layer count means all of them.
+	maxCPUExpertLayers     = 1024
 	minPlannedWindowTokens = 2048
 )
 
@@ -76,9 +79,11 @@ type planRequest struct {
 
 	// SystemRAMBytes is this node's system memory, for expert offload.
 	SystemRAMBytes int64 `json:"systemRamBytes,omitempty"`
-	// OffloadExperts keeps a mixture-of-experts model's expert weights in
-	// system memory (llama.cpp --cpu-moe), freeing GPU memory for context.
-	OffloadExperts bool `json:"offloadExperts,omitempty"`
+	// CPUExpertLayers keeps the expert weights of a mixture-of-experts
+	// model's first N layers in system memory (llama.cpp --n-cpu-moe N),
+	// freeing GPU memory for context. N at or above the layer count is all
+	// of them.
+	CPUExpertLayers int `json:"cpuExpertLayers,omitempty"`
 
 	// Manual values for what the engine cannot describe.
 	WeightsBytes    int64 `json:"weightsBytes,omitempty"`
@@ -96,15 +101,16 @@ type planResult struct {
 	// request overrode it.
 	WeightsSource string `json:"weightsSource"`
 	KVSource      string `json:"kvSource"`
-	// GPUWeightsBytes is the part of the weights on the GPU: all of them,
-	// or all but the experts when they are offloaded.
+	// GPUWeightsBytes is the part of the weights on the GPU: all of them
+	// less the expert weights kept in system memory.
 	GPUWeightsBytes int64 `json:"gpuWeightsBytes"`
 
 	// Expert offload. CanOffloadExperts says whether this model, engine and
-	// node can do it at all; RAM* is system memory, Unified when it is the
-	// same memory as the GPU's.
+	// node can do it at all; CPUExpertLayers is the request's layer count,
+	// at most the model's layers, and RAMUsedBytes those layers' experts.
+	// RAM* is system memory, Unified when it is the same memory as the GPU's.
 	CanOffloadExperts bool   `json:"canOffloadExperts"`
-	OffloadExperts    bool   `json:"offloadExperts"`
+	CPUExpertLayers   int    `json:"cpuExpertLayers"`
 	ExpertBytes       int64  `json:"expertBytes"`
 	OffloadNote       string `json:"offloadNote,omitempty"`
 	Unified           bool   `json:"unified"`
@@ -157,6 +163,16 @@ func sessionBytes(spec modelSpec, perToken int64, factor float64, window int64) 
 		b += int64(float64(spec.SlidingBytesPerToken)*factor) * w
 	}
 	return b + spec.RecurrentBytesPerSession
+}
+
+// cpuExpertBytes is the expert weights of the first n layers, the part
+// llama.cpp's --n-cpu-moe n keeps in system memory.
+func cpuExpertBytes(layers []int64, n int) int64 {
+	var b int64
+	for i := 0; i < n && i < len(layers); i++ {
+		b += layers[i]
+	}
+	return b
 }
 
 // computePlan is pure: it applies the request to a model description.
@@ -224,30 +240,30 @@ func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 	res.ExpertBytes = spec.ExpertBytes
 	switch {
 	case spec.ExpertCount == 0:
-	case spec.ExpertBytes <= 0 || spec.ExpertBytes >= res.WeightsBytes:
+	case spec.ExpertBytes <= 0 || spec.ExpertBytes >= res.WeightsBytes || len(spec.ExpertLayerBytes) == 0:
 		res.OffloadNote = "the size of this model's expert weights is unknown"
 	case req.Unified:
-		res.OffloadNote = "the GPU shares system memory here, so moving expert weights frees nothing"
+		res.OffloadNote = "the GPU shares system memory here, so every expert already sits in the one memory and moving some frees nothing"
 	case strings.EqualFold(req.Engine, "ollama"):
-		res.OffloadNote = "Ollama cannot keep expert weights in system memory; use llama.cpp or LM Studio for that"
+		res.OffloadNote = "Ollama has no setting that keeps only the experts on the CPU (num_gpu moves whole layers, attention included); use llama.cpp or LM Studio for that"
 	case req.SystemRAMBytes <= 0:
 		res.OffloadNote = "this node's system memory is unknown"
 	default:
 		res.CanOffloadExperts = true
 	}
-	if req.OffloadExperts && !res.CanOffloadExperts {
+	if req.CPUExpertLayers < 0 || req.CPUExpertLayers > maxCPUExpertLayers {
+		return res, fmt.Errorf("cpuExpertLayers must be between 0 and %d", maxCPUExpertLayers)
+	}
+	if req.CPUExpertLayers > 0 && !res.CanOffloadExperts {
 		reason := res.OffloadNote
 		if reason == "" {
 			reason = "this model has no expert weights"
 		}
 		return res, errors.New("cannot keep expert weights in system memory: " + reason)
 	}
-	res.OffloadExperts = req.OffloadExperts
-	res.GPUWeightsBytes = res.WeightsBytes
-	if res.OffloadExperts {
-		res.GPUWeightsBytes -= res.ExpertBytes
-		res.RAMUsedBytes = res.ExpertBytes
-	}
+	res.CPUExpertLayers = min(req.CPUExpertLayers, len(spec.ExpertLayerBytes))
+	res.RAMUsedBytes = cpuExpertBytes(spec.ExpertLayerBytes, res.CPUExpertLayers)
+	res.GPUWeightsBytes = res.WeightsBytes - res.RAMUsedBytes
 	res.RAMTotalBytes = req.SystemRAMBytes
 	if res.RAMTotalBytes > 0 && !req.Unified {
 		res.RAMReserveBytes = int64(float64(res.RAMTotalBytes) * ramReserveShare)
@@ -255,7 +271,7 @@ func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 			res.RAMReserveBytes = minRAMReserve
 		}
 	}
-	res.RAMFits = !res.OffloadExperts || res.RAMUsedBytes+res.RAMReserveBytes <= res.RAMTotalBytes
+	res.RAMFits = res.CPUExpertLayers == 0 || res.RAMUsedBytes+res.RAMReserveBytes <= res.RAMTotalBytes
 	perF16 := spec.KVBytesPerToken
 	res.KVSource = spec.Source
 	if req.KVBytesPerToken > 0 {
@@ -328,8 +344,8 @@ func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 	if !res.RAMFits {
 		res.Warnings = append(res.Warnings, "the expert weights do not fit in system memory with the reserve kept free")
 	}
-	if res.OffloadExperts {
-		res.Warnings = append(res.Warnings, "expert weights in system memory run on the CPU, so each token is slower")
+	if res.CPUExpertLayers > 0 {
+		res.Warnings = append(res.Warnings, "experts in system memory run on the CPU, which reads them from memory much slower than the GPU reads its own, so each token is slower; every expert layer kept on the GPU helps")
 	}
 	if res.KVSource == "measured" && cache != "f16" {
 		res.Warnings = append(res.Warnings, "the cost was measured at the engine's current cache type; re-measure after applying "+cache)

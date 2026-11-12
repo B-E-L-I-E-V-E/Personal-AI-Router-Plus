@@ -5,19 +5,29 @@ package main
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
 // Mixture-of-experts models keep most of their weights in expert tensors, of
-// which only a few are used per token. llama.cpp can keep those in system
-// memory (--cpu-moe) while attention and the context cache stay on the GPU,
-// which frees GPU memory for more sessions at the cost of speed. The planner
-// needs the exact size of those tensors, summed from the model's tensor table.
+// which only a few are used per token. llama.cpp can keep the experts of the
+// first N layers in system memory (--n-cpu-moe N; --cpu-moe is all of them)
+// while attention, shared experts and the context cache stay on the GPU. That
+// frees GPU memory for more sessions at the cost of speed. The planner needs
+// the exact size of each layer's expert tensors, summed from the model's
+// tensor table.
 
-// expertTensor matches the routed-expert weights llama.cpp's --cpu-moe moves:
-// blk.N.ffn_{up,down,gate,gate_up}_exps. Shared experts (_shexp) stay on the
-// GPU.
+// expertTensor matches the routed-expert weights llama.cpp's --n-cpu-moe
+// moves: blk.N.ffn_{up,down,gate,gate_up}_exps. Shared experts (_shexp) stay
+// on the GPU.
 var expertTensor = regexp.MustCompile(`\.ffn_(up|down|gate|gate_up)_exps(\.|$)`)
+
+// blockIndex reads N from a tensor named blk.N.*.
+var blockIndex = regexp.MustCompile(`^blk\.(\d+)\.`)
+
+// unknownGGMLType marks a tensor whose type PAIR cannot size. Its element
+// count still counts towards the model's parameters.
+const unknownGGMLType = ^uint32(0)
 
 // ggmlTypeSize is (elements per block, bytes per block) for ggml tensor types.
 var ggmlTypeSize = map[uint32][2]uint64{
@@ -79,20 +89,47 @@ func ollamaTensorBytes(list []ollamaTensor) (int64, bool) {
 	return tensorBytes(tensors)
 }
 
-// expertBytes sums the routed-expert tensors. ok is false when a tensor's
-// type is unknown, so a partial sum is never mistaken for the whole.
-func expertBytes(tensors []ggufTensor) (total int64, ok bool) {
+// expertLayerBytes sums the routed-expert tensors per layer: element i is
+// the expert weights of blk.i, zero for a layer without experts (some models
+// start with dense layers). ok is false when an expert tensor's type or layer
+// is unknown, so a partial sum is never mistaken for the whole.
+func expertLayerBytes(tensors []ggufTensor) (layers []int64, ok bool) {
 	for _, t := range tensors {
 		if !expertTensor.MatchString(t.Name) {
 			continue
 		}
 		b, known := tensorSize(t)
-		if !known {
-			return 0, false
+		m := blockIndex.FindStringSubmatch(t.Name)
+		if !known || m == nil {
+			return nil, false
 		}
-		total += b
+		i, err := strconv.Atoi(m[1])
+		if err != nil || i >= maxCPUExpertLayers {
+			return nil, false
+		}
+		for len(layers) <= i {
+			layers = append(layers, 0)
+		}
+		layers[i] += b
 	}
-	return total, true
+	return layers, true
+}
+
+// parameterCounts counts the model's parameters from its tensor table, and
+// those one token runs: everything but the routed experts, plus used of every
+// count experts. active is 0 when used is unknown.
+func parameterCounts(tensors []ggufTensor, count, used int) (total, active int64) {
+	var experts int64
+	for _, t := range tensors {
+		total += int64(t.Elements)
+		if expertTensor.MatchString(t.Name) {
+			experts += int64(t.Elements)
+		}
+	}
+	if count > 0 && used > 0 && used <= count {
+		active = total - experts + experts/int64(count)*int64(used)
+	}
+	return total, active
 }
 
 // ollamaTensors converts Ollama's /api/show tensor list.
@@ -104,7 +141,7 @@ func ollamaTensors(list []ollamaTensor) ([]ggufTensor, bool) {
 			if expertTensor.MatchString(t.Name) {
 				return nil, false
 			}
-			continue
+			id = unknownGGMLType
 		}
 		n := uint64(1)
 		for _, d := range t.Shape {
@@ -121,19 +158,30 @@ type ollamaTensor struct {
 	Shape []uint64 `json:"shape"`
 }
 
-// applyExperts records the expert count and expert weight size on s.
+// applyExperts records the expert counts, each layer's expert weight size
+// and the parameter counts on s.
 func (s *modelSpec) applyExperts(meta map[string]ggufValue, tensors []ggufTensor) {
 	if s.Architecture != "" {
 		if n, ok := metaInt(meta, s.Architecture+".expert_count"); ok && n > 1 {
 			s.ExpertCount = int(n)
 		}
+		if n, ok := metaInt(meta, s.Architecture+".expert_used_count"); ok && n > 0 && s.ExpertCount > 0 && int(n) <= s.ExpertCount {
+			s.ExpertUsedCount = int(n)
+		}
 	}
-	if s.ExpertCount == 0 {
+	if s.ExpertCount == 0 || len(tensors) == 0 {
 		return
 	}
-	if b, ok := expertBytes(tensors); ok && b > 0 {
-		s.ExpertBytes += b
-	} else if len(tensors) > 0 {
-		s.Notes = append(s.Notes, "the size of this model's expert weights could not be read, so they cannot be planned in system memory")
+	s.TotalParams, s.ActiveParams = parameterCounts(tensors, s.ExpertCount, s.ExpertUsedCount)
+	layers, ok := expertLayerBytes(tensors)
+	var sum int64
+	for _, b := range layers {
+		sum += b
 	}
+	if !ok || sum <= 0 {
+		s.Notes = append(s.Notes, "the size of this model's expert weights could not be read, so they cannot be planned in system memory")
+		return
+	}
+	s.ExpertLayerBytes = layers
+	s.ExpertBytes = sum
 }
