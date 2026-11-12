@@ -24,6 +24,7 @@ import { buildRadialChartMetrics } from '@/ui/utils/build-radial-chart-metrics'
 import { hasInferenceReadyGpu, isGpuInferenceReady } from '@/ui/utils/gpu-inference'
 import NodeEnginesInline from './NodeEnginesInline'
 import NodeEngineSettings from './NodeEngineSettings'
+import { NodeServingControls, NodeStateBadge, NodeStateError } from './NodeServingControls'
 import NodeRequestTelemetry from './NodeRequestTelemetry'
 
 const MAX_CHART_SIZE = 60
@@ -217,6 +218,12 @@ function NodeCardDetails({ node }: NodeCardDetailsProps) {
 
     const expandButtons = (placement: 'left' | 'top') => (
         <>
+            <NodeServingControls
+                nodeId={node.id}
+                nodeName={node.name}
+                isSelf={isLocal}
+                placement={placement}
+            />
             <DismissibleTooltip slotContent="Show performance" placement={placement}>
                 <Button
                     kind={isExpanded ? 'primary' : 'tertiary'}
@@ -324,8 +331,12 @@ function NodeCardDetails({ node }: NodeCardDetailsProps) {
                             gap="4"
                             className="shrink min-w-0 ml-1 -mt-1"
                         >
+                            <NodeStateBadge nodeId={node.id} isSelf={isLocal} />
                             <NodeEnginesInline nodeId={node.id} />
                         </Flex>
+                        <div className="ml-1 -mt-2 empty:hidden">
+                            <NodeStateError nodeId={node.id} isSelf={isLocal} />
+                        </div>
                         {isNarrow && (
                             <Flex align="center" gap="2" className="ml-1 -mt-0.5">
                                 {expandButtons('top')}

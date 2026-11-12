@@ -42,6 +42,7 @@ import type { ServiceError } from '@/shared/types/errors'
 import type { NodeItem } from '@/shared/types/nodes'
 import type { NodeItemMetrics } from '@/shared/types/metrics'
 import type { Workload } from '@/shared/types/workloads'
+import type { NodeStateChange, NodeStateInfo, NodeStatesSnapshot } from '@/shared/types/node-state'
 import type {
     ModelDetails,
     ModelDetailsRequest,
@@ -160,6 +161,10 @@ export interface WsInvokeChannelMap {
     // Filling gaps from the model's web page (nvpair-proxy model/web-facts)
     'engine:model-web-facts': { request: WebFactsRequest; response: WebFactsStatus }
     'engine:model-web-facts-start': { request: WebFactsRequest; response: WebFactsStatus }
+
+    // Node state: pause, stop or resume a node (nvpair-proxy, relayed by the broker)
+    'node-state:get-all': { request: void; response: NodeStatesSnapshot }
+    'node-state:set': { request: NodeStateChange; response: NodeStateInfo }
 }
 
 export type WsInvokeChannel = keyof WsInvokeChannelMap

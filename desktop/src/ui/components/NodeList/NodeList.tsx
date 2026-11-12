@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import 'overlayscrollbars/styles/overlayscrollbars.css'
-import { memo, useMemo } from 'react'
+import { memo, useEffect, useMemo } from 'react'
 import { Stack } from '@nvidia/foundations-react-core'
 import { OverlayScrollbarsComponent } from 'overlayscrollbars-react'
 import type { PartialOptions } from 'overlayscrollbars'
@@ -11,6 +11,12 @@ import { useOverviewNodes } from '@/ui/hooks/useOverviewNodes'
 import NodeCardDetails from './NodeCardDetails'
 import { CONNECTIONS_WIDTH } from '@/ui/constants/app'
 import OfflineNode from './OfflineNode'
+import { useNodeStateStore } from '@/ui/stores/node-state.store'
+
+// How often the cards re-read which nodes are paused or stopped. Other nodes
+// announce changes to this node's router at once, so this only bounds how
+// long the badge lags behind it.
+const NODE_STATE_POLL_MS = 3_000
 
 const SCROLLBAR_OPTIONS = {
     scrollbars: { autoHide: 'leave', autoHideDelay: 800 }
@@ -18,6 +24,13 @@ const SCROLLBAR_OPTIONS = {
 
 function NodeList() {
     const allNodes = useOverviewNodes()
+    const refreshNodeStates = useNodeStateStore(s => s.refresh)
+
+    useEffect(() => {
+        void refreshNodeStates()
+        const timer = setInterval(() => void refreshNodeStates(), NODE_STATE_POLL_MS)
+        return () => clearInterval(timer)
+    }, [refreshNodeStates])
 
     const { online, offline } = useMemo(() => {
         const on: NodeItem[] = []

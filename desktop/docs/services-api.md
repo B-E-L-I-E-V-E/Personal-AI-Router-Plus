@@ -226,6 +226,8 @@
 | `node/selected` | request (we call) | ⚠️ not called |
 | `node/set-local-backend` | request (we call) | ⚠️ not called |
 | `node/set-priority` | request (we call) | ✅ yes |
+| `node/state` | request (we call) | ✅ yes |
+| `node/states` | request (we call) | ✅ yes |
 | `nodes/list` | request (we call) | ✅ yes |
 | `performance/benchmark` | request (we call) | ✅ yes |
 | `performance/clear` | request (we call) | ✅ yes |

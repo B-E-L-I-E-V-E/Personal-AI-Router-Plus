@@ -39,6 +39,7 @@ in one cluster.
 | Room for the answer | Not reserved | A **reply budget** kept in every window, so the model can always answer |
 | Knowing before you send | — | Each session reports the room its next post has |
 | Tracing a request | — | `X-Request-ID` on every request, response, job and log line |
+| Taking a node out of service | — | **Pause** (running requests finish) or **Stop** (they are cancelled), from any node; requests go to other nodes |
 
 ### Sessions and agents
 
@@ -368,7 +369,9 @@ Each entry assumes the ones before it.
 4. **[Engine settings](docs/engine-settings.mdx)** — change an engine's ports and
    its launch command, on this machine or a paired one, and give a browser access
    to your models. Then **[Sessions and context capacity](docs/sessions.mdx)**
-   covers PAIR Plus's request IDs, sessions, agents, and per-model capacity.
+   covers PAIR Plus's request IDs, sessions, agents, and per-model capacity, and
+   **[Pausing and stopping a node](docs/node-state.mdx)** covers taking a node
+   out of service without losing work.
 5. **[Terminal interface](docs/terminal-interface.mdx)** — the same tasks from a
    terminal, for a machine with no desktop environment. Skip it if every machine
    you run has a desktop.

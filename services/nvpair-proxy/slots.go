@@ -126,6 +126,10 @@ func (s *sessionStore) waitForSlot(ctx context.Context, id string, k capacityKey
 		s.mu.Unlock()
 		return errSessionGone
 	}
+	if err := s.refusedLocked(); err != nil {
+		s.mu.Unlock()
+		return err
+	}
 	if s.tryTakeSlotLocked(sess, k, limit()) {
 		s.mu.Unlock()
 		return nil
@@ -152,6 +156,10 @@ func (s *sessionStore) waitForSlot(ctx context.Context, id string, k capacityKey
 		if !ok {
 			s.mu.Unlock()
 			return errSessionGone
+		}
+		if err := s.refusedLocked(); err != nil {
+			s.mu.Unlock()
+			return err
 		}
 		// Only the head of the queue may take a slot, so arrival order holds.
 		if q := s.queues[k]; len(q) > 0 && q[0] == w && s.tryTakeSlotLocked(sess, k, limit()) {
@@ -215,4 +223,32 @@ func (s *sessionStore) activityCounts() (sessions, queued int) {
 		queued += len(q)
 	}
 	return len(s.sessions), queued
+}
+
+// refusedLocked is why this node takes no slot requests now, if it does not:
+// a paused or stopped node (nodestate.go) lets no waiter through.
+func (s *sessionStore) refusedLocked() error {
+	if s.refuse == nil {
+		return nil
+	}
+	return s.refuse()
+}
+
+// refuseWaiters wakes every request waiting for a slot so each re-checks
+// whether this node still takes requests.
+func (s *sessionStore) refuseWaiters() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.signalLocked()
+}
+
+// releaseAllSlots frees every slot sessions hold on this node. The sessions
+// stay: their next turn takes a slot again wherever it runs.
+func (s *sessionStore) releaseAllSlots() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, sess := range s.sessions {
+		clear(sess.slots)
+	}
+	s.signalLocked()
 }

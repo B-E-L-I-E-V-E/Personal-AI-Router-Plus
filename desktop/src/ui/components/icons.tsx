@@ -17,6 +17,8 @@ import {
     Filter,
     Globe,
     Minus,
+    Pause as LucidePause,
+    Play as LucidePlay,
     Search as LucideSearch,
     Settings,
     Square as LucideSquare,
@@ -58,6 +60,8 @@ export const KeyboardArrowRight = appIcon(ChevronRight)
 export const Minimize = appIcon(Minus)
 export const MoreHoriz = appIcon(Ellipsis)
 export const OpenInNew = appIcon(ExternalLink)
+export const Pause = appIcon(LucidePause)
+export const Play = appIcon(LucidePlay)
 export const Public = appIcon(Globe)
 export const Search = appIcon(LucideSearch)
 export const SettingsOutlined = appIcon(Settings)
