@@ -145,6 +145,12 @@ Commands return no state. Renderer stores update from
 
 - `onUpdate(callback)` reports node CPU, memory, GPU, and VRAM metrics.
 
+### `pairApi.router`
+
+- `getStatus()` returns `{ listening, port }` for the PAIR router, the proxy's
+  one loopback endpoint for every engine. The Endpoints window lists it first
+  while an engine is running.
+
 ## Logical invoke channels
 
 | Channel                     | Request                      | Response                  |
@@ -168,6 +174,7 @@ Commands return no state. Renderer stores update from
 | `errors:get-initial`        | `void`                       | `ServiceError[]`          |
 | `errors:clear`              | error ID                     | `null`                    |
 | `workloads:get-initial`     | `void`                       | workload map              |
+| `router:get-status`         | `void`                       | `RouterStatus`            |
 
 ## Logical push channels
 

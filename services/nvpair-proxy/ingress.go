@@ -95,7 +95,12 @@ func (f *facade) handlePlain(w http.ResponseWriter, r *http.Request) {
 	}
 	// PAIR's own session API is answered here and never forwarded. Being on
 	// the plaintext personality makes it loopback-only, like inference.
-	if f.serveSessionsAPI(w, r) || f.serveCapacityAPI(w, r) || f.serveNodeStateAPI(w, r) || f.servePerformanceAPI(w, r) {
+	api := f.pairAPIFacade()
+	if api.serveSessionsAPI(w, r) || api.serveCapacityAPI(w, r) || api.serveNodeStateAPI(w, r) || api.servePerformanceAPI(w, r) {
+		return
+	}
+	if f.router {
+		f.handleRouter(w, r)
 		return
 	}
 	f.handleHTTP(w, r)
@@ -109,6 +114,13 @@ func (f *facade) handlePlain(w http.ResponseWriter, r *http.Request) {
 // so the two personalities stay behaviorally identical toward the engine. It
 // never calls resolveCandidates, so a peer request cannot be re-routed onward.
 func (f *facade) handleClusterIngress(w http.ResponseWriter, r *http.Request) {
+	// The router is loopback-only: peers reach this node's engines through
+	// their own ports, never through it.
+	if f.router {
+		writeIngressError(w, http.StatusNotFound, "no-cluster-ingress",
+			"the PAIR router has no cluster ingress; use the engine's own port")
+		return
+	}
 	f.host.activeRequests.Add(1)
 	defer f.host.activeRequests.Add(-1)
 	// Re-derive membership and pins per request so a cluster left, or a peer

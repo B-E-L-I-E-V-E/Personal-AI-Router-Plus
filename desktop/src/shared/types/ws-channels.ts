@@ -61,6 +61,7 @@ import type {
     SessionSummary
 } from '@/shared/types/sessions'
 import type { BenchmarkRun, PerformanceLive, PerformanceReport } from '@/shared/types/performance'
+import type { RouterStatus } from '@/shared/types/router'
 import type {
     AvailableNode,
     ClusterIdentityPayload,
@@ -168,6 +169,9 @@ export interface WsInvokeChannelMap {
     // Node state: pause, stop or resume a node (nvpair-proxy, relayed by the broker)
     'node-state:get-all': { request: void; response: NodeStatesSnapshot }
     'node-state:set': { request: NodeStateChange; response: NodeStateInfo }
+
+    // The PAIR router: one port for every engine (nvpair-proxy router/status)
+    'router:get-status': { request: void; response: RouterStatus }
 }
 
 export type WsInvokeChannel = keyof WsInvokeChannelMap

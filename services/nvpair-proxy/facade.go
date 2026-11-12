@@ -50,6 +50,11 @@ type facade struct {
 	// never mutated, so every read is safe without a lock.
 	profile engineProfile
 
+	// router marks the PAIR router: a facade that fronts no engine of its own
+	// and instead routes each request to whichever engine advertises its model
+	// (router.go). Set once at construction.
+	router bool
+
 	// portMu serializes durable rebinds without blocking routing during storage I/O.
 	portMu sync.Mutex
 
@@ -379,6 +384,9 @@ func (f *facade) replaceSubscribed(params json.RawMessage) {
 // Process-scoped notifications — anything the broker attributes to the process
 // rather than an engine — go to host.codec directly and must not come here.
 func (f *facade) notify(method string, params any) error {
+	if f.router {
+		return f.notifyRouter(method, params)
+	}
 	return f.host.codec.Notify(engines.AddressMethod(f.profile.Name, method), params)
 }
 

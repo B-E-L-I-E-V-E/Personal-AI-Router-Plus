@@ -19,9 +19,10 @@ every object.
 ## The basics
 
 **Base URL.** Each engine (Ollama, LM Studio, llama.cpp) has its own PAIR
-endpoint on your machine. Copy it from PAIR's **Endpoints** window. The
-examples use `http://127.0.0.1:11434`, an Ollama endpoint. Don't assume the
-engine's usual port: PAIR may have moved it.
+endpoint on your machine, and the **PAIR router** is one endpoint for all of
+them (see below). Copy either from PAIR's **Endpoints** window. The examples
+use `http://127.0.0.1:11434`, an Ollama endpoint. Don't assume the engine's
+usual port: PAIR may have moved it.
 
 **Two kinds of call.**
 
@@ -61,6 +62,69 @@ might want to act on it:
 ```json
 { "error": "session has ended or expired; start a new session" }
 ```
+
+## The PAIR router
+
+The router, on `http://127.0.0.1:11400` by default, is one endpoint for every
+engine. Send a model name and PAIR finds a node and engine that has it: an
+Ollama model, an LM Studio model and a llama.cpp model can all be reached at the
+same address. Like the engine endpoints it accepts calls only from the same
+machine.
+
+| Route | What it does |
+|---|---|
+| `GET /v1/models` | Every model on every node and engine, as one OpenAI model list. |
+| `POST /v1/chat/completions`, `/v1/completions`, `/v1/embeddings` | OpenAI-format inference, routed by `model`. |
+| `POST /v1/messages` | Anthropic-format inference, routed by `model`. llama.cpp is not considered, because it has no such route. |
+| `/pair/v1/…` | PAIR's own API, as on every endpoint. |
+
+Any other path answers `404`: engine-specific routes such as `/api/chat` are on
+that engine's own endpoint.
+
+**Choosing where a request runs.** Every node and engine whose model list has
+the requested model is eligible, matched the way that engine names models:
+Ollama treats `llama3` and `llama3:latest` as one model, while LM Studio and
+llama.cpp match the name exactly. Among those, the least busy node wins,
+whichever engine it runs: the same choice PAIR makes on an engine's own
+endpoint. If one machine has the model in two engines, Ollama is preferred,
+then LM Studio, then llama.cpp. If the chosen engine fails before it answers,
+PAIR tries the next one, which may be another engine. The request body is sent
+unchanged, and streaming, sessions and `X-Request-ID` work as on the engine
+endpoints.
+
+**The model list** has one entry per model ID, from the first engine and node
+that listed it, with a `pair` member saying where else it is:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "qwen2.5-7b-instruct",
+      "object": "model",
+      "owned_by": "organization_owner",
+      "pair": {
+        "engines": ["lmstudio"],
+        "nodes": [{ "id": "6f1c…", "name": "studio.local.", "engine": "lmstudio" }]
+      }
+    }
+  ]
+}
+```
+
+A node or engine that does not answer is left out of the list. When nothing
+answers, the list is `503` with code `inventory_unavailable`.
+
+**When no node has the model** the router answers before contacting any engine:
+
+```http
+HTTP/1.1 502 Bad Gateway
+Content-Type: application/json
+
+{ "error": "no available node advertises the requested model", "code": "model_not_found" }
+```
+
+A request without a `model` gets `400` with code `model_required`.
 
 ## Inference in a session
 
@@ -636,6 +700,9 @@ All but the slot-timeout row were returned by a real node; that one is quoted fr
 | `409` | Another agent uses the session | `{"error":"session belongs to a different agent"}` |
 | `409` | A benchmark is already running | `{"error":"a benchmark is already running; wait for it to finish"}` |
 | `410` | The session ended or expired | `{"error":"session has ended or expired; start a new session"}` |
+| `400` | A request to the PAIR router names no model | `{"code":"model_required","error":"the request names no model"}` |
+| `404` | A path the PAIR router does not serve | `{"code":"not_found","error":"the PAIR router serves GET /v1/models and …"}` |
+| `502` | No node or engine has the model (PAIR router) | `{"code":"model_not_found","error":"no available node advertises the requested model"}` |
 | `503` | Every node that has the model is paused or stopped | `{"code":"nodes-held","error":"every node that can serve this request is paused or stopped"}` |
 | `503` + `Retry-After: 5` | Every session slot for the model is taken, and the wait ran out | `{"error":"every context slot for this model is in use; timed out waiting for one"}` (or `… and the wait queue is full`) |
 

@@ -967,6 +967,10 @@ func (b *Broker) spawnProxy() (supervisedHandle, error) {
 		b.blockAndFinishEngineProxy(profile)
 	}
 
+	// The PAIR router routes across the facades just enabled, so it comes up
+	// after them. Its failure only costs the router itself.
+	_, _ = b.enablePAIRRouter(bringUp, pp)
+
 	// A facade can announce ready before its handle was published, so replay
 	// the reconciliation now. Both gates are sync.Once-guarded, which makes
 	// this safe when the notification goroutine already handled it.

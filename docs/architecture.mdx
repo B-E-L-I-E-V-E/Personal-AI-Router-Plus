@@ -330,6 +330,36 @@ see the same idle node and pile onto it. To prevent that, each proxy adds the
 requests it has just dispatched itself to its own estimate and reserves its
 choice before forwarding, so a burst spreads without waiting for those reports.
 
+### The PAIR Router
+
+Each engine's port routes only within that engine. The PAIR router, a loopback
+port (`11400` by default) in the same `nvpair-proxy` process, routes across all
+of them: a client sends a model name and the router finds every node and engine
+that advertises it.
+
+- **Eligibility** is each engine's own capability gate, under that engine's
+  naming rule, unioned across the enabled engines that serve the request's path.
+  Paused, stopped, unpinned and self-forward candidates are excluded exactly as
+  on the engine's own port.
+- **Ordering** is the scheduler's priority order, then node ID, then the engine
+  table's order (Ollama, LM Studio, llama.cpp). The proxy's reservations then
+  pick the least loaded node, as on every port, so the least busy machine wins
+  whichever engine it runs. Manual node pins are per engine and do not apply.
+- **Dispatch** goes through the chosen engine's own path: its local backend on
+  this node, or the peer's mTLS ingress for that engine. The peer sees an
+  ordinary request, so routing across engines needs nothing from peers.
+  Failover walks the same list and may cross engines.
+- **Attribution.** A routed workload and its request events are filed under the
+  engine that serves it, with an ID prefixed `router-` so it cannot collide with
+  that engine's own requests.
+
+The router has no cluster ingress of its own: an mTLS connection to it is
+refused, because peers reach this node's engines through their own ports. Its
+port is persisted in `router-proxy-port.json` beside the engines' port files.
+`GET /v1/models` on the router is the union of every engine's model list on
+every routable node, with a `pair` member naming where each model runs; refer
+to [API](api.mdx#the-pair-router).
+
 ### Models Do Not Need to Be on Every Node
 
 **You do not have to put the same models on every node.** A cluster where one
@@ -555,6 +585,7 @@ A default installation listens on these ports:
 | `11434` | Ollama-compatible proxy (Ollama itself moves to `11435`+) |
 | `1234` | OpenAI-compatible proxy (LM Studio moves to `1235`+) |
 | `8080` | OpenAI-compatible llama.cpp proxy (managed router on `8081`) |
+| `11400` | PAIR router: one loopback endpoint for every engine, routed by model |
 | `14318` | Node hardware and model inventory |
 | `14319` | Service-error synchronization between nodes |
 | `14320` | Workload propagation between nodes |

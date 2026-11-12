@@ -14,6 +14,7 @@ import type { ServiceError } from '@/shared/types/errors'
 import type { NodeItemMetrics } from '@/shared/types/metrics'
 import type { Workload } from '@/shared/types/workloads'
 import type { NodeServingState, NodeStateInfo, NodeStatesSnapshot } from '@/shared/types/node-state'
+import type { RouterStatus } from '@/shared/types/router'
 import type {
     ApplyPlanResult,
     CapacityChange,
@@ -160,6 +161,11 @@ export interface INodeStateApi {
     set(nodeId: string | null, state: NodeServingState): Promise<NodeStateInfo>
 }
 
+export interface IRouterApi {
+    /** Where the PAIR router, one port for every engine, is listening. */
+    getStatus(): Promise<RouterStatus>
+}
+
 export interface IMetricsApi {
     /** Periodic hardware metrics update (CPU, GPU, memory) for a node. */
     onUpdate(callback: (metrics: NodeItemMetrics) => void): () => void
@@ -186,6 +192,7 @@ export interface IPairApi {
     sessions: ISessionsApi
     nodeState: INodeStateApi
     performance: IPerformanceApi
+    router: IRouterApi
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +279,9 @@ export function createPairApi(transport: ServiceTransport): IPairApi {
         nodeState: {
             getAll: () => transport.invoke('node-state:get-all'),
             set: (nodeId, state) => transport.invoke('node-state:set', { nodeId, state })
+        },
+        router: {
+            getStatus: () => transport.invoke('router:get-status')
         }
     }
 }

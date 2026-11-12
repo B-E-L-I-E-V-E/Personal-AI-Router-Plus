@@ -108,7 +108,10 @@ The broker uses both for scheduling.
 ### Inference HTTP
 
 Ollama, LM Studio, and llama.cpp proxies expose local client-compatible HTTP
-endpoints. Chat behaves as a local third-party client. Prompts, messages,
+endpoints. The proxy's PAIR router (default `11400`) is one more loopback
+endpoint that routes OpenAI and Anthropic requests by model across every engine;
+the desktop reads its port with `router:get-status` (`router/status`) and lists
+it in Endpoints. Chat behaves as a local third-party client. Prompts, messages,
 chunks, and response bodies must never be logged.
 
 ## Runtime defaults

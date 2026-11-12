@@ -2,16 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Button, Flex, Stack, Text } from '@nvidia/foundations-react-core'
-import { ContentCopy } from './icons'
+import { ContentCopy, Public } from './icons'
 
 import { useEngineStatusStore } from '@/ui/stores/engine-status.store'
 import { EnabledEngineTypes, EngineDisplayNames } from '@/shared/constants/engines'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import EngineIcon from './EngineIcon'
 import { DismissibleTooltip } from '@/ui/components/DismissibleTooltip/DismissibleTooltip'
 import { getEnginesForNode, isEngineTypeRunningClusterWide } from '@/ui/utils/get-engines-for-node'
 import { gatewayEndpointDisplayUrl } from '@/ui/utils/gateway-inference-paths'
 import type { EngineType } from '@/shared/types/engines'
+
+const ROUTER_NAME = 'PAIR router'
 
 function createCopiedState(enabledEngines: EngineType[]): Record<string, boolean> {
     const copiedState: Record<string, boolean> = {}
@@ -32,6 +34,23 @@ export default function EndpointContent({
         createCopiedState(EnabledEngineTypes)
     )
     const statusByNode = useEngineStatusStore(s => s.statusByNode)
+    // The router's port is the proxy's to report. Re-read whenever engine
+    // status changes, since the proxy brings the router up after the engines.
+    const [routerPort, setRouterPort] = useState<number | null>(null)
+    useEffect(() => {
+        let current = true
+        window.pairApi.router
+            .getStatus()
+            .then(status => {
+                if (current) setRouterPort(status.port)
+            })
+            .catch(() => {
+                if (current) setRouterPort(null)
+            })
+        return () => {
+            current = false
+        }
+    }, [statusByNode])
     const selfEngines = useMemo(
         () => getEnginesForNode(selfId, statusByNode, EnabledEngineTypes),
         [selfId, statusByNode]
@@ -58,8 +77,21 @@ export default function EndpointContent({
             return []
         }
 
+        // The router reaches every engine above by model name, so it is listed
+        // first, and only while there is an engine for it to reach.
+        if (routerPort !== null) {
+            return [
+                {
+                    name: ROUTER_NAME,
+                    proxyPort: routerPort,
+                    url: `http://127.0.0.1:${routerPort}`,
+                    icon: <Public style={{ fontSize: 20 }} />
+                },
+                ...engines
+            ]
+        }
         return engines
-    }, [selfEngines, statusByNode])
+    }, [selfEngines, statusByNode, routerPort])
 
     const handleCopy = useCallback(async (value: string, backend: string) => {
         const electronCopy = window.windowApi?.window?.copyToClipboard

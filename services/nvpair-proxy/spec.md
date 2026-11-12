@@ -1125,6 +1125,42 @@ what the node's own engine serves, not what the node routes.
 - **Loopback API.** `GET`/`PUT /pair/v1/node/state` on the plaintext
   personality. The idle check's `activity` carries `state`.
 
+### 5.20 PAIR router
+
+A loopback facade that fronts no engine (`router.go`), enabled with
+`router/enable` and served by the same listener machinery and dispatch loop.
+
+- **Candidates.** For an inference path, the union over the enabled engine
+  facades that classify `POST <path>` as inference, of each facade's own
+  `resolveCandidates(model)`: the same capability gate and naming rule, the
+  same pause, stop, unpinned-peer and self-forward exclusions. A request with
+  no model is refused with `400 model_required`; an empty set with nothing held
+  is `502 {"error":"no available node advertises the requested model","code":"model_not_found"}`;
+  an empty set with something held is the usual `503` (§5.19).
+- **Order.** Scheduler priority, then node ID, then engine table order.
+  Reservations (§6) then move the least loaded node first; where a node
+  appears once per engine, its first position counts. Manual pins are per
+  engine and do not apply.
+- **Attempts.** Each candidate carries its engine facade. Address memory,
+  discovery presence, session pins, usage, performance and the commit's request
+  events are that engine's; the dispatch loop, retry bounds and commit point are
+  unchanged. Failover may cross engines.
+- **Attribution.** The workload is filed under the lead candidate's engine and
+  keeps it through a cross-engine failover, because the engine is part of the
+  workload's store key. Its ID is `router-<n>`, so it cannot collide with that
+  engine's own counter. Request events go through the serving engine's facade;
+  a request that reached no engine is not reported as an event.
+- **Sessions.** Affinity prefers the (node, engine) that served the last turn.
+  Admission (§5.13) applies to the first local candidate's engine, and the
+  reply budget only when that engine serves.
+- **Model list.** `GET /v1/models` fetches every engine's OpenAI list from each
+  of its routable candidates and returns one list de-duplicated by `id`, first
+  record wins, with `pair.engines` and `pair.nodes`. Partial when sources fail;
+  `503` when none answers. No CORS merge: a browser origin gets no grant.
+- **Surface.** Anything other than the model list, the inference paths and
+  `/pair/v1/*` is `404`. The mTLS personality answers `404`: peers reach this
+  node's engines on their own ports.
+
 ## 6. Reservations
 
 A reservation is one in-flight dispatch this process has made since the last
@@ -1183,6 +1219,9 @@ untouched, the primary listener stays up, and a warning is reported.
 | Where PAIR relocates the engine | 11435 | 1235 | 8081 |
 | Standalone port, when `port` is omitted | 11435 | 1234 | 8080 |
 | Persisted-port file | `proxy-port.json` | `lmstudio-proxy-port.json` | `llamacpp-proxy-port.json` |
+
+The PAIR router (§5.20) is not an engine: its standalone port is `11400`, its
+persisted-port file `router-proxy-port.json`, and it moves with `router/set-port`.
 
 A port chosen at runtime via `set-port` is persisted per engine and restored
 when that facade is enabled, taking precedence over the requested port, so the

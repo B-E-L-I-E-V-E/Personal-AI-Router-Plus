@@ -45,6 +45,7 @@ import {
     setPlanner
 } from '@/electron/service-bridge/capacity-planner'
 import { getNodeStates, setNodeState } from '@/electron/service-bridge/node-state-bridge'
+import { getRouterStatus } from '@/electron/service-bridge/router-bridge'
 import { getModelDetails, getModelWebFacts, startModelWebFacts } from './model-details'
 import {
     clearPerformance,
@@ -762,7 +763,9 @@ const EMPTY_SERVICE_BRIDGE_HANDLERS: BridgeHandlerMap = {
     'engine:model-web-facts-start': payload => startModelWebFacts(payload),
 
     'node-state:get-all': () => getNodeStates(),
-    'node-state:set': payload => setNodeState(payload)
+    'node-state:set': payload => setNodeState(payload),
+
+    'router:get-status': () => getRouterStatus()
 }
 
 export function handleServiceBridgeInvoke<C extends WsInvokeChannel>(
