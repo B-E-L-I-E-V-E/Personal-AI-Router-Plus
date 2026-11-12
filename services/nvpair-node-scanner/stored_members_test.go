@@ -105,7 +105,7 @@ func TestStoredMemberRejectsWrongOrUntrustedAnswers(t *testing.T) {
 		"different node":       peerInfo("someone-else", "someone-else"),
 		"unpinned principal":   peerInfo("principal-peer", "principal-stranger"),
 		"unclustered answer":   peerInfo("principal-peer", ""),
-		"no services reported": {HostUUID: "principal-peer", ClusterUUID: strPtr("principal-peer")},
+		"no cluster field":     {HostUUID: "principal-peer", Services: map[string]int{"ni": 14318}},
 	}
 	for name, info := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -141,3 +141,22 @@ func TestLoadStoredMembersFiltersEntries(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// A member on an older version reports no service ports; it is still reached,
+// with PAIR's fixed ports assumed, so one machine can upgrade on its own.
+func TestStoredMemberOlderPeerGetsFixedPorts(t *testing.T) {
+	members := []storedMember{{NodeUUID: "principal-peer", Name: "workstation-02", IPAddress: "127.0.0.1", State: "member"}}
+	f := newStoredMemberFixture(t, members, func() NodeInfoResponse {
+		return NodeInfoResponse{HostUUID: "principal-peer", ClusterUUID: strPtr("principal-peer")}
+	})
+	events := f.d.storedMemberEvents()
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	rec := noderec.ParseTXT(events[0].Node.TXT)
+	for k, want := range legacyServicePorts {
+		if got, _ := rec.Port(k); got != want {
+			t.Fatalf("%s port = %d, want %d", k, got, want)
+		}
+	}
+}

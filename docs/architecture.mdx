@@ -691,7 +691,8 @@ stored in `members.json` that the browse map is missing, and asks node-info at
 each one's stored address who it is. node-info reports its service ports (the
 broker pushes the same map the mDNS record carries), so the scanner rebuilds the
 member's record and folds it into the directory exactly as an mDNS sighting
-would be.
+would be. A member on an older version reports no ports, so PAIR's fixed ones
+are assumed, which lets one node upgrade on its own.
 
 The scanner accepts the answer only when it names that member's node ID and a
 cluster principal this node holds a pin for. That is a stricter check than an

@@ -17,7 +17,9 @@ package main
 //   - It only dials addresses cluster-manager wrote after pairing, never anything
 //     learned from the network on its own.
 //   - The answering node-info must name the member's own nodeUuid, and must
-//     report a cluster principal this node holds a pin for. An mDNS record is
+//     report a cluster principal this node holds a pin for. A member too old to
+//     report its service ports is assumed to use PAIR's fixed ones, so a node
+//     that upgrades alone still reaches the rest. An mDNS record is
 //     accepted on its uuid= and cluster-uuid= alone, with no answer required.
 //   - Everything that matters afterwards (models, peer calls, inference) is
 //     cluster mTLS pinned to that principal, so an impostor at the address gets
@@ -57,6 +59,26 @@ const (
 // storedMemberNodeInfoPort is where node-info is asked. node-info binds the
 // fixed SRVPort under the broker; tests point it at their own server.
 var storedMemberNodeInfoPort = noderec.SRVPort
+
+// legacyServicePorts are the fixed ports PAIR binds, assumed for a member too
+// old to report its own (node-info's services field arrived with this
+// fallback). They let a node that upgrades alone reach members that have not
+// upgraded yet. The engine proxies are included because the proxy listens on
+// them whether or not the engine behind it runs; which models a node actually
+// serves still comes from its engine-manager, so a missing engine contributes
+// no models and attracts no routing. Ports that turn out not to answer are
+// handled like any other unreachable service.
+var legacyServicePorts = map[noderec.ServiceKey]int{
+	noderec.ServiceNodeInfo:      noderec.SRVPort,
+	noderec.ServiceErrors:        14319,
+	noderec.ServiceWorkload:      14320,
+	noderec.ServiceCluster:       14321,
+	noderec.ServiceEngineManager: 14322,
+	noderec.ServiceEngineControl: 14323,
+	noderec.ServiceOllama:        11434,
+	noderec.ServiceLMStudio:      1234,
+	noderec.ServiceLlamaCPP:      8080,
+}
 
 // storedMember is the subset of cluster-manager's ClusterNode this loop reads.
 type storedMember struct {
@@ -165,10 +187,11 @@ func (d *daemon) storedMemberEvents() []DiscoveryEvent {
 // dialStoredMember asks node-info at the member's stored address who it is and
 // rebuilds its _nvpair-node record from the answer. It succeeds only when the
 // machine names the member (by host uuid or cluster principal), holds a cluster
-// principal this node has pinned, and reports its service ports.
+// principal this node has pinned. A member that does not report its service
+// ports (an older version) is assumed to use PAIR's fixed ones.
 func (d *daemon) dialStoredMember(m storedMember) (RawNode, bool) {
 	info, ok := d.probeIdentity(m.IPAddress, storedMemberNodeInfoPort)
-	if !ok || info.HostUUID == "" || info.ClusterUUID == nil || len(info.Services) == 0 {
+	if !ok || info.HostUUID == "" || info.ClusterUUID == nil {
 		return RawNode{}, false
 	}
 	principal := *info.ClusterUUID
@@ -189,6 +212,11 @@ func (d *daemon) dialStoredMember(m storedMember) (RawNode, bool) {
 	for k, port := range info.Services {
 		if k != "" && port > 0 {
 			rec.Services[noderec.ServiceKey(k)] = port
+		}
+	}
+	if len(rec.Services) == 0 {
+		for k, port := range legacyServicePorts {
+			rec.Services[k] = port
 		}
 	}
 	if _, ok := rec.Port(noderec.ServiceNodeInfo); !ok {
