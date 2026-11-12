@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -65,6 +66,14 @@ type factField struct {
 	URL bool
 	// Min and Max bound an integer.
 	Min, Max int64
+	// Pattern, when set, is what a text value must look like, and NotPattern
+	// what it must not (a version is never a size tag such as 0.6b).
+	Pattern, NotPattern *regexp.Regexp
+	// Pointed fields depend on which size or tag of a family a page means, so
+	// each is asked on its own, with the model named, instead of in the
+	// reading of the whole object: a small reader confuses family-wide claims
+	// ("a suite of dense and mixture-of-experts models") with the one size.
+	Pointed bool
 }
 
 type factSchema []factField
@@ -80,29 +89,82 @@ func (s factSchema) field(name string) (factField, bool) {
 
 // jsonSchema is the schema handed to the reader as its output format. No field
 // is required, so the reader can leave out what a chunk does not support.
+//
+// The properties keep the schema's order: the reader generates them in that
+// order, and a small reader answers better when the name and description come
+// first (a Go map would sort them).
 func (s factSchema) jsonSchema() map[string]any {
-	props := map[string]any{}
+	var props orderedObject
 	for _, f := range s {
-		p := map[string]any{"type": f.Type, "description": f.Description}
-		props[f.Name] = p
+		if !f.Pointed {
+			props = append(props, orderedField{f.Name, map[string]any{"type": f.Type, "description": f.Description}})
+		}
 	}
 	return map[string]any{"type": "object", "properties": props}
 }
 
+type orderedField struct {
+	Key   string
+	Value any
+}
+
+// orderedObject is a JSON object whose keys keep their order.
+type orderedObject []orderedField
+
+func (o orderedObject) MarshalJSON() ([]byte, error) {
+	var b bytes.Buffer
+	b.WriteByte('{')
+	for i, f := range o {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		k, err := json.Marshal(f.Key)
+		if err != nil {
+			return nil, err
+		}
+		v, err := json.Marshal(f.Value)
+		if err != nil {
+			return nil, err
+		}
+		b.Write(k)
+		b.WriteByte(':')
+		b.Write(v)
+	}
+	b.WriteByte('}')
+	return b.Bytes(), nil
+}
+
+// pointedSchema is the answer to one pointed question: the field, which may
+// be left out, and the words the reader relied on, which may not. Asking for
+// the evidence makes a small reader check the text before it answers.
+func (f factField) pointedSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": orderedObject{
+			{f.Name, map[string]any{"type": f.Type}},
+			{"evidence", map[string]any{"type": "string"}},
+		},
+		"required": []string{"evidence"},
+	}
+}
+
 // modelFactSchema is what PAIR asks of a model's page.
 var modelFactSchema = factSchema{
-	{Name: "name", Type: "string", MaxLen: 120, Description: "The model's name as the page writes it"},
+	{Name: "name", Type: "string", MaxLen: 120, NotPattern: regexp.MustCompile(`:`), Description: "The model family's name as the page writes it, such as Qwen3, without a size or tag"},
 	{Name: "description", Type: "string", MaxLen: 600, FreeText: true, Description: "One or two sentences on what the model is and what it is for"},
-	{Name: "version", Type: "string", MaxLen: 40, Description: "The model's version or release, such as 3 or 2.5"},
-	{Name: "parameterSize", Type: "string", MaxLen: 40, Description: "The parameter count of the downloaded size, such as 0.6B or 8B"},
-	{Name: "dataSize", Type: "string", MaxLen: 40, Description: "The download or file size of the downloaded size, such as 523MB"},
-	{Name: "context", Type: "integer", Min: 512, Max: 1 << 24, Description: "The longest context window of the downloaded size, in tokens (write 40K as 40960 only if the page says 40,960; otherwise 40000)"},
+	{Name: "version", Type: "string", MaxLen: 40, Pointed: true, NotPattern: sizePattern, Description: "the model's release version number, such as 3 or 2.5, never a size or tag such as 0.6b"},
+	{Name: "parameterSize", Type: "string", MaxLen: 40, Pointed: true, Pattern: regexp.MustCompile(`(?i)^(\d+x)?\d+(\.\d+)?\s?[KMBT]$`), Description: "the parameter count of this size, such as 0.6B or 8B"},
+	{Name: "dataSize", Type: "string", MaxLen: 40, Pointed: true, Pattern: regexp.MustCompile(`(?i)^\d+(\.\d+)?\s?[KMGT]i?B$`), Description: "the download or file size of this size as the page writes it, such as 523MB"},
+	{Name: "context", Type: "integer", Min: 512, Max: 1 << 24, Pointed: true, Description: "the context window of this size in tokens, where 40K is 40960"},
 	{Name: "vision", Type: "boolean", Description: "Whether the model accepts images as input"},
 	{Name: "tools", Type: "boolean", Description: "Whether the model supports tool or function calling"},
 	{Name: "thinking", Type: "boolean", Description: "Whether the model has a thinking or reasoning mode"},
-	{Name: "moe", Type: "boolean", Description: "Whether the model is a mixture-of-experts model"},
+	{Name: "moe", Type: "boolean", Pointed: true, Description: "whether this size is a mixture-of-experts model"},
 	{Name: "url", Type: "string", MaxLen: 300, URL: true, Description: "The address of the model's own page"},
 }
+
+// sizePattern matches a parameter size or size tag ("0.6b", "8B", "70b").
+var sizePattern = regexp.MustCompile(`(?i)^\d+(\.\d+)?\s?[KMBT]$`)
 
 // ---------------------------------------------------------------------------
 // Fetching
@@ -485,12 +547,13 @@ func (r *ollamaReader) Ready(ctx context.Context) error {
 }
 
 func (r *ollamaReader) Read(ctx context.Context, system, prompt string, schema map[string]any) (map[string]json.RawMessage, error) {
+	messages := []map[string]string{{"role": "user", "content": prompt}}
+	if system != "" {
+		messages = append([]map[string]string{{"role": "system", "content": system}}, messages...)
+	}
 	body := map[string]any{
-		"model": r.model,
-		"messages": []map[string]string{
-			{"role": "system", "content": system},
-			{"role": "user", "content": prompt},
-		},
+		"model":      r.model,
+		"messages":   messages,
 		"stream":     false,
 		"think":      false,
 		"format":     schema,
@@ -554,13 +617,22 @@ func parsePatch(content string) (map[string]json.RawMessage, error) {
 	return patch, nil
 }
 
-const readerSystem = `You read text from web pages about AI models and answer with one JSON object.
-Fill only the fields the text supports for the model you are asked about. You may interpret the text: a "mixture-of-experts" design supports "moe": true, and "supports function calling" supports "tools": true. Do not guess. Leave out every field the text does not support, and leave a field out when the text gives different values for different sizes and does not say which one applies to the model asked about.`
+const readerSystem = `You read text from a web page about AI models and answer with one JSON object describing the model you are asked about.
+Fill every field the text supports. A page often covers a family of models; values it gives for the whole family (name, description, capabilities such as tools, thinking or image input) apply to every size.
+You may interpret the text: a page tagged "tools" supports tools, and an input of "Text" only means no image input. Do not guess: leave out every field the text does not support.`
 
-// readerPrompt is the question for one chunk.
+// readerPrompt is the question for one chunk, about the fields that are not
+// pointed.
 func readerPrompt(model, engine, page string, part, parts int, chunk string) string {
-	return fmt.Sprintf("The downloaded model is %q (engine: %s).\nText from %s (part %d of %d):\n\"\"\"\n%s\n\"\"\"\nAnswer with the JSON fields this text supports for %q.",
+	return fmt.Sprintf("The downloaded model is %q (engine: %s).\nText from %s (part %d of %d):\n\"\"\"\n%s\n\"\"\"\nFill in every field this text supports for %q and its family: its name, a short description, and its capabilities.",
 		model, engine, page, part, parts, chunk, model)
+}
+
+// pointedPrompt asks for one field of one model.
+func pointedPrompt(f factField, model, page string, chunk string) string {
+	return fmt.Sprintf("The text below is from %s, a web page about AI models. Question about the model %q: %s.\n"+
+		"Answer %q only if the text gives it for %q itself. When the page covers several sizes or tags, use what it says for this one, and leave %q out if the text says only what other sizes have or what the family as a whole offers. Quote the words you relied on in \"evidence\".\n\"\"\"\n%s\n\"\"\"",
+		page, model, f.Description, f.Name, model, f.Name, chunk)
 }
 
 // ---------------------------------------------------------------------------
@@ -592,6 +664,12 @@ func validateFact(f factField, raw json.RawMessage, text, page string) (factValu
 			} else {
 				return nil, false, fmt.Errorf("%s is longer than %d characters", f.Name, f.MaxLen)
 			}
+		}
+		if f.Pattern != nil && !f.Pattern.MatchString(s) {
+			return nil, false, fmt.Errorf("%s does not look like %s", f.Name, f.Description)
+		}
+		if f.NotPattern != nil && f.NotPattern.MatchString(s) {
+			return nil, false, fmt.Errorf("%s does not look like %s", f.Name, f.Description)
 		}
 		if f.URL {
 			u := webURL(s)

@@ -96,7 +96,6 @@ export function ModelWebFacts({
             {running && job && (
                 <Text kind="body/regular/sm" className="text-subtle-color">
                     {job.phase || 'Reading…'}
-                    {job.chunksTotal > 0 ? ` (${job.chunksRead} of ${job.chunksTotal} read)` : ''}
                 </Text>
             )}
             {job?.state === 'failed' && (

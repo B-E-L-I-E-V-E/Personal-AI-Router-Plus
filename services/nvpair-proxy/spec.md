@@ -863,19 +863,28 @@ read the model's own pages and fill them. Nothing runs unless the user asks.
   paragraphs are kept, at most 48,000 characters a page. Text is split at its
   headings into chunks of at most 12,000 characters (about 3,000 tokens),
   longer sections at line and then word boundaries, at most 8 chunks a lookup.
-- **Reader**: each chunk goes to `readerModel` (a setting saved in
-  `model-web-facts.json`, default `qwen3.5:4b`) on **this** node's Ollama
-  through its local backend target: `POST /api/chat` with the field schema as
-  `format`, `think: false`, `temperature: 0`, `num_ctx: 16384`, 90 s per chunk.
-  The prompt names the model asked about, so a page covering several sizes is
-  read for that one. If the reader model is not in `/api/tags` the job fails
-  and says so; no other model is used.
-- **Schema** (`name`, `description`, `version`, `parameterSize`, `dataSize`,
-  `context`, `vision`, `tools`, `thinking`, `moe`, `url`): no field is
-  required, so a chunk answers only what it supports. Each value is validated
-  against its field's type and bounds (`context` a whole number of 512 to 2^24
-  tokens; `url` an http(s) address the page itself gives); an invalid value is
-  dropped and counted in a note.
+- **Reader**: chunks go to `readerModel` (a setting saved in
+  `model-web-facts.json`, default `qwen3.5:4b`, saved only once Ollama lists
+  it) on **this** node's Ollama through its local backend target:
+  `POST /api/chat` with a JSON schema as `format`, `think: false`,
+  `temperature: 0`, `num_ctx: 16384`, 90 s per question. If the reader model
+  is not in `/api/tags` the job fails and says so; no other model is used.
+- **Questions per chunk**: one reading of the family-wide fields (`name`,
+  `description`, `vision`, `tools`, `thinking`, `url`), whose schema keeps the
+  fields in order (a small reader answers worse when they are sorted), and one
+  pointed question for each field that depends on which size or tag a page
+  means (`version`, `parameterSize`, `dataSize`, `context`, `moe`), naming the
+  model and asking for the field and the words relied on (`evidence`, not
+  kept). A pointed field is taken only from its own question. Asked together,
+  a 4B reader took "a suite of dense and mixture-of-experts models" as
+  `moe: true` for `qwen3:0.6b` and a size tag as the version; asked one at a
+  time it did not.
+- **Schema**: no field is required, so a chunk answers only what it
+  supports. Each value is validated against its field's type and bounds:
+  `context` a whole number of 512 to 2^24 tokens; `parameterSize` a count such
+  as `0.6B`, `dataSize` a size such as `523MB`; `version` and `name` never a
+  size tag or `name:tag`; `url` an http(s) address the page itself gives. An
+  invalid value is dropped and counted in a note.
 - **Merging** is ordinary code: an empty field takes the first supported
   value; agreeing values (text equal ignoring case and spacing, numbers within
   2.5%, keeping the multiple of 1024) are kept; disagreeing values leave the

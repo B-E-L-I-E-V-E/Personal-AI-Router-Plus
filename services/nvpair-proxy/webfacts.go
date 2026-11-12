@@ -165,6 +165,17 @@ func (s *webFactsStore) readerModel() string {
 	return firstNonEmpty(s.file.ReaderModel, defaultReaderModel)
 }
 
+// setReaderModel saves the reader model as the setting, once it is known to
+// be downloaded, so a misspelt name never becomes the default.
+func (s *webFactsStore) setReaderModel(model string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if model != "" && model != s.file.ReaderModel {
+		s.file.ReaderModel = model
+		s.saveLocked()
+	}
+}
+
 func (s *webFactsStore) result(k webFactsKey) *webFacts {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -202,10 +213,6 @@ func (s *webFactsStore) begin(k webFactsKey, reader string) (job *webFactsJob, s
 		}
 		return nil, false, errors.New("another web lookup is running; try again when it finishes")
 	}
-	if reader != s.file.ReaderModel && reader != "" {
-		s.file.ReaderModel = reader
-		s.saveLocked()
-	}
 	j := &webFactsJob{State: "running", Phase: "asking the engine for the model's pages", Reader: reader, StartedAt: time.Now().UnixMilli()}
 	s.jobs[k] = j
 	s.running = true
@@ -238,7 +245,8 @@ type webFactsRequest struct {
 	Model  string `json:"model"`
 	NodeID string `json:"nodeId,omitempty"`
 	// ReaderModel is the Ollama model that reads the pages; empty keeps the
-	// saved setting (default qwen3.5:4b). A new value is saved.
+	// saved setting (default qwen3.5:4b). A new value is saved once Ollama
+	// lists it.
 	ReaderModel string `json:"readerModel,omitempty"`
 }
 
@@ -364,6 +372,7 @@ func (p *Proxy) lookUpWebFacts(ctx context.Context, k webFactsKey, readerModel s
 	if err := reader.Ready(ctx); err != nil {
 		return nil, err
 	}
+	p.webFacts.setReaderModel(readerModel)
 	details, err := p.detailsFor(ctx, k)
 	if err != nil {
 		return nil, err
@@ -406,26 +415,59 @@ func (p *Proxy) lookUpWebFacts(ctx context.Context, k webFactsKey, readerModel s
 
 	acc := newFactAccumulator(modelFactSchema)
 	schema := modelFactSchema.jsonSchema()
+	var pointed []factField
+	for _, f := range modelFactSchema {
+		if f.Pointed {
+			pointed = append(pointed, f)
+		}
+	}
+	// Each chunk is one reading of the whole object and one question per
+	// pointed field.
+	asks := total * (1 + len(pointed))
 	progress(func(j *webFactsJob) { j.ChunksTotal = total })
-	done, failed := 0, 0
+	failed, asked := 0, 0
+	read := func(system, prompt string, schema map[string]any) (map[string]json.RawMessage, error) {
+		asked++
+		n := asked
+		progress(func(j *webFactsJob) {
+			j.Phase = fmt.Sprintf("%s is reading (%d of %d questions)", reader.Model(), n, asks)
+		})
+		cctx, cancel := context.WithTimeout(ctx, chunkReadTimeout)
+		defer cancel()
+		return reader.Read(cctx, system, prompt, schema)
+	}
 	for _, pc := range loaded {
 		for i, chunk := range pc.chunks {
-			done++
-			n := done
-			progress(func(j *webFactsJob) { j.Phase = fmt.Sprintf("%s is reading part %d of %d", reader.Model(), n, total) })
-			cctx, cancel := context.WithTimeout(ctx, chunkReadTimeout)
-			patch, err := reader.Read(cctx, readerSystem, readerPrompt(k.Model, k.Engine, pc.page.URL, i+1, len(pc.chunks), chunk), schema)
-			cancel()
-			progress(func(j *webFactsJob) { j.ChunksRead++ })
-			if err != nil {
-				if ctx.Err() != nil {
-					return nil, errors.New("the lookup took longer than PAIR allows; try a smaller reader model")
+			var lastErr error
+			if patch, err := read(readerSystem, readerPrompt(k.Model, k.Engine, pc.page.URL, i+1, len(pc.chunks), chunk), schema); err != nil {
+				lastErr = err
+			} else {
+				// Pointed fields come only from their own question.
+				for _, f := range pointed {
+					delete(patch, f.Name)
 				}
-				failed++
-				result.Notes = appendOnce(result.Notes, "part of a page could not be read: "+err.Error())
-				continue
+				acc.merge(patch, chunk, pc.page.URL)
 			}
-			acc.merge(patch, chunk, pc.page.URL)
+			for _, f := range pointed {
+				if ctx.Err() != nil {
+					break
+				}
+				answer, err := read("", pointedPrompt(f, k.Model, pc.page.URL, chunk), f.pointedSchema())
+				if err != nil {
+					lastErr = err
+					continue
+				}
+				// Only the field asked about is taken from the answer.
+				acc.merge(map[string]json.RawMessage{f.Name: answer[f.Name]}, chunk, pc.page.URL)
+			}
+			progress(func(j *webFactsJob) { j.ChunksRead++ })
+			if ctx.Err() != nil {
+				return nil, errors.New("the lookup took longer than PAIR allows; try a smaller reader model")
+			}
+			if lastErr != nil {
+				failed++
+				result.Notes = appendOnce(result.Notes, "part of a page could not be read: "+lastErr.Error())
+			}
 		}
 	}
 	if failed == total {

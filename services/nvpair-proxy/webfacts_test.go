@@ -109,6 +109,10 @@ func TestValidateFact_RefusesValuesTheSchemaDoesNotAllow(t *testing.T) {
 		{"number for text", "name", `7`},
 		{"too long a name", "name", `"` + strings.Repeat("n", 200) + `"`},
 		{"address that is not http", "url", `"ftp://example.com/model"`},
+		{"download size as parameter count", "parameterSize", `"523MB"`},
+		{"parameter count as download size", "dataSize", `"0.6B"`},
+		{"size tag as version", "version", `"0.6b"`},
+		{"tagged name", "name", `"qwen3:0.6b"`},
 		{"address the page never gives", "url", `"https://elsewhere.example/model"`},
 	}
 	for _, tc := range cases {
@@ -134,6 +138,28 @@ func TestValidateFact_AcceptsAnAddressThePageGives(t *testing.T) {
 	v, ok, err := validateFact(f, json.RawMessage(`"https://example.com/models/m"`), "see https://example.com/models/m for more", "https://page.example/")
 	if err != nil || !ok || v != "https://example.com/models/m" {
 		t.Fatalf("got %v ok=%v err=%v", v, ok, err)
+	}
+}
+
+func TestFactSchema_KeepsTheFieldOrderForTheReader(t *testing.T) {
+	b, err := json.Marshal(modelFactSchema.jsonSchema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(b)
+	last := -1
+	for _, f := range modelFactSchema {
+		if f.Pointed {
+			if strings.Contains(text, `"`+f.Name+`"`) {
+				t.Errorf("pointed field %s is in the whole reading's schema", f.Name)
+			}
+			continue
+		}
+		at := strings.Index(text, `"`+f.Name+`":`)
+		if at < last {
+			t.Errorf("field %s is out of the schema's order in %s", f.Name, text)
+		}
+		last = at
 	}
 }
 
@@ -337,12 +363,32 @@ func newWebFactsFixture(t *testing.T, readerTags string) *webFactsFixture {
 			fx.prompts = append(fx.prompts, prompt)
 			fx.formats = append(fx.formats, req.Format)
 			fx.mu.Unlock()
+			// A pointed question asks for one field and the evidence.
+			field := ""
+			if props, _ := req.Format["properties"].(map[string]any); props["evidence"] != nil {
+				for name := range props {
+					if name != "evidence" {
+						field = name
+					}
+				}
+			}
+			specs, others := strings.Contains(prompt, "## Specs"), strings.Contains(prompt, "## Other sizes")
 			answer := `{}`
 			switch {
-			case strings.Contains(prompt, "## Specs"):
-				answer = `{"name":"Example","context":131072,"moe":true,"vision":null,"url":"https://elsewhere.example/x"}`
-			case strings.Contains(prompt, "## Other sizes"):
-				answer = `{"context":32768,"tools":false}`
+			case field == "context" && specs:
+				answer = `{"context":131072,"evidence":"Context | 128K"}`
+			case field == "context" && others:
+				answer = `{"context":32768,"evidence":"32K context"}`
+			case field == "moe" && specs:
+				answer = `{"moe":true,"evidence":"mixture-of-experts"}`
+			case field == "parameterSize" && specs:
+				answer = `{"parameterSize":"523MB","evidence":"wrong kind of size"}`
+			case field != "":
+				answer = `{"evidence":"nothing"}`
+			case specs:
+				answer = `{"name":"Example","moe":false,"context":1,"vision":null,"url":"https://elsewhere.example/x"}`
+			case others:
+				answer = `{"tools":false}`
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"message": map[string]string{"role": "assistant", "content": answer}})
 		default:
@@ -375,9 +421,16 @@ func (fx *webFactsFixture) lookUp(t *testing.T) *webFactsStatus {
 	if st.Job == nil || st.ReaderModel != defaultReaderModel {
 		t.Fatalf("start answered %+v, want a job read by %s", st, defaultReaderModel)
 	}
+	return fx.waitForLookup(t)
+}
+
+// waitForLookup polls model/web-facts until the lookup ends.
+func (fx *webFactsFixture) waitForLookup(t *testing.T) *webFactsStatus {
+	t.Helper()
+	params := json.RawMessage(fmt.Sprintf(`{"engine":"ollama","model":%q}`, webFactsModel))
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		st, err = fx.proxy.webFactsStatus(params)
+		st, err := fx.proxy.webFactsStatus(params)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -425,8 +478,13 @@ func TestWebFacts_FillsWhatTheEngineLeftEmptyFromThePage(t *testing.T) {
 	if len(r.Conflicts) != 1 || r.Conflicts[0].Field != "context" || len(r.Conflicts[0].Values) != 2 {
 		t.Errorf("conflicts = %+v, want the two contexts reported", r.Conflicts)
 	}
-	if !strings.Contains(strings.Join(r.Notes, "\n"), "url") {
-		t.Errorf("notes = %v, want the invented url reported as left out", r.Notes)
+	for _, refused := range []string{"url", "parameterSize"} {
+		if !strings.Contains(strings.Join(r.Notes, "\n"), refused) {
+			t.Errorf("notes = %v, want the invalid %s reported as left out", r.Notes, refused)
+		}
+	}
+	if pointed := len(fx.prompts) - r.Pages[0].Chunks; pointed != 5*r.Pages[0].Chunks {
+		t.Errorf("%d pointed questions for %d chunks, want 5 per chunk", pointed, r.Pages[0].Chunks)
 	}
 	for i, prompt := range fx.prompts {
 		if strings.Contains(prompt, "SCRIPT") {
@@ -435,8 +493,15 @@ func TestWebFacts_FillsWhatTheEngineLeftEmptyFromThePage(t *testing.T) {
 		if !strings.Contains(prompt, webFactsModel) {
 			t.Errorf("prompt %d does not name the model asked about", i)
 		}
-		if props, _ := fx.formats[i]["properties"].(map[string]any); len(props) != len(modelFactSchema) {
-			t.Errorf("format %d = %v, want the schema's %d fields", i, fx.formats[i], len(modelFactSchema))
+		props, _ := fx.formats[i]["properties"].(map[string]any)
+		if props["evidence"] == nil {
+			for _, f := range modelFactSchema {
+				if _, asked := props[f.Name]; asked == f.Pointed {
+					t.Errorf("format %d: field %s asked=%v, want only fields that are not pointed in the whole reading", i, f.Name, asked)
+				}
+			}
+		} else if len(props) != 2 {
+			t.Errorf("format %d = %v, want one field and the evidence", i, fx.formats[i])
 		}
 	}
 
@@ -461,6 +526,18 @@ func TestWebFacts_SaysWhenTheReaderModelIsNotDownloaded(t *testing.T) {
 	}
 	if st.Result != nil {
 		t.Fatalf("result = %+v, want none", st.Result)
+	}
+}
+
+func TestWebFacts_SavesOnlyAReaderModelOllamaHas(t *testing.T) {
+	fx := newWebFactsFixture(t, readerPulled)
+	params := json.RawMessage(fmt.Sprintf(`{"engine":"ollama","model":%q,"readerModel":"qwen3.5:4bb"}`, webFactsModel))
+	if _, err := fx.proxy.startWebFacts(params); err != nil {
+		t.Fatal(err)
+	}
+	st := fx.waitForLookup(t)
+	if st.Job.State != "failed" || st.ReaderModel != defaultReaderModel {
+		t.Fatalf("job = %+v, setting = %q; want the misspelt reader refused and the setting kept", st.Job, st.ReaderModel)
 	}
 }
 
