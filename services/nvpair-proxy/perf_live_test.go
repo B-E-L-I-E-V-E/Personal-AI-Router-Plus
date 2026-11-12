@@ -135,3 +135,38 @@ func TestMeasurePeerRequest_RecordsTheReplyAsServedHere(t *testing.T) {
 		t.Fatal("an embedding request was measured")
 	}
 }
+
+func TestLiveRegistry_AnswerTextBeforeThinkingDoesNotEndIt(t *testing.T) {
+	l := newLiveRegistry()
+	e, end := l.begin(liveRequest{RequestID: "r", Model: "m"}, 40)
+	defer end()
+	t0 := time.Now()
+	l.dispatch(e, "node-a", true, t0)
+	ms := func(n int) time.Time { return t0.Add(time.Duration(n) * time.Millisecond) }
+	l.progress(e, ms(10), false, true, true) // a stray answer fragment first
+	l.progress(e, ms(20), true, false, false)
+	l.progress(e, ms(50), true, false, false)
+	got := l.snapshot(ms(60))[0]
+	if got.Phase != livePhaseThinking || got.ThinkingMs == nil || *got.ThinkingMs != 40 {
+		t.Fatalf("while thinking = %+v, want phase thinking for 40 ms (20 ms to now)", got)
+	}
+	l.progress(e, ms(70), false, true, true)
+	got = l.snapshot(ms(90))[0]
+	if got.Phase != livePhaseAnswering || *got.ThinkingMs != 50 {
+		t.Fatalf("after the answer = phase %s, thinking %v ms; want answering after 50 ms of thinking", got.Phase, *got.ThinkingMs)
+	}
+}
+
+func TestPerfTracker_AnswerFragmentBeforeThinkingIsNotTheAnswer(t *testing.T) {
+	rec, ok := measure(t, "application/x-ndjson", ndjson(
+		`{"message":{"role":"assistant","content":"assuring"},"done":false}`,
+		`{"message":{"role":"assistant","content":"","thinking":"Okay"},"done":false}`,
+		`{"message":{"role":"assistant","content":"","thinking":" so"},"done":false}`,
+		`{"message":{"role":"assistant","content":"Done"},"done":false}`,
+	))
+	if !ok {
+		t.Fatal("no record")
+	}
+	// Thinking frames at t=20 and t=30, the real answer at t=40.
+	wantFloat(t, "thinking ms", rec.ThinkingMs, 20)
+}

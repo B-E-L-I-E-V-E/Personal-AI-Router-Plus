@@ -245,13 +245,16 @@ func (t *perfTracker) observe(doc []byte) {
 		t.thinkChars += think
 		if t.firstThink.IsZero() {
 			t.firstThink = at
+			// An answer fragment before any reasoning does not end it: the
+			// answer is the first visible text after thinking began.
+			t.firstAnswer = time.Time{}
 		}
 		t.lastThink = at
 	}
 	if answer > 0 {
 		t.answerChunks++
 		t.answerChars += answer
-		if answerVisible && t.firstAnswer.IsZero() {
+		if answerVisible && t.firstAnswer.IsZero() && (t.firstThink.IsZero() || at.After(t.firstThink)) {
 			t.firstAnswer = at
 		}
 	}

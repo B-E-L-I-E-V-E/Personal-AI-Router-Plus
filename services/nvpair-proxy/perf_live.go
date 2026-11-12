@@ -81,7 +81,10 @@ type liveEntry struct {
 	firstOut   time.Time
 	lastOut    time.Time
 	firstThink time.Time
-	firstAns   time.Time
+	lastThink  time.Time
+	// firstAns is the first visible answer after thinking began (or at all,
+	// when the reply has no thinking).
+	firstAns time.Time
 }
 
 type liveRegistry struct {
@@ -121,7 +124,7 @@ func (l *liveRegistry) dispatch(e *liveEntry, nodeID string, local bool, at time
 	e.req.NodeID, e.req.Local, e.req.Phase = nodeID, local, livePhaseReading
 	e.dispatched = at
 	e.req.DispatchedAt = at.UnixMilli()
-	e.firstOut, e.lastOut, e.firstThink, e.firstAns = time.Time{}, time.Time{}, time.Time{}, time.Time{}
+	e.firstOut, e.lastOut, e.firstThink, e.lastThink, e.firstAns = time.Time{}, time.Time{}, time.Time{}, time.Time{}, time.Time{}
 	e.req.OutputTokens, e.req.ThinkingTokens = 0, 0
 }
 
@@ -139,19 +142,21 @@ func (l *liveRegistry) progress(e *liveEntry, at time.Time, think, answer, visib
 		e.firstOut = at
 	}
 	e.lastOut = at
+	// The phase follows the latest frame: some models write a little answer
+	// text before they start reasoning, and that must not end the thinking.
 	if think {
 		e.req.ThinkingTokens++
 		if e.firstThink.IsZero() {
 			e.firstThink = at
+			e.firstAns = time.Time{}
 		}
+		e.lastThink = at
+		e.req.Phase = livePhaseThinking
+	}
+	if answer && visible {
 		if e.firstAns.IsZero() {
-			e.req.Phase = livePhaseThinking
+			e.firstAns = at
 		}
-	}
-	if answer && visible && e.firstAns.IsZero() {
-		e.firstAns = at
-	}
-	if !e.firstAns.IsZero() {
 		e.req.Phase = livePhaseAnswering
 	}
 }
@@ -175,10 +180,14 @@ func (l *liveRegistry) snapshot(now time.Time) []liveRequest {
 		}
 		if !e.firstThink.IsZero() {
 			end := e.firstAns
-			if end.IsZero() {
-				end = now
+			if !end.After(e.firstThink) {
+				// Still thinking, or the answer has not begun after it.
+				end = e.lastThink
+				if r.Phase == livePhaseThinking {
+					end = now
+				}
 			}
-			r.ThinkingMs = fptr(msBetween(e.firstThink, end))
+			r.ThinkingMs = fptr(max(0, msBetween(e.firstThink, end)))
 		}
 		out = append(out, r)
 	}
