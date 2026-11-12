@@ -146,7 +146,21 @@ model Ollama runs, so planning one Ollama model replaces another's plan.
 
 ![An engine's model list with a model's menu open: Load, Eject, Context & sessions…, and Delete.](assets/onboarding/sessions/01-model-menu.png)
 
-Each model row then shows its plan and whether it is applied. In the dialog:
+Each of this node's model rows shows, under the model's name, what the router
+enforces for it: sessions at once (with how many are in use or waiting), the
+context window per session, the response context kept for the reply, and the
+post context left for a session's messages, for example `4 sessions (1 in use) ·
+40,960 per session · 8,192 response · 32,768 post`. With no setting, the row
+shows only what the engine reports, marked *as the engine reports*, or nothing
+when the engine reports nothing. While a saved plan is not applied yet, the row
+reads *Now:* for what is in force and a second line for the plan and its state.
+The summary refreshes when you change a plan and every 15 seconds while the
+Overview is open. Models on other nodes show no summary: each node's router
+enforces its own capacity, and this application reads only its own node's.
+
+![A model row on the Overview with its summary: 4 sessions, 40,960 per session, 8,192 response, 32,768 post.](assets/onboarding/sessions/07-model-row-summary.png)
+
+In the dialog:
 
 1. Drag **Context window per session**. It stops at 2K, 4K, 8K and so on up
    to the model's maximum, which is the last stop. Every session gets this

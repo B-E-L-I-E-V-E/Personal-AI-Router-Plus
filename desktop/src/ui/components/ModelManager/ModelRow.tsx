@@ -33,6 +33,7 @@ function ModelRowInner({
     pendingAction,
     displayName,
     canPlan = false,
+    configLine,
     planLine,
     onAction,
     onExpiryChange
@@ -110,6 +111,15 @@ function ModelRowInner({
                     expiryDd={expiryDd}
                     onExpiryChange={onExpiryChange}
                 />
+                {configLine && (
+                    <Text
+                        kind="body/regular/sm"
+                        className="text-subtle-color ml-4 truncate"
+                        title={configLine}
+                    >
+                        {configLine}
+                    </Text>
+                )}
                 {planLine && (
                     <Text kind="body/regular/sm" className="text-subtle-color ml-4 truncate">
                         {planLine}

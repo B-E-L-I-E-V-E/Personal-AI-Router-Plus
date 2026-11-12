@@ -32,13 +32,18 @@ const state: PlannerState = {
 const getPlanner = vi.fn()
 const setPlanner = vi.fn()
 const setCapacity = vi.fn()
+const getCapacity = vi.fn()
 
 beforeEach(() => {
     getPlanner.mockReset()
     setPlanner.mockReset()
     setCapacity.mockReset()
-    useCapacityPlannerStore.setState({ planner: null })
-    vi.stubGlobal('window', { pairApi: { sessions: { getPlanner, setPlanner, setCapacity } } })
+    getCapacity.mockReset()
+    getCapacity.mockResolvedValue([])
+    useCapacityPlannerStore.setState({ planner: null, capacity: null })
+    vi.stubGlobal('window', {
+        pairApi: { sessions: { getPlanner, setPlanner, setCapacity, getCapacity } }
+    })
 })
 
 describe('capacity planner store', () => {
@@ -56,6 +61,38 @@ describe('capacity planner store', () => {
         getPlanner.mockRejectedValueOnce(new Error('not reachable'))
         await useCapacityPlannerStore.getState().refresh()
         expect(useCapacityPlannerStore.getState().planner).toBe(state)
+    })
+
+    it('refreshes the capacity report alongside, each answer standing alone', async () => {
+        const report = [
+            {
+                engine: 'ollama',
+                model: 'qwen3:0.6b',
+                configured: null,
+                detectedWindowTokens: 40960,
+                contextTokens: 0,
+                maxSessions: 0,
+                sessionContextTokens: 40960,
+                replyTokens: 0,
+                messageTokens: 0,
+                source: 'detected',
+                heldSlots: 0,
+                queued: 0,
+                usedContextTokens: 0,
+                warning: ''
+            }
+        ]
+        getPlanner.mockRejectedValueOnce(new Error('not reachable'))
+        getCapacity.mockResolvedValueOnce(report)
+        await useCapacityPlannerStore.getState().refresh()
+        expect(useCapacityPlannerStore.getState().capacity).toBe(report)
+        expect(useCapacityPlannerStore.getState().planner).toBeNull()
+
+        getPlanner.mockResolvedValueOnce(state)
+        getCapacity.mockRejectedValueOnce(new Error('not reachable'))
+        await useCapacityPlannerStore.getState().refresh()
+        expect(useCapacityPlannerStore.getState().planner).toBe(state)
+        expect(useCapacityPlannerStore.getState().capacity).toBe(report)
     })
 
     it('removing a plan also lifts the limit it set', async () => {
