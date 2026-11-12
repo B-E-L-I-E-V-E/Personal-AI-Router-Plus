@@ -24,7 +24,7 @@ import type {
     SessionPolicy,
     SessionSummary
 } from '@/shared/types/sessions'
-import type { BenchmarkRun, PerformanceReport } from '@/shared/types/performance'
+import type { BenchmarkRun, PerformanceLive, PerformanceReport } from '@/shared/types/performance'
 import type { AppInitialSnapshot, ClusterInitialSnapshot } from '@/shared/types/bootstrap'
 
 // ---------------------------------------------------------------------------
@@ -137,6 +137,8 @@ export interface ISessionsApi {
 export interface IPerformanceApi {
     /** Per-model speeds, recent requests and benchmark runs this node measured. */
     getReport(): Promise<PerformanceReport>
+    /** Requests in progress with their figures so far, and the latest finished. */
+    getLive(): Promise<PerformanceLive>
     /** Forget the figures and finished benchmark runs. */
     clear(): Promise<null>
     /** Run the fixed benchmark on a model; engine is the proxy's engine name. */
@@ -244,6 +246,7 @@ export function createPairApi(transport: ServiceTransport): IPairApi {
         },
         performance: {
             getReport: () => transport.invoke('performance:get-report'),
+            getLive: () => transport.invoke('performance:get-live'),
             clear: () => transport.invoke('performance:clear'),
             runBenchmark: (engine, model) =>
                 transport.invoke('performance:run-benchmark', { engine, model })

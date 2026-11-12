@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type {
+    LivePhase,
+    LiveRequest,
+    PerfOrigin,
+    PerformanceLive,
     BenchmarkPrompt,
     BenchmarkRun,
     BenchmarkState,
@@ -89,6 +93,9 @@ function parseRecord(value: JsonValue | undefined): PerfRecord | null {
         local: obj.local === true,
         path: stringValue(obj.path),
         streamed: obj.streamed === true,
+        sessionId: stringValue(obj.sessionId) || null,
+        agentId: stringValue(obj.agentId) || null,
+        origin: originValue(obj.origin),
         promptTokens: numberValue(obj.promptTokens),
         completionTokens: numberValue(obj.completionTokens),
         thinking: obj.thinking === true,
@@ -144,6 +151,47 @@ function parseModel(value: JsonValue | undefined): PerfModelSummary | null {
         loadMs: parseStat(obj.loadMs),
         sources: parseSources(obj.sources),
         trend: parseTrend(obj.trend)
+    }
+}
+
+function originValue(value: JsonValue | undefined): PerfOrigin {
+    return value === 'peer' ? 'peer' : 'routed'
+}
+
+const PHASES: readonly LivePhase[] = ['waiting', 'reading', 'thinking', 'answering']
+
+function parseLive(value: JsonValue | undefined): LiveRequest | null {
+    const obj = objectValue(value)
+    const model = stringValue(obj?.model)
+    if (!obj || !model) return null
+    return {
+        requestId: stringValue(obj.requestId),
+        sessionId: stringValue(obj.sessionId) || null,
+        agentId: stringValue(obj.agentId) || null,
+        engine: stringValue(obj.engine),
+        model,
+        nodeId: stringValue(obj.nodeId),
+        local: obj.local === true,
+        path: stringValue(obj.path),
+        origin: originValue(obj.origin),
+        benchmark: obj.benchmark === true,
+        phase: PHASES.find(p => p === obj.phase) ?? 'waiting',
+        receivedAt: numberValue(obj.receivedAt),
+        elapsedMs: numberValue(obj.elapsedMs),
+        promptTokensEstimate: numberValue(obj.promptTokensEstimate),
+        outputTokens: numberValue(obj.outputTokens),
+        thinkingTokens: numberValue(obj.thinkingTokens),
+        timeToFirstTokenMs: optionalNumber(obj.timeToFirstTokenMs),
+        thinkingMs: optionalNumber(obj.thinkingMs),
+        writeTokensPerSecond: optionalNumber(obj.writeTokensPerSecond)
+    }
+}
+
+export async function getPerformanceLive(): Promise<PerformanceLive> {
+    const obj = objectValue(await callSessionProxy('performance/live', {}))
+    return {
+        live: arrayValue(obj?.live).flatMap(r => parseLive(r) ?? []),
+        recent: arrayValue(obj?.recent).flatMap(r => parseRecord(r) ?? [])
     }
 }
 

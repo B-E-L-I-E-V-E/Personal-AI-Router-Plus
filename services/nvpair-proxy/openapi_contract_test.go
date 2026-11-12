@@ -106,6 +106,8 @@ func TestOpenAPI_DocumentsThePerformanceReport(t *testing.T) {
 		{"BenchmarkRun", jsonFields(benchmarkRun{})},
 		{"BenchmarkStep", jsonFields(benchmarkStep{})},
 		{"BenchmarkPrompt", jsonFields(benchmarkPrompt{})},
+		{"LiveRequest", jsonFields(liveRequest{})},
+		{"PerformanceLive", jsonFields(perfLive{})},
 	}
 	for _, tc := range cases {
 		t.Run(tc.schema, func(t *testing.T) {

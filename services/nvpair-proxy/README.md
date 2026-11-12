@@ -199,6 +199,7 @@ requests per model and node, and runs a fixed four-prompt benchmark on request:
 
 ```bash
 curl -s http://127.0.0.1:11434/pair/v1/performance
+curl -s http://127.0.0.1:11434/pair/v1/performance/live
 curl -s -X POST http://127.0.0.1:11434/pair/v1/performance/benchmark -d '{"model":"qwen3:0.6b"}'
 ```
 

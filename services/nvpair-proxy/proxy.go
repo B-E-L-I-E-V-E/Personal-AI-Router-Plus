@@ -441,6 +441,15 @@ type Proxy struct {
 	// and the benchmark runs (perf.go, benchmark.go).
 	perf *perfStore
 
+	// live lists the generation requests in progress on any facade or the
+	// cluster ingress, with their figures so far (perf_live.go).
+	live *liveRegistry
+
+	// selfNodeID is this node's ID as discovery knows it, learned the first
+	// time routing resolves a candidate to this node. Peer requests served
+	// here are attributed to it.
+	selfNodeID atomic.Value
+
 	// activeRequests counts requests in progress on any facade or on the
 	// cluster ingress; the idle check reads it.
 	activeRequests atomic.Int64
@@ -457,6 +466,7 @@ func NewProxy(codec *Codec) *Proxy {
 		capacity: newCapacityStore(),
 		planner:  newPlannerStore(),
 		perf:     newPerfStore(),
+		live:     newLiveRegistry(),
 	}
 	p.sessions.onPeerRelease = p.sendPeerRelease
 	return p
@@ -1305,6 +1315,19 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	bodyLen := len(bodyBytes)
 
+	// The live view shows a generation request from the moment it arrives.
+	var liveReq *liveEntry
+	measured := isInf && model != "" && isGenerationPath(r.URL.Path)
+	if measured {
+		var endLive func()
+		liveReq, endLive = p.live.begin(liveRequest{
+			RequestID: requestID, SessionID: sessionID, AgentID: agentID,
+			Engine: f.profile.Name, Model: model, Path: r.URL.Path,
+			Origin: liveOriginRouted, Benchmark: benchmark,
+		}, bodyLen)
+		defer endLive()
+	}
+
 	candidates := f.resolveCandidates(routingModel)
 	if cors.IsPreflight(r) {
 		targets := make([]cors.Target, 0, len(candidates))
@@ -1805,6 +1828,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		next++
 		dispatches++
 		attemptStart := time.Now()
+		p.live.dispatch(liveReq, cand.id, cand.local, attemptStart)
 		// lastPermitted means no further dispatch can happen, so this attempt's
 		// failure is the client's answer. It is not "last candidate in the
 		// round" any more: another round may follow.
@@ -1994,11 +2018,13 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				var perf *perfTracker
-				if isInf && model != "" && resp.StatusCode < 300 && isGenerationPath(r.URL.Path) {
+				if measured && resp.StatusCode < 300 {
 					perf = newPerfTracker(attemptStart, perfRecord{
 						RequestID: requestID, Engine: f.profile.Name, Model: model,
 						NodeID: cand.id, Local: cand.local, Path: r.URL.Path,
+						SessionID: sessionID, AgentID: agentID, Origin: liveOriginRouted,
 					}, func(rec perfRecord) { p.perf.add(rec, benchmark) })
+					perf.live, perf.liveReg = liveReq, p.live
 				}
 				resp.Body = newObservedBody(resp.Body, resp.Header.Get("Content-Type"), usageDone, perf)
 				// Committing to this candidate — body stream is about to begin.
@@ -2241,6 +2267,7 @@ func (f *facade) resolveCandidates(model string) []candidate {
 		switch {
 		case isSelfTarget(u, selfPort) || isAnyAliasSelfTarget(u, aliasBoundAddresses):
 			local = true
+			f.host.selfNodeID.Store(n.ID)
 			// Our own advertised endpoint (ol now points at this proxy). Serve
 			// it from the explicit local backend — the loopback engine — rather
 			// than dialing our own mTLS ingress, which would recurse. Ranking
@@ -3161,6 +3188,11 @@ func (p *Proxy) handleMessage(msg *Message) {
 		// the same figures.
 		if err := p.codec.Respond(msg.ID, p.perf.report()); err != nil {
 			log.Printf("failed to respond to performance/report: %v", err)
+		}
+
+	case "performance/live":
+		if err := p.codec.Respond(msg.ID, p.performanceLive()); err != nil {
+			log.Printf("failed to respond to performance/live: %v", err)
 		}
 
 	case "performance/clear":

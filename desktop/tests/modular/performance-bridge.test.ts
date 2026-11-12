@@ -12,6 +12,7 @@ vi.mock('@/electron/service-bridge/modular-supervisor', () => ({
 
 import {
     clearPerformance,
+    getPerformanceLive,
     getPerformanceReport,
     runBenchmark
 } from '@/electron/service-bridge/performance-bridge'
@@ -117,5 +118,38 @@ describe('performance bridge', () => {
         callProxy.mockResolvedValueOnce({ cleared: true })
         await expect(clearPerformance()).resolves.toBeNull()
         expect(callProxy.mock.calls[0]?.[1]).toBe('performance/clear')
+    })
+
+    it('parses live requests with their figures so far', async () => {
+        callProxy.mockResolvedValueOnce({
+            live: [
+                {
+                    requestId: 'r1',
+                    sessionId: 'conv-1',
+                    engine: 'ollama',
+                    model: 'qwen3:0.6b',
+                    nodeId: 'node-a',
+                    local: true,
+                    origin: 'peer',
+                    phase: 'thinking',
+                    elapsedMs: 900,
+                    promptTokensEstimate: 30,
+                    outputTokens: 40,
+                    thinkingTokens: 40,
+                    timeToFirstTokenMs: 120,
+                    thinkingMs: 700
+                },
+                { requestId: 'no-model' }
+            ],
+            recent: [{ model: 'm', sessionId: '', origin: 'routed' }]
+        })
+        const live = await getPerformanceLive()
+        expect(callProxy.mock.calls[0]?.[1]).toBe('performance/live')
+        expect(live.live).toHaveLength(1)
+        expect(live.live[0]?.phase).toBe('thinking')
+        expect(live.live[0]?.origin).toBe('peer')
+        expect(live.live[0]?.agentId).toBeNull()
+        expect(live.live[0]?.writeTokensPerSecond).toBeNull()
+        expect(live.recent[0]?.sessionId).toBeNull()
     })
 })

@@ -20,6 +20,40 @@ export interface PerfSources {
     thinking: PerfSource
 }
 
+export type PerfOrigin = 'routed' | 'peer'
+
+export type LivePhase = 'waiting' | 'reading' | 'thinking' | 'answering'
+
+/** A generation request in progress, with its figures so far. */
+export interface LiveRequest {
+    requestId: string
+    sessionId: string | null
+    agentId: string | null
+    engine: string
+    model: string
+    /** The serving node; empty while the request is still waiting for one. */
+    nodeId: string
+    local: boolean
+    path: string
+    origin: PerfOrigin
+    benchmark: boolean
+    phase: LivePhase
+    receivedAt: number
+    elapsedMs: number
+    /** Body size at four bytes a token, until the engine's count arrives. */
+    promptTokensEstimate: number
+    outputTokens: number
+    thinkingTokens: number
+    timeToFirstTokenMs: number | null
+    thinkingMs: number | null
+    writeTokensPerSecond: number | null
+}
+
+export interface PerformanceLive {
+    live: LiveRequest[]
+    recent: PerfRecord[]
+}
+
 /** One figure summarized over a model's recent requests. */
 export interface PerfStat {
     count: number
@@ -40,6 +74,10 @@ export interface PerfRecord {
     local: boolean
     path: string
     streamed: boolean
+    sessionId: string | null
+    agentId: string | null
+    /** routed: a client on this machine sent it; peer: another node sent it here. */
+    origin: PerfOrigin
     promptTokens: number
     completionTokens: number
     thinking: boolean

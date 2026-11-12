@@ -842,6 +842,23 @@ requests across all models (50 reported). `performance/report` and
 nodes route are measured by their own proxies; a request this node serves for
 a peer (cluster ingress) is not measured here.
 
+**Live view** (`perf_live.go`). Each generation request is listed from the
+moment `handleHTTP` receives it until its reply ends, with its session and
+agent IDs, origin (`routed`) and phase: `waiting` (admission, queueing,
+choosing a node), `reading` (dispatched; the node is reading the prompt),
+`thinking` and `answering` (as frames arrive). Each dispatch sets the serving
+node and restarts the counts, so a failed-over request shows its current
+attempt. Frames advance tokens out and thinking tokens (one per chunk), time
+to first token, thinking time so far and the writing speed so far; tokens in
+is the body size at four bytes a token until the engine's count arrives with
+the finished record. A request another node sends to this node's engine over
+the cluster ingress is listed and measured too (origin `peer`), attributed to
+this node's ID as learned from routing; such records join this node's
+figures. `performance/live` and `GET /pair/v1/performance/live` return the
+requests in progress, oldest first, and the latest 50 finished records; they
+are cheap enough to poll several times a second. Finished records carry
+`sessionId`, `agentId` and `origin`.
+
 **Benchmark** (`benchmark.go`). `performance/benchmark {engine, model}` or
 `POST /pair/v1/performance/benchmark {model}` starts one run in the background
 (a second while one runs is refused, `409` over HTTP). The run posts four fixed

@@ -56,6 +56,13 @@ type perfRecord struct {
 	Local    bool   `json:"local"`
 	Path     string `json:"path"`
 	Streamed bool   `json:"streamed"`
+	// SessionID and AgentID are the request's X-PAIR-Session-ID and
+	// X-PAIR-Agent-ID, when it named them.
+	SessionID string `json:"sessionId,omitempty"`
+	AgentID   string `json:"agentId,omitempty"`
+	// Origin is "routed" (a client on this machine) or "peer" (another node
+	// sent it here to be served).
+	Origin string `json:"origin"`
 
 	PromptTokens     int64 `json:"promptTokens"`
 	CompletionTokens int64 `json:"completionTokens"`
@@ -90,6 +97,10 @@ type perfTracker struct {
 	done     func(perfRecord)
 	// base carries the identity fields the caller already knows.
 	base perfRecord
+	// live, when set, is the request's entry in the live view, advanced as
+	// each frame arrives.
+	live    *liveEntry
+	liveReg *liveRegistry
 
 	inThinkTag bool
 	// failed is set when the engine ended the reply with an error frame
@@ -243,6 +254,9 @@ func (t *perfTracker) observe(doc []byte) {
 		if answerVisible && t.firstAnswer.IsZero() {
 			t.firstAnswer = at
 		}
+	}
+	if t.liveReg != nil {
+		t.liveReg.progress(t.live, at, think > 0, answer > 0, answerVisible)
 	}
 	if think+answer > 0 {
 		if t.firstOut.IsZero() {

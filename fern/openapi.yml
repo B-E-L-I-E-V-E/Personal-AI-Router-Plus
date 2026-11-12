@@ -403,6 +403,24 @@ paths:
       responses:
         "204":
           description: Cleared. A benchmark still running is kept.
+  /pair/v1/performance/live:
+    get:
+      tags:
+        - Performance
+      operationId: getPerformanceLive
+      summary: Requests in progress, with their figures so far
+      description: >
+        Every generation request in progress on this node, whether a client
+        here sent it or another node sent it here to be served, updated as
+        each frame of the reply arrives, and the latest finished requests.
+        Light enough to poll several times a second.
+      responses:
+        "200":
+          description: The live view.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerformanceLive"
   /pair/v1/performance/benchmark:
     post:
       tags:
@@ -754,7 +772,7 @@ components:
     PerfRecord:
       type: object
       description: One completed generation request. Optional figures are absent when unmeasured.
-      required: [requestId, at, engine, model, nodeId, local, path, streamed, promptTokens, completionTokens, thinking, totalMs, sources]
+      required: [requestId, at, engine, model, nodeId, local, path, streamed, origin, promptTokens, completionTokens, thinking, totalMs, sources]
       properties:
         requestId:
           type: string
@@ -776,6 +794,19 @@ components:
           type: string
         streamed:
           type: boolean
+        sessionId:
+          type: string
+          description: The request's X-PAIR-Session-ID, when it named one.
+        agentId:
+          type: string
+          description: The request's X-PAIR-Agent-ID, when it named one.
+        origin:
+          type: string
+          enum: [routed, peer]
+          description: >
+            `routed`: a client on this machine sent it to this node's proxy.
+            `peer`: another node sent it here to be served by this node's
+            engine.
         promptTokens:
           type: integer
         completionTokens:
@@ -923,6 +954,76 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/BenchmarkStep"
+    LiveRequest:
+      type: object
+      description: A generation request in progress.
+      required: [requestId, engine, model, nodeId, local, path, origin, phase, receivedAt, elapsedMs, promptTokensEstimate, outputTokens, thinkingTokens]
+      properties:
+        requestId:
+          type: string
+        sessionId:
+          type: string
+        agentId:
+          type: string
+        engine:
+          type: string
+        model:
+          type: string
+        nodeId:
+          type: string
+          description: The node serving it; empty while it is still waiting.
+        local:
+          type: boolean
+        path:
+          type: string
+        origin:
+          type: string
+          enum: [routed, peer]
+        benchmark:
+          type: boolean
+        phase:
+          type: string
+          enum: [waiting, reading, thinking, answering]
+          description: >
+            `waiting`: admission, queueing or choosing a node. `reading`: sent
+            to a node, the engine is reading the prompt. `thinking` and
+            `answering`: the reply's reasoning or answer is streaming.
+        receivedAt:
+          type: integer
+        dispatchedAt:
+          type: integer
+        elapsedMs:
+          type: number
+        promptTokensEstimate:
+          type: integer
+          description: The request body's size at four bytes a token; the engine's count arrives with the finished record.
+        outputTokens:
+          type: integer
+          description: Streamed chunks so far, about one token each.
+        thinkingTokens:
+          type: integer
+        timeToFirstTokenMs:
+          type: number
+        thinkingMs:
+          type: number
+          description: Thinking so far, or until the answer began.
+        writeTokensPerSecond:
+          type: number
+          description: Writing speed so far.
+    PerformanceLive:
+      type: object
+      required: [live, recent]
+      properties:
+        live:
+          type: array
+          description: Requests in progress, oldest first.
+          items:
+            $ref: "#/components/schemas/LiveRequest"
+        recent:
+          type: array
+          description: Latest finished requests, newest first.
+          items:
+            $ref: "#/components/schemas/PerfRecord"
     PerformanceReport:
       type: object
       required: [scope, window, models, recent, benchmarks, benchmarkPrompts]

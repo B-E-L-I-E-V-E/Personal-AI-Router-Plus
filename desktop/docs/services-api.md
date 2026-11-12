@@ -225,6 +225,7 @@
 | `nodes/list` | request (we call) | ✅ yes |
 | `performance/benchmark` | request (we call) | ✅ yes |
 | `performance/clear` | request (we call) | ✅ yes |
+| `performance/live` | request (we call) | ✅ yes |
 | `performance/report` | request (we call) | ✅ yes |
 | `sessions/configure` | request (we call) | ✅ yes |
 | `sessions/end` | request (we call) | ✅ yes |

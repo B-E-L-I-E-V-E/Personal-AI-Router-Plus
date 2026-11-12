@@ -96,7 +96,9 @@ export function groupByNode(input: {
     for (const n of input.nodes) node(n.id, n.name)
 
     for (const s of input.summaries) {
-        const n = node(s.nodeId)
+        // A request another node sent here, recorded before this node learned
+        // its own ID, belongs on this node's card.
+        const n = node(s.nodeId || (s.local && input.selfId ? input.selfId : s.nodeId))
         n.local = n.local || s.local
         n.models.push(s)
         n.requests += s.requests

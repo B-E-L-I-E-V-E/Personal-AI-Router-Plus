@@ -269,16 +269,25 @@ func (s *perfStore) report() perfReport {
 // and reachable from loopback only.
 //
 //	GET    /pair/v1/performance            per-model figures, recent requests, benchmarks
+//	GET    /pair/v1/performance/live       requests in progress and the latest finished
 //	DELETE /pair/v1/performance            forget the figures and finished benchmarks
 //	POST   /pair/v1/performance/benchmark  {"model"} runs the benchmark on this engine
 const performanceAPIPath = "/pair/v1/performance"
 
 func (f *facade) servePerformanceAPI(w http.ResponseWriter, r *http.Request) bool {
 	path := strings.TrimSuffix(r.URL.Path, "/")
-	if path != performanceAPIPath && path != performanceAPIPath+"/benchmark" {
+	if path != performanceAPIPath && path != performanceAPIPath+"/benchmark" && path != performanceAPIPath+"/live" {
 		return false
 	}
 	w.Header().Set(requestIDHeader, resolveRequestID(r.Header))
+	if path == performanceAPIPath+"/live" {
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, "GET")
+			return true
+		}
+		writeSessionJSON(w, http.StatusOK, f.host.performanceLive())
+		return true
+	}
 	if path == performanceAPIPath+"/benchmark" {
 		f.serveBenchmarkStart(w, r)
 		return true

@@ -26,6 +26,28 @@ list does, so it covers every node's work, not only this node's. **Loaded in
 memory** lists the models the node's engines hold. Below them, a table gives one
 row per model the node has served, with a pulsing dot on the models running now.
 
+## Each request, in real time
+
+Every node card on the **Overview** has a stopwatch button between the
+performance bars and the settings gear. It opens **Requests in real time** for
+that node, refreshed twice a second:
+
+- **Running now**, one row per request: the model and engine, its session and
+  agent IDs when the client sent them, whether it came from this machine or
+  from another node, and its phase (waiting for a node, reading the prompt,
+  thinking, answering) with how long it has run. Then tokens in (estimated
+  from the request's size until the engine reports the real count at the end),
+  tokens out so far with how many were thinking, time to first token, the
+  writing speed so far and the time spent thinking so far.
+- **Just finished**: the last few requests on the node with their final
+  figures: tokens in with reading speed, tokens out, time to first token,
+  writing speed and thinking.
+
+On this node's own card the panel shows every request the node is serving,
+including requests other nodes sent it. On another node's card it shows the
+requests this machine sent there; requests that other nodes send to it appear
+in their own app.
+
 ## What is measured
 
 For each request that generates text (chat and completion routes on Ollama,
