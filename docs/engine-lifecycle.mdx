@@ -208,10 +208,22 @@ working with **models** (download, load, unload, and delete):
 | Hold a model in memory, when the engine needs it | **Load** |
 | Free that memory without deleting anything | **Eject** |
 | Remove a downloaded model | **Delete**, where the engine supports it |
+| See what the engine reports about a model, with links to its pages | **About this model…**, for any node's downloaded models |
 | Size a model's context window, room for the reply and sessions at once | **Context & sessions…**, for this node's models (see [Sessions and Context Capacity](sessions.mdx)) |
 
 **Eject** removes a model from memory only. The download stays, and **Load**
 brings it back without fetching it again.
+
+**About this model…** shows what the model's engine and its file report: the
+description, tags, capabilities (tools, vision, thinking), family, parameter
+count, quantization, trained and loaded context, size, licence, and buttons
+that open the model's pages in your browser: its Ollama library page, or the
+Hugging Face and project pages its GGUF file names. PAIR shows only what the
+engine reported, so a sparse model file gives a short page. For a model on
+another node, that node answers over the cluster connection; a node on an
+older PAIR, or one that is not a trusted member of your cluster, says so
+instead. llama.cpp names a model's file only while the model is loaded, so
+load it first to see what its file says.
 
 ![An engine's model list with a downloaded model's menu open: Load, Eject, Context & sessions…, and Delete.](assets/onboarding/engine-lifecycle/04-model-actions.png)
 

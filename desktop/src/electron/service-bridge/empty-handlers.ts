@@ -43,6 +43,7 @@ import {
     planCapacity,
     setPlanner
 } from '@/electron/service-bridge/capacity-planner'
+import { getModelDetails } from './model-details'
 
 type BridgeHandler<C extends WsInvokeChannel> = (
     payload?: WsInvokeRequest<C>
@@ -742,7 +743,8 @@ const EMPTY_SERVICE_BRIDGE_HANDLERS: BridgeHandlerMap = {
     'capacity:plan': payload => planCapacity(payload),
     'capacity:get-planner': () => getPlanner(),
     'capacity:set-planner': payload => setPlanner(payload),
-    'capacity:apply-plan': payload => applyPlan(payload)
+    'capacity:apply-plan': payload => applyPlan(payload),
+    'engine:model-details': payload => getModelDetails(payload)
 }
 
 export function handleServiceBridgeInvoke<C extends WsInvokeChannel>(

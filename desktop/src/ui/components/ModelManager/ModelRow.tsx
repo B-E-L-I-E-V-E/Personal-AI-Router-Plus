@@ -64,6 +64,7 @@ function ModelRowInner({
                 disabled: busy || !isRunning || !isLoaded
             })
         }
+        items.push({ id: 'details', children: 'About this model…', disabled: !model.downloaded })
         if (canPlan) {
             items.push({
                 id: 'capacity',

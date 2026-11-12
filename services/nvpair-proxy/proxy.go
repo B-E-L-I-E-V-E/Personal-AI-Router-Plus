@@ -3134,6 +3134,18 @@ func (p *Proxy) handleMessage(msg *Message) {
 			log.Printf("failed to respond to capacity/plan: %v", err)
 		}
 
+	case "model/details":
+		ctx, cancel := context.WithTimeout(context.Background(), modelDetailsTimeout+2*time.Second)
+		defer cancel()
+		res, err := p.modelDetails(ctx, msg.Params)
+		if err != nil {
+			p.codec.RespondError(msg.ID, -32602, "invalid params: "+err.Error())
+			return
+		}
+		if err := p.codec.Respond(msg.ID, res); err != nil {
+			log.Printf("failed to respond to model/details: %v", err)
+		}
+
 	case "capacity/planner":
 		if err := p.codec.Respond(msg.ID, p.plannerResult()); err != nil {
 			log.Printf("failed to respond to capacity/planner: %v", err)
