@@ -13,6 +13,13 @@ release workflow, with macOS builds signed and notarized; the app updates from
 those releases. A build made locally from source is unsigned unless built with
 `PAIR_MAC_SIGN=1`, and updates only once a release exists.
 
+## 1.3.6 — Plan nodes with several GPUs per GPU (#18)
+
+- **Context & sessions…** on a node with more than one GPU now sizes each GPU separately. The model is split by whole layers in proportion to each GPU's memory after its own reserve, so mismatched GPUs split by ratio. Each layer's part of the context stays on its GPU, so a session fits only when its part fits on every GPU.
+- The dialog shows a bar per GPU (for example **GPU 0 · RTX 4090**) next to the total, turns a GPU red when it runs out even if the total still has room, and says how the layers are split. For Ollama it shows the model kept on one GPU until you plan more sessions than that GPU holds.
+- Applying a multi-GPU plan also writes `--split-mode layer --tensor-split` (layers per GPU) for llama.cpp, and `OLLAMA_SCHED_SPREAD=1` for Ollama when the sessions need more than one GPU. The dialog lists what will be set.
+- `capacity/plan` adds `gpus[]`, `tensorSplit`, `oneGpuIndex` and `oneGpuSessions`. `spec` now includes `layers` in the desktop's parsing.
+
 ## 1.3.5 — Context & sessions starts from the model's and engine's own defaults (#16)
 
 - A model with no saved plan opens **Context & sessions…** on what is in force for it: the window, session count and reply length its engine runs it with now (the loaded model or the engine's launch settings), or the model's own defaults, instead of generic values.
