@@ -17,22 +17,100 @@ It is not an NVIDIA product and is not supported by NVIDIA. Its window title
 reads **NVIDIA PAIR Plus**; the installed app keeps the name NVIDIA PAIR, so an
 existing installation's settings, cluster membership, and models carry over.
 
-PAIR Plus adds to PAIR's routing:
+PAIR spreads independent requests across the machines on your network. PAIR
+Plus makes that dependable for work that runs for hours across many agents: an
+office of shared workstations, or a harness running long, distributed tasks.
+Conversations stay on one node, every model has a known budget, and clients can
+see how much room they have before they send.
 
-- **Request IDs** on every request (`X-Request-ID`), for matching a response to
-  your logs and to the job that ran it.
-- **Sessions** (`X-PAIR-Session-ID`) that send each turn of a conversation back
-  to the node that served the last one, owned by an **agent**
-  (`X-PAIR-Agent-ID`), with an idle timeout, a keepalive, and an end call.
-- **Context capacity**: each model's context pool divided among a fixed number of
-  sessions. New sessions go elsewhere or wait when a model is full, and a session
-  that outgrows its share is asked to shorten its conversation.
-- A **Settings → Sessions** tab for all of it, and signed, notarized macOS builds
-  that update from PAIR Plus releases.
+The rest of this README is PAIR's own documentation and applies to PAIR Plus
+unchanged unless noted. PAIR Plus nodes and NVIDIA PAIR 1.0 nodes work together
+in one cluster.
 
-Read [Sessions and Context Capacity](docs/sessions.mdx). PAIR Plus nodes and
-NVIDIA PAIR 1.0 nodes work together in one cluster. The rest of this README is
-PAIR's own documentation and applies to PAIR Plus unchanged unless noted.
+## What only PAIR Plus does
+
+| | NVIDIA PAIR 1.0 | PAIR Plus |
+| --- | --- | --- |
+| A conversation's turns | Each routed independently, possibly to a different node | Kept on one node as a **session**, so the engine reuses its cached prompt |
+| Who owns a conversation | — | An **agent** (`X-PAIR-Agent-ID`); another agent is refused |
+| How long it lives | — | Idle timeout, keepalive and an end call; ending cancels its requests |
+| How many conversations a model serves | Whatever the engine was started with | **Sessions at once**, sized from the node's GPU and system memory |
+| A conversation longer than the window | Ollama silently keeps only the last half | Refused with the exact token count, so nothing is lost unnoticed |
+| Room for the answer | Not reserved | A **reply budget** kept in every window, so the model can always answer |
+| Knowing before you send | — | Each session reports the room its next post has |
+| Tracing a request | — | `X-Request-ID` on every request, response, job and log line |
+
+### Sessions and agents
+
+Send `X-PAIR-Session-ID` on each turn and PAIR sends it back to the node that
+served the last one, so the engine reuses the conversation's cached prompt
+instead of reading it again. Name the owner with `X-PAIR-Agent-ID` and no other
+agent can use the session. A session ends after an idle timeout (10 minutes by
+default), stays open for any request, a keepalive or a request still running,
+and can be ended at once, which cancels its running requests.
+
+### Context & sessions, per model
+
+Each model's menu has **Context & sessions…**, a setting only PAIR Plus has.
+
+![A model's menu on the Overview: Load, Eject, Context & sessions…, and Delete.](docs/assets/onboarding/sessions/01-model-menu.png)
+
+Choose the context window every session gets, the room kept for the reply, and
+how many sessions run at once. PAIR sizes them from the node's memory, reading
+each model's cost per token from its architecture, and shows how much text
+fits in one post, the response and the whole window.
+
+![The Context & sessions dialog: the context window and room-for-the-reply sliders, and a table of how much text fits in one post, the response and the whole window.](docs/assets/onboarding/sessions/02-context-window-and-reply.png)
+
+Memory bars add up what the settings need. They turn red past what the node
+has; such a plan can still be saved.
+
+![Thirty sessions where twenty-one fit: the sliders and the memory bar turn red, reading 163.7 GB of 128 GB.](docs/assets/onboarding/sessions/04-over-capacity.png)
+
+**Save and apply now** restarts Ollama or llama.cpp with a matching window and
+session count; a saved plan can also apply itself once the node is idle.
+Mixture-of-experts models can keep their expert weights in system memory on
+llama.cpp, leaving the GPU for more sessions. When every session of a model is
+taken, a new one goes to another node with the model, or waits in line.
+
+### Room for the reply
+
+A model reads and writes in one window: your messages, the conversation so far
+and its answer. PAIR Plus keeps part of every session's window for the answer
+(8,192 tokens by default), refuses a conversation that outgrows the rest
+instead of letting the engine cut it silently, and caps replies that set no
+length of their own. **Settings → Sessions** lists live sessions with the room
+each one's next post has.
+
+![Settings > Sessions: the session policy, and a live session with 2,220 tokens used and room for 30,548 more.](docs/assets/onboarding/sessions/06-sessions-settings.png)
+
+### Use case: a harness for distributed agent work
+
+PAIR Plus suits an agent harness that runs long tasks across an office's
+machines:
+
+- **It knows what exists.** `GET /v1/models` or `GET /api/tags` on a local
+  PAIR endpoint lists the models held by every reachable node running that
+  engine, so the harness can match each task to a model: a coding model for
+  code, a small fast one for tool calls, a large one for planning.
+- **It targets a task by model.** PAIR routes each request to a node that holds
+  the model, so a task reaches the right hardware without the harness tracking
+  machines. OpenAI-, Ollama- and Anthropic-style requests, tool calls included,
+  pass through to the engine.
+- **Each task is a session.** Give every agent task its own session and agent
+  ID: its turns stay on one node with a warm cache, other agents cannot touch
+  it, and ending the session cancels the task's running requests.
+- **It plans against capacity.** `GET /pair/v1/capacity` gives each model's
+  window, reply budget and sessions at once on a node, and
+  `GET /pair/v1/sessions/{id}` gives the room a task's next post has, so the
+  harness can split or summarize input before it is too big. A full model
+  answers `503` with `Retry-After`, an overgrown conversation `400` with the
+  numbers, never a silently cut prompt.
+- **It traces everything.** `X-Request-ID` ties each answer to its job and log
+  lines on whichever node ran it.
+
+Read [Sessions and Context Capacity](docs/sessions.mdx) for the full API, and
+the [API reference](fern/openapi.yml).
 
 ## About PAIR
 
