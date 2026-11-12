@@ -13,6 +13,15 @@ release workflow, with macOS builds signed and notarized; the app updates from
 those releases. A build made locally from source is unsigned unless built with
 `PAIR_MAC_SIGN=1`, and updates only once a release exists.
 
+## 1.2.0 — Context & sessions per model (#3)
+
+- Each model's menu has Context & sessions…: choose the context window, the room kept for the reply, and how many sessions run at once, sized from this node's GPU and system memory. Every session gets the whole window.
+- Memory bars show what the settings need and turn red past the hardware; such a plan can still be saved.
+- A live table shows how much text fits in one post, the response and the whole window, in words, pages and characters, for English, code, JSON, Chinese, base64, IDs and emoji.
+- PAIR keeps room for the reply in every session: it refuses a conversation that outgrows the rest, stops Ollama from silently cutting long conversations, and caps replies that set no length.
+- Mixture-of-experts models can keep their expert weights in system memory on llama.cpp.
+- The capacity and session APIs report each model's reply budget and the room a session's next post has.
+
 ## 1.1.0 — PAIR Plus: sessions, agents and context capacity
 
 - Every request carries an `X-Request-ID`: yours if you send one, otherwise PAIR makes one, and it appears on the response, job and logs.
