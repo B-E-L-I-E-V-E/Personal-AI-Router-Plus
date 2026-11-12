@@ -27,6 +27,8 @@ The rest of this README is PAIR's own documentation and applies to PAIR Plus
 unchanged unless noted. PAIR Plus nodes and NVIDIA PAIR 1.0 nodes work together
 in one cluster.
 
+![The PAIR Plus Overview: jobs on the left, and node cards on the right, the first showing two requests in real time, one thinking and one answering, with their session and agent.](docs/assets/onboarding/overview/02-overview-live.png)
+
 ## What only PAIR Plus does
 
 | | NVIDIA PAIR 1.0 | PAIR Plus |
@@ -102,7 +104,14 @@ far. **Run benchmark** is a per-model test: four fixed prompts through PAIR, so
 models compare like for like. PAIR keeps only
 the counts and timings, never the text.
 
-![The Performance tab: a node's live and per-model figures, and a finished benchmark run.](docs/assets/onboarding/performance/01-performance.png)
+![The Performance tab: each node with what it is running and each model's requests, tokens in and out, reading and writing speed, time to first token, thinking per request and writing trend.](docs/assets/onboarding/performance/01-performance.png)
+
+The stopwatch on a node card shows its requests as they run: one thinking, one
+answering, each with its session and agent.
+
+![Requests in real time on a node card: a thinking request and an answering one, with tokens in and out, time to first token, writing speed and thinking so far.](docs/assets/onboarding/performance/03-live-requests.png)
+
+![A finished benchmark of qwen3:0.6b: short prompt, long input, long output and thinking, with tokens, time to first token, reading and writing speed, and time spent thinking for each step.](docs/assets/onboarding/performance/02-benchmark.png)
 
 ### About this model
 
@@ -114,6 +123,12 @@ Hugging Face and project pages its GGUF file names. It works for models on
 other nodes too. When the engine leaves something out, **Look up on the web**
 reads the model's own page with a small local model and fills only what the
 page states, labelled with where it came from.
+
+![A model's menu: Load, Eject, About this model…, Context & sessions… and Delete.](docs/assets/onboarding/models/01-model-menu.png)
+
+![About qwen3:0.6b: a link to its Ollama library page, its capabilities (completion, thinking, tools), family, architecture, parameters, quantization, format, trained context, size, licence and default generation settings.](docs/assets/onboarding/models/02-about-this-model.png)
+
+![From the model's page: the name, description, version and whether it is a mixture of experts, read from ollama.com by qwen3.5:4b, labelled with when and from where.](docs/assets/onboarding/models/03-look-up-on-the-web.png)
 
 ### Each model's settings at a glance
 
@@ -131,6 +146,14 @@ new requests and lets the running ones finish; a stopped node cancels them.
 Either way, new requests go to other nodes that have the model, and the state
 survives a restart. Any cluster member can pause or stop any other. See
 [Pausing and Stopping a Node](docs/node-state.mdx).
+
+![A node card with its Pause and Stop buttons above the performance, live requests and engine-settings buttons.](docs/assets/onboarding/node-state/01-node-controls.png)
+
+![The same node paused: a Paused badge under its name, and Resume in place of Pause.](docs/assets/onboarding/node-state/02-paused.png)
+
+![Stop asks first: every request the node is running is cancelled, and requests go to other nodes that can serve them.](docs/assets/onboarding/node-state/03-stop-confirm.png)
+
+![The node stopped: a Stopped badge, and only Resume.](docs/assets/onboarding/node-state/04-stopped.png)
 
 ### The API
 
