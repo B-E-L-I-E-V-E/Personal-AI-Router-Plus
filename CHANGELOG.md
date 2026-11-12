@@ -13,6 +13,13 @@ release workflow, with macOS builds signed and notarized; the app updates from
 those releases. A build made locally from source is unsigned unless built with
 `PAIR_MAC_SIGN=1`, and updates only once a release exists.
 
+## 1.3.1 — Plan another node's Context & sessions from any cluster member (#14)
+
+- **Context & sessions…** is offered for models on other nodes, not only this one. From a laptop you can size, save, apply and remove a workstation's plan.
+- The plan is worked out on the node that runs the model, for that node's GPUs and system memory, and is saved and enforced there. Applying restarts that node's engine. Its model rows show its plan line too.
+- A node on PAIR Plus 1.3.0 or older shows no Context & sessions for its models from other nodes until it is updated.
+- New API: `POST /pair/v1/peer/capacity/call` on the cluster's mTLS link, and the JSON-RPC method `capacity/peer-call`.
+
 ## 1.3.0 — Performance, model details, node pause and stop, and an API guide
 
 - A new **Performance** tab, with a stopwatch icon next to Settings, shows each model's speed per node: tokens in and out, reading and writing speed in tokens per second, time to first token and, for thinking models, the time spent reasoning. A live view shows every request in progress. **Run benchmark** sends four fixed prompts through PAIR, one at a time and only when the node is idle. Each figure says whether the engine reported it or PAIR measured it, and only counts and timings are kept, never prompt or reply text. New APIs: `GET`/`DELETE /pair/v1/performance`, `GET /pair/v1/performance/live` and `POST /pair/v1/performance/benchmark` (#9).
