@@ -160,6 +160,15 @@ export async function getCapacityReport(): Promise<ModelCapacity[]> {
     return parseCapacity(await callSessionProxy('capacity/report', {}))
 }
 
+/**
+ * Another node's capacity, as that node's own proxy enforces it. The local
+ * proxy reads it over the peer's mTLS ingress; it cannot be changed from here.
+ */
+export async function getPeerCapacityReport(nodeId?: string): Promise<ModelCapacity[]> {
+    if (!nodeId) return []
+    return parseCapacity(await callSessionProxy('capacity/peer-report', { nodeId }))
+}
+
 export async function setCapacity(change?: CapacityChange): Promise<null> {
     if (!change) return null
     const params: JsonObject = { engine: change.engine, model: change.model }

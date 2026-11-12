@@ -15,8 +15,12 @@ import { usePendingActionsStore } from '@/ui/stores/pending-actions.store'
 import { isEnginePullInProgress } from '@/shared/utils/engine-progress'
 import { engineManagerName } from '@/shared/utils/engines'
 import { useConnectionStore } from '@/ui/stores/connection.store'
-import { findPlan, useCapacityPlannerStore } from '@/ui/stores/capacity-planner.store'
-import { findCapacity, modelConfigLines } from './model-config-summary'
+import {
+    CAPACITY_REFRESH_MS,
+    findPlan,
+    useCapacityPlannerStore
+} from '@/ui/stores/capacity-planner.store'
+import { capacitySummary, findCapacity, modelConfigLines } from './model-config-summary'
 import { CapacityPlannerDialog } from './CapacityPlannerDialog'
 
 import ModelRow from './ModelRow'
@@ -24,8 +28,6 @@ import { IncomingSyncPullRow } from './IncomingSyncPullRow'
 import { TransientModelStatusRow } from './TransientModelStatusRow'
 import type { IncomingSyncRow } from '@/ui/types/model-manager'
 import type { ModelEntry } from '@/ui/types/model-hub'
-
-const CAPACITY_REFRESH_MS = 15_000
 
 export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId: string }) {
     const [openModelHubModal, setOpenModelHubModal] = useState(false)
@@ -35,9 +37,12 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
     const isSelf = useConnectionStore(s => s.selfId) === nodeId
     const planner = useCapacityPlannerStore(s => s.planner)
     const capacity = useCapacityPlannerStore(s => s.capacity)
+    // A peer's report is refreshed while its card is open (NodeEngineSettings).
+    const peerCapacity = useCapacityPlannerStore(s => (isSelf ? undefined : s.peerCapacity[nodeId]))
     const refreshPlanner = useCapacityPlannerStore(s => s.refresh)
     const plannerEngine = engineManagerName(backend.type)
-    // Capacity is reported by this node's proxy only; peers' rows show none.
+    // This node's capacity and plans come from its own proxy. Peers' rows show
+    // only what the peer enforces: plans are made and kept on each node.
     // A slow refresh keeps sessions in use and plans applied when idle current;
     // the planner dialog refreshes at once after a change.
     useEffect(() => {
@@ -251,7 +256,16 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
                                           findPlan(planner, plannerEngine, model.name),
                                           planner?.autoReload ?? true
                                       )
-                                    : {}
+                                    : {
+                                          summary:
+                                              capacitySummary(
+                                                  findCapacity(
+                                                      peerCapacity ?? null,
+                                                      plannerEngine,
+                                                      model.name
+                                                  )
+                                              ) ?? undefined
+                                      }
                                 return (
                                     <ModelRow
                                         key={model.name}

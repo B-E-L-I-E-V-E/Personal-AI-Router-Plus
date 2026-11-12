@@ -3110,6 +3110,11 @@ func (p *Proxy) handleMessage(msg *Message) {
 			log.Printf("failed to respond to capacity/report: %v", err)
 		}
 
+	case "capacity/peer-report":
+		// Another node's report, read from its mTLS ingress. It waits on the
+		// network, so it is answered off the control loop (peer_capacity.go).
+		p.answerPeerCapacity(msg)
+
 	case "capacity/set":
 		ctx, cancel := context.WithTimeout(context.Background(), detectionTimeout+time.Second)
 		defer cancel()

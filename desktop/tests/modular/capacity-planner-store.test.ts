@@ -33,6 +33,7 @@ const getPlanner = vi.fn()
 const setPlanner = vi.fn()
 const setCapacity = vi.fn()
 const getCapacity = vi.fn()
+const getPeerCapacity = vi.fn()
 
 beforeEach(() => {
     getPlanner.mockReset()
@@ -40,9 +41,12 @@ beforeEach(() => {
     setCapacity.mockReset()
     getCapacity.mockReset()
     getCapacity.mockResolvedValue([])
-    useCapacityPlannerStore.setState({ planner: null, capacity: null })
+    getPeerCapacity.mockReset()
+    useCapacityPlannerStore.setState({ planner: null, capacity: null, peerCapacity: {} })
     vi.stubGlobal('window', {
-        pairApi: { sessions: { getPlanner, setPlanner, setCapacity, getCapacity } }
+        pairApi: {
+            sessions: { getPlanner, setPlanner, setCapacity, getCapacity, getPeerCapacity }
+        }
     })
 })
 
@@ -93,6 +97,44 @@ describe('capacity planner store', () => {
         await useCapacityPlannerStore.getState().refresh()
         expect(useCapacityPlannerStore.getState().planner).toBe(state)
         expect(useCapacityPlannerStore.getState().capacity).toBe(report)
+    })
+
+    it('keeps each peer’s report by node ID and drops it when the peer is unreachable', async () => {
+        const report = [
+            {
+                engine: 'ollama',
+                model: 'qwen3:0.6b',
+                configured: null,
+                detectedWindowTokens: 40960,
+                contextTokens: 0,
+                maxSessions: 0,
+                sessionContextTokens: 40960,
+                replyTokens: 0,
+                messageTokens: 0,
+                source: 'detected',
+                heldSlots: 0,
+                queued: 0,
+                usedContextTokens: 0,
+                warning: ''
+            }
+        ]
+        getPeerCapacity.mockResolvedValueOnce(report).mockResolvedValueOnce([])
+        await Promise.all([
+            useCapacityPlannerStore.getState().refreshPeer('node-b'),
+            useCapacityPlannerStore.getState().refreshPeer('node-b'),
+            useCapacityPlannerStore.getState().refreshPeer('node-c')
+        ])
+        // Two reads for node-b at once are one read.
+        expect(getPeerCapacity.mock.calls.map(c => c[0])).toEqual(['node-b', 'node-c'])
+        expect(useCapacityPlannerStore.getState().peerCapacity).toEqual({
+            'node-b': report,
+            'node-c': []
+        })
+        expect(useCapacityPlannerStore.getState().capacity).toBeNull()
+
+        getPeerCapacity.mockRejectedValueOnce(new Error('node is not a reachable cluster peer'))
+        await useCapacityPlannerStore.getState().refreshPeer('node-b')
+        expect(useCapacityPlannerStore.getState().peerCapacity).toEqual({ 'node-c': [] })
     })
 
     it('removing a plan also lifts the limit it set', async () => {

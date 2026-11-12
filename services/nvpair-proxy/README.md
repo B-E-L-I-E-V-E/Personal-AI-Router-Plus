@@ -191,6 +191,11 @@ local engine's own report fills in what it can. For streamed OpenAI-compatible
 session requests the proxy adds `stream_options.include_usage` so the engine
 reports counts. See `spec.md` §5.12.
 
+A cluster member can read, but not change, this node's capacity: the mTLS
+ingress answers `GET /pair/v1/peer/capacity` with the same report and refuses
+every other method there. The JSON-RPC request `capacity/peer-report`
+`{"nodeId"}` fetches a pinned peer's report this way. See `spec.md` §5.14.
+
 **Admission.** With a session count set for a model, each session holds one of
 its slots on this node. When they are all held, a new session's request goes to
 another node with the model, or waits here up to 60 seconds for a slot (`503`
