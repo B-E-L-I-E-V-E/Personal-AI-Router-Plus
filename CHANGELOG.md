@@ -13,6 +13,10 @@ release workflow, with macOS builds signed and notarized; the app updates from
 those releases. A build made locally from source is unsigned unless built with
 `PAIR_MAC_SIGN=1`, and updates only once a release exists.
 
+## 1.2.4 — Other nodes' model settings on the Overview (#8)
+
+- Models on other nodes now show their sessions at once (and how many are in use), the context window per session, and the response and post context, as that node enforces them. A node that cannot be reached, or runs an older PAIR, shows none.
+
 ## 1.2.3 — About this model (#7)
 
 - Each downloaded model's menu has About this model…: the description, tags, capabilities, family, parameters, quantization, context length, size and licence that its engine and model file report, with buttons that open its Ollama library or Hugging Face pages.
