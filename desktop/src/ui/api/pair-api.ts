@@ -127,14 +127,18 @@ export interface ISessionsApi {
     getPeerCapacity(nodeId: string): Promise<ModelCapacity[]>
     /** Set or clear one model's context capacity. */
     setCapacity(change: CapacityChange): Promise<null>
-    /** Size a model's sessions from this node's GPU memory. */
+    /**
+     * Size a model's sessions from its node's GPU and system memory. Every
+     * call here takes an optional node ID: another cluster member's model is
+     * planned, saved and applied on that node.
+     */
     plan(request: CapacityPlanRequest): Promise<CapacityPlan>
     /** Saved plans, the auto-reload switch, and whether the node is idle. */
-    getPlanner(): Promise<PlannerState>
+    getPlanner(nodeId?: string): Promise<PlannerState>
     /** Save or remove a plan, or turn idle auto-reload on or off. */
     setPlanner(change: PlannerChange): Promise<PlannerState>
     /** Reload the model's engine with its saved plan now. */
-    applyPlan(engine: string, model: string): Promise<ApplyPlanResult>
+    applyPlan(engine: string, model: string, nodeId?: string): Promise<ApplyPlanResult>
 }
 
 export interface IPerformanceApi {
@@ -252,9 +256,10 @@ export function createPairApi(transport: ServiceTransport): IPairApi {
             getPeerCapacity: nodeId => transport.invoke('capacity:get-peer-report', nodeId),
             setCapacity: change => transport.invoke('capacity:set', change),
             plan: request => transport.invoke('capacity:plan', request),
-            getPlanner: () => transport.invoke('capacity:get-planner'),
+            getPlanner: nodeId => transport.invoke('capacity:get-planner', nodeId),
             setPlanner: change => transport.invoke('capacity:set-planner', change),
-            applyPlan: (engine, model) => transport.invoke('capacity:apply-plan', { engine, model })
+            applyPlan: (engine, model, nodeId) =>
+                transport.invoke('capacity:apply-plan', { engine, model, nodeId })
         },
         performance: {
             getReport: () => transport.invoke('performance:get-report'),

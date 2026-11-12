@@ -41,6 +41,7 @@ in one cluster.
 | Room for the answer | Not reserved | A **reply budget** kept in every window, so the model can always answer |
 | Knowing before you send | — | Each session reports the room its next post has |
 | Tracing a request | — | `X-Request-ID` on every request, response, job and log line |
+| Setting another machine's models | Engine settings only | **Context & sessions…** for any node's models, planned for that node's memory and applied there |
 | Taking a node out of service | — | **Pause** (running requests finish) or **Stop** (they are cancelled), from any node; requests go to other nodes |
 | What a model is | A name and a size | **About this model…**: description, tags, capabilities, quantization, context and licence from the engine, with links to its pages |
 | A model's limits at a glance | — | Each model row reads like `4 sessions · 40,960 per session · 8,192 response · 32,768 post`, on every node |
@@ -58,7 +59,10 @@ and can be ended at once, which cancels its running requests.
 
 ### Context & sessions, per model
 
-Each model's menu has **Context & sessions…**, a setting only PAIR Plus has.
+Each model's menu has **Context & sessions…**, a setting only PAIR Plus has,
+for a model on this node or on any other node in the cluster: from a laptop you
+can size, save and apply a workstation's plan, and it is worked out for that
+workstation's GPUs and memory and kept there.
 
 ![A model's menu on the Overview: Load, Eject, Context & sessions…, and Delete.](docs/assets/onboarding/sessions/01-model-menu.png)
 

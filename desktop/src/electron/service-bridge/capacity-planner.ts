@@ -22,7 +22,7 @@ import type { JsonObject, JsonValue } from './json-rpc-subprocess'
 import { parseEngineSettings, parseEngineSettingsReceipt } from './engine-settings'
 import { getModularBridgeState } from './modular-state'
 import { getModularSupervisor } from './modular-supervisor'
-import { callSessionProxy } from './sessions-bridge'
+import { callNodeProxy } from './sessions-bridge'
 
 const log = createStructuredLogger('capacity-planner')
 
@@ -30,10 +30,15 @@ const log = createStructuredLogger('capacity-planner')
 const DEFAULT_REPLY_TOKENS = 8192
 
 /**
- * The capacity planner sizes a model's sessions from this node's GPU memory
+ * The capacity planner sizes a model's sessions from its node's GPU memory
  * (nvpair-proxy does the math and reads the model), and applies a saved plan
  * by rewriting the engine's launch settings through the broker, which
  * restarts the engine. Plans and the auto-reload switch live in the proxy.
+ *
+ * Every call takes an optional node ID. Another cluster member's model is
+ * planned by that node's proxy, for the GPUs and memory its node-info reports,
+ * and its plan is saved there; applying rewrites that node's engine settings
+ * through the broker, the same way its engine settings are edited from here.
  */
 
 function objectValue(value: JsonValue | undefined): JsonObject | null {
@@ -158,18 +163,32 @@ function isUnifiedMemory(gpus: { name: string }[]): boolean {
     return gpus.some(gpu => /\bapple\b/i.test(gpu.name))
 }
 
+/** The node's own ID when the request names no node or this one. */
+function isSelfNode(nodeId: string | undefined): boolean {
+    return !nodeId || nodeId === getModularBridgeState().getSelfId()
+}
+
+/** The GPUs and system memory a plan for this node is sized for. */
+function nodeHardware(nodeId: string | undefined): {
+    gpus: { name: string; vramBytes: number }[]
+    ramBytes: number
+} {
+    const state = getModularBridgeState()
+    if (isSelfNode(nodeId)) return { gpus: state.getSelfGpus(), ramBytes: totalmem() }
+    return state.getNodeHardware(nodeId as string)
+}
+
 export async function planCapacity(request?: CapacityPlanRequest): Promise<CapacityPlan> {
     if (!request) return parsePlan(undefined, 'no request')
-    const gpus = getModularBridgeState()
-        .getSelfGpus()
-        .filter(gpu => gpu.vramBytes > 0)
+    const hardware = nodeHardware(request.nodeId)
+    const gpus = hardware.gpus.filter(gpu => gpu.vramBytes > 0)
     const params: JsonObject = {
         engine: request.engine,
         model: request.model,
         gpus: gpus.map(gpu => ({ name: gpu.name, vramBytes: gpu.vramBytes })),
-        unified: isUnifiedMemory(gpus),
-        systemRamBytes: totalmem()
+        unified: isUnifiedMemory(gpus)
     }
+    if (hardware.ramBytes > 0) params.systemRamBytes = hardware.ramBytes
     for (const key of [
         'windowTokens',
         'maxSessions',
@@ -185,7 +204,7 @@ export async function planCapacity(request?: CapacityPlanRequest): Promise<Capac
     if (request.cacheType) params.cacheType = request.cacheType
     if (request.offloadExperts) params.offloadExperts = true
     try {
-        return parsePlan(await callSessionProxy('capacity/plan', params))
+        return parsePlan(await callNodeProxy('capacity/plan', params, request.nodeId))
     } catch (err) {
         return parsePlan(
             undefined,
@@ -194,8 +213,8 @@ export async function planCapacity(request?: CapacityPlanRequest): Promise<Capac
     }
 }
 
-export async function getPlanner(): Promise<PlannerState> {
-    return parsePlanner(await callSessionProxy('capacity/planner', {}))
+export async function getPlanner(nodeId?: string): Promise<PlannerState> {
+    return parsePlanner(await callNodeProxy('capacity/planner', {}, nodeId))
 }
 
 export async function setPlanner(change?: PlannerChange): Promise<PlannerState> {
@@ -203,7 +222,7 @@ export async function setPlanner(change?: PlannerChange): Promise<PlannerState> 
     if (typeof change?.autoReload === 'boolean') params.autoReload = change.autoReload
     if (change?.save) params.save = { ...change.save }
     if (change?.remove) params.remove = { ...change.remove }
-    return parsePlanner(await callSessionProxy('capacity/planner-set', params))
+    return parsePlanner(await callNodeProxy('capacity/planner-set', params, change?.nodeId))
 }
 
 // ---------------------------------------------------------------------------
@@ -377,11 +396,12 @@ let applying: Promise<ApplyPlanResult> | null = null
 export async function applyPlan(request?: {
     engine: string
     model: string
+    nodeId?: string
 }): Promise<ApplyPlanResult> {
     if (!request) return { applied: false, message: 'no model given' }
     if (applying)
         return { applied: false, message: 'another plan is being applied; try again in a moment' }
-    applying = applyPlanNow(request.engine, request.model)
+    applying = applyPlanNow(request.engine, request.model, request.nodeId)
     try {
         return await applying
     } finally {
@@ -389,8 +409,13 @@ export async function applyPlan(request?: {
     }
 }
 
-async function applyPlanNow(engine: string, model: string): Promise<ApplyPlanResult> {
-    const state = await getPlanner()
+async function applyPlanNow(
+    engine: string,
+    model: string,
+    targetId?: string
+): Promise<ApplyPlanResult> {
+    const remote = isSelfNode(targetId) ? undefined : targetId
+    const state = await getPlanner(remote)
     const plan = state.plans.find(p => p.engine === engine && p.model === model)
     if (!plan) return { applied: false, message: 'save a plan for this model first' }
     const numbers = {
@@ -400,28 +425,36 @@ async function applyPlanNow(engine: string, model: string): Promise<ApplyPlanRes
         offloadExperts: plan.offloadExperts
     }
     const markApplied = async () => {
-        await callSessionProxy('capacity/planner-set', {
-            applied: {
-                engine,
-                model,
-                windowTokens: plan.windowTokens,
-                sessions: plan.sessions,
-                cacheType: plan.cacheType,
-                offloadExperts: plan.offloadExperts
-            }
-        })
+        await callNodeProxy(
+            'capacity/planner-set',
+            {
+                applied: {
+                    engine,
+                    model,
+                    windowTokens: plan.windowTokens,
+                    sessions: plan.sessions,
+                    cacheType: plan.cacheType,
+                    offloadExperts: plan.offloadExperts
+                }
+            },
+            remote
+        )
     }
 
     if (engine === 'lmstudio') {
         // LM Studio sets context per model load, outside PAIR's launch settings;
         // PAIR still limits traffic to the plan.
-        await callSessionProxy('capacity/set', {
-            engine,
-            model,
-            contextTokens: plan.windowTokens * plan.sessions,
-            maxSessions: plan.sessions,
-            replyTokens: replyBudget(plan)
-        })
+        await callNodeProxy(
+            'capacity/set',
+            {
+                engine,
+                model,
+                contextTokens: plan.windowTokens * plan.sessions,
+                maxSessions: plan.sessions,
+                replyTokens: replyBudget(plan)
+            },
+            remote
+        )
         return {
             applied: false,
             message: `PAIR now limits ${model} to ${plan.sessions} sessions of ${plan.windowTokens} tokens. LM Studio sets context when it loads a model: load it with a ${plan.windowTokens}-token context and ${plan.sessions} parallel slots${plan.offloadExperts ? ', and turn on keeping expert weights on the CPU,' : ''} to match.`
@@ -430,7 +463,7 @@ async function applyPlanNow(engine: string, model: string): Promise<ApplyPlanRes
     if (engine !== 'ollama' && engine !== 'llamacpp')
         return { applied: false, message: `unknown engine ${engine}` }
 
-    const nodeId = getModularBridgeState().getSelfId()
+    const nodeId = remote ?? getModularBridgeState().getSelfId()
     if (!nodeId) return { applied: false, message: 'this node is not ready yet' }
     const managerName = engine as EngineManagerName
     const snap = await readSettings(nodeId, managerName)

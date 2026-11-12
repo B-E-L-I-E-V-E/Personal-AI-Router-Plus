@@ -142,9 +142,12 @@ export interface WsInvokeChannelMap {
     'capacity:get-peer-report': { request: string; response: ModelCapacity[] }
     'capacity:set': { request: CapacityChange; response: null }
     'capacity:plan': { request: CapacityPlanRequest; response: CapacityPlan }
-    'capacity:get-planner': { request: void; response: PlannerState }
+    'capacity:get-planner': { request: string | undefined; response: PlannerState }
     'capacity:set-planner': { request: PlannerChange; response: PlannerState }
-    'capacity:apply-plan': { request: { engine: string; model: string }; response: ApplyPlanResult }
+    'capacity:apply-plan': {
+        request: { engine: string; model: string; nodeId?: string }
+        response: ApplyPlanResult
+    }
 
     // Model details (nvpair-proxy model/details, for this node or a peer)
     'engine:model-details': { request: ModelDetailsRequest; response: ModelDetails }

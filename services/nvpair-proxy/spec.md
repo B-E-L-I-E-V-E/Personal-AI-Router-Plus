@@ -728,12 +728,28 @@ that.
 - **Reading a peer's capacity.** A peer's mTLS ingress answers
   `GET /pair/v1/peer/capacity` with its own capacity report, the body of
   `GET /pair/v1/capacity`, and refuses every other method there with `405`.
-  Nothing on the ingress changes capacity. The process-wide JSON-RPC request
+  The process-wide JSON-RPC request
   `capacity/peer-report` `{"nodeId"}` fetches that report for a discovered,
   pinned peer (this node's own ID answers locally) and returns
   `{"nodeId","models"}`; an unknown, unpinned or unreachable node is an error.
   It is answered off the control loop, so a slow peer holds up no other
   request.
+- **Planning and changing a peer's capacity.** Any cluster member may manage
+  any node, so a peer's mTLS ingress answers `POST /pair/v1/peer/capacity/call`
+  with `{"method","params"}`, where method is one of `capacity/report`,
+  `capacity/plan`, `capacity/planner`, `capacity/planner-set` and
+  `capacity/set`. The node runs it as it would for its own desktop and answers
+  `200` `{"result"}` with that method's result, or `400` `{"error"}` with its
+  refusal; any other method or body is `400`, any other HTTP method `405`.
+  Each change is logged with the calling member's cluster UUID. A plan is
+  worked out on the node that runs the model, for the GPUs and system memory
+  the caller supplies (the desktop passes that node's node-info), and is saved
+  and enforced there. The process-wide JSON-RPC request `capacity/peer-call`
+  `{"nodeId","method","params"}` runs the method on that pinned peer, or here
+  when `nodeId` is empty or this node's own, and returns the method's result.
+  A node without the route (1.3.0 or older) forwards the path to its engine;
+  its `404`, `405` or empty answer is reported as needing an update. Answered
+  off the control loop.
 
 ### 5.15 Capacity planner
 

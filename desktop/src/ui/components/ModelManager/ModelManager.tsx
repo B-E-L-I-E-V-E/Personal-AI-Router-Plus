@@ -15,6 +15,7 @@ import { usePendingActionsStore } from '@/ui/stores/pending-actions.store'
 import { isEnginePullInProgress } from '@/shared/utils/engine-progress'
 import { engineManagerName } from '@/shared/utils/engines'
 import { useConnectionStore } from '@/ui/stores/connection.store'
+import { useNodesStore } from '@/ui/stores/nodes.store'
 import {
     CAPACITY_REFRESH_MS,
     findPlan,
@@ -35,12 +36,18 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
     const [modelPendingDelete, setModelPendingDelete] = useState<string | null>(null)
     const [planningModel, setPlanningModel] = useState<string | null>(null)
     const [aboutModel, setAboutModel] = useState<string | null>(null)
-    // The planner measures this node's memory, so only its own models offer it.
     const isSelf = useConnectionStore(s => s.selfId) === nodeId
-    const planner = useCapacityPlannerStore(s => s.planner)
-    const capacity = useCapacityPlannerStore(s => s.capacity)
-    // A peer's report is refreshed while its card is open (NodeEngineSettings).
+    const nodeName = useNodesStore(s => s.nodes.get(nodeId)?.name ?? '')
+    const ownPlanner = useCapacityPlannerStore(s => s.planner)
+    const ownCapacity = useCapacityPlannerStore(s => s.capacity)
+    // A peer's report and planner are refreshed while its card is open
+    // (NodeEngineSettings). A peer that answers its planner can be planned
+    // from here: each node plans and keeps its own, for its own memory.
     const peerCapacity = useCapacityPlannerStore(s => (isSelf ? undefined : s.peerCapacity[nodeId]))
+    const peerPlanner = useCapacityPlannerStore(s => (isSelf ? undefined : s.peerPlanner[nodeId]))
+    const planner = isSelf ? ownPlanner : (peerPlanner ?? null)
+    const capacity = isSelf ? ownCapacity : (peerCapacity ?? null)
+    const canPlan = isSelf || peerPlanner !== undefined
     const refreshPlanner = useCapacityPlannerStore(s => s.refresh)
     const plannerEngine = engineManagerName(backend.type)
     // This node's capacity and plans come from its own proxy. Peers' rows show
@@ -255,7 +262,7 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
                     {models.length > 0 && (
                         <Stack gap="1">
                             {models.map(model => {
-                                const lines = isSelf
+                                const lines = canPlan
                                     ? modelConfigLines(
                                           findCapacity(capacity, plannerEngine, model.name),
                                           findPlan(planner, plannerEngine, model.name),
@@ -264,11 +271,7 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
                                     : {
                                           summary:
                                               capacitySummary(
-                                                  findCapacity(
-                                                      peerCapacity ?? null,
-                                                      plannerEngine,
-                                                      model.name
-                                                  )
+                                                  findCapacity(capacity, plannerEngine, model.name)
                                               ) ?? undefined
                                       }
                                 return (
@@ -287,7 +290,7 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
                                             .getState()
                                             .getModelPending(nodeId, backendType, model.name)}
                                         displayName={displayName}
-                                        canPlan={isSelf}
+                                        canPlan={canPlan}
                                         configLine={lines.summary}
                                         planLine={lines.planLine}
                                         onAction={handleAction}
@@ -312,6 +315,8 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
 
             {planningModel && (
                 <CapacityPlannerDialog
+                    nodeId={nodeId}
+                    nodeName={nodeName}
                     engine={plannerEngine}
                     model={planningModel}
                     displayName={displayName(planningModel)}

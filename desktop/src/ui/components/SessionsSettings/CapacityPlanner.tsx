@@ -151,12 +151,15 @@ function MemoryBar({
 }
 
 export default function CapacityPlanner({
+    nodeId,
     engine,
     model,
     saved,
     onDone,
     onError
 }: {
+    /** The node the model runs on; omitted means this one. */
+    nodeId?: string
     engine: string
     model: string
     saved: SavedCapacityPlan | undefined
@@ -186,6 +189,7 @@ export default function CapacityPlanner({
         const timer = setTimeout(() => {
             window.pairApi.sessions
                 .plan({
+                    nodeId,
                     engine,
                     model,
                     cacheType,
@@ -212,6 +216,7 @@ export default function CapacityPlanner({
         }, 200)
         return () => clearTimeout(timer)
     }, [
+        nodeId,
         engine,
         model,
         windowTokens,
@@ -256,6 +261,7 @@ export default function CapacityPlanner({
         setBusy(true)
         window.pairApi.sessions
             .setPlanner({
+                nodeId,
                 save: {
                     engine,
                     model,
@@ -269,8 +275,8 @@ export default function CapacityPlanner({
             })
             .then(async state => {
                 if (!apply) return onDone(state)
-                const result = await window.pairApi.sessions.applyPlan(engine, model)
-                onDone(await window.pairApi.sessions.getPlanner(), result.message)
+                const result = await window.pairApi.sessions.applyPlan(engine, model, nodeId)
+                onDone(await window.pairApi.sessions.getPlanner(nodeId), result.message)
             })
             .catch(err => onError(getErrorString(err) ?? 'Could not save the plan'))
             .finally(() => setBusy(false))

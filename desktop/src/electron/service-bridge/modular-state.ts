@@ -1013,6 +1013,21 @@ class ModularBridgeState {
         return (self?.gpus ?? []).map(gpu => ({ name: gpu.name, vramBytes: gpu.vramBytes }))
     }
 
+    /**
+     * A node's GPUs and system memory as its node-info reports them, for
+     * planning another node's capacity. ramBytes is 0 when not reported.
+     */
+    getNodeHardware(nodeId: string): {
+        gpus: { name: string; vramBytes: number }[]
+        ramBytes: number
+    } {
+        const node = this.nodes.get(nodeId)
+        return {
+            gpus: (node?.gpus ?? []).map(gpu => ({ name: gpu.name, vramBytes: gpu.vramBytes })),
+            ramBytes: node?.memory?.totalBytes ?? 0
+        }
+    }
+
     getSelfId(): string | null {
         return this.selfId
     }

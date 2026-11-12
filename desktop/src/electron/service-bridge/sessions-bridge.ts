@@ -10,6 +10,7 @@ import type {
 } from '@/shared/types/sessions'
 import getErrorString from '@/shared/utils/get-error-string'
 import type { JsonObject, JsonValue } from './json-rpc-subprocess'
+import { getModularBridgeState } from './modular-state'
 import { getModularSupervisor } from './modular-supervisor'
 import { PROXY_ENGINES } from './proxy-engines'
 
@@ -34,6 +35,21 @@ export async function callSessionProxy(
         }
     }
     throw lastError
+}
+
+/**
+ * Runs a capacity method on a node's proxy: this node's directly, another
+ * cluster member's through this proxy, which forwards it over the cluster's
+ * mTLS link (capacity/peer-call). The answer is the method's own.
+ */
+export async function callNodeProxy(
+    method: string,
+    params: JsonObject,
+    nodeId?: string
+): Promise<JsonValue | undefined> {
+    const selfId = getModularBridgeState().getSelfId()
+    if (!nodeId || nodeId === selfId) return callSessionProxy(method, params)
+    return callSessionProxy('capacity/peer-call', { nodeId, method, params })
 }
 
 function objectValue(value: JsonValue | undefined): JsonObject | null {
@@ -176,6 +192,6 @@ export async function setCapacity(change?: CapacityChange): Promise<null> {
     if (typeof change.contextTokens === 'number') params.contextTokens = change.contextTokens
     if (typeof change.maxSessions === 'number') params.maxSessions = change.maxSessions
     if (typeof change.replyTokens === 'number') params.replyTokens = change.replyTokens
-    await callSessionProxy('capacity/set', params)
+    await callNodeProxy('capacity/set', params, change.nodeId)
     return null
 }
