@@ -430,6 +430,16 @@ def applies_pr_trailer(pr_number: str) -> str:
     return f'{APPLIES_PR_TRAILER_PREFIX}{pr_number}'
 
 
+def message_has_trailer(message: str, trailer: str) -> bool:
+    """Whether a commit message carries trailer as a whole line.
+
+    A substring test would let `Applies-PR: #3` match `Applies-PR: #37`. That
+    is a real collision in a fork, whose history carries the upstream
+    project's bot commits with its own pull request numbers.
+    """
+    return any(line.strip() == trailer for line in message.splitlines())
+
+
 def check_forbidden_paths(changed_name_status: list[tuple[str, str]], description: str) -> None:
     if allows_owned_file_edits(description):
         return

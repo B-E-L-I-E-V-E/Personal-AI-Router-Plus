@@ -25,6 +25,7 @@ from lib import (  # noqa: E402
     check_forbidden_paths,
     format_changelog_entry,
     load_versions,
+    message_has_trailer,
     parse_release_intent,
     prepend_changelog,
     read_release_version,
@@ -160,6 +161,24 @@ class ReleaseVersionTests(unittest.TestCase):
     def test_missing_fences_rejected(self) -> None:
         with self.assertRaises(ValueError):
             parse_release_intent('## Summary\nno fences here', KEYS)
+
+
+class AppliedTrailerTests(unittest.TestCase):
+    def test_matches_the_whole_trailer_line(self) -> None:
+        message = '[release-intent] bump release after PR #3\n\nApplies-PR: #3\n'
+        self.assertTrue(message_has_trailer(message, 'Applies-PR: #3'))
+
+    def test_a_longer_pr_number_is_not_a_match(self) -> None:
+        # A fork's history carries the upstream bot's commits; PR #37 there
+        # must not read as this repository's PR #3 being applied.
+        message = '[release-intent] bump release after PR #37\n\nApplies-PR: #37\n'
+        self.assertFalse(message_has_trailer(message, 'Applies-PR: #3'))
+        self.assertFalse(message_has_trailer('Applies-PR: #30', 'Applies-PR: #3'))
+
+    def test_the_trailer_in_running_text_is_not_a_match(self) -> None:
+        self.assertFalse(
+            message_has_trailer('Explains why Applies-PR: #3 was skipped', 'Applies-PR: #3')
+        )
 
 
 class ReleaseIntentTests(unittest.TestCase):

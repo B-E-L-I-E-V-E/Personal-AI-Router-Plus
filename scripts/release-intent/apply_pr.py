@@ -44,6 +44,7 @@ from lib import (  # noqa: E402
     bump_semver,
     format_changelog_entry,
     load_versions,
+    message_has_trailer,
     parse_release_intent,
     parse_versions,
     prepend_changelog,
@@ -228,7 +229,7 @@ def branch_has_trailer(repo: str, token: str, branch: str, trailer: str) -> bool
         if not isinstance(item, dict):
             continue
         commit = item.get('commit')
-        if isinstance(commit, dict) and trailer in str(commit.get('message', '')):
+        if isinstance(commit, dict) and message_has_trailer(str(commit.get('message', '')), trailer):
             return True
     return False
 
