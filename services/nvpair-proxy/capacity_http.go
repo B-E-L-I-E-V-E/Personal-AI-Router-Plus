@@ -16,9 +16,10 @@ import (
 // reachable from loopback only.
 //
 //	GET /pair/v1/capacity   every known model: setting, detection, usage
-//	PUT /pair/v1/capacity   {"engine","model","contextTokens","maxSessions"}
-//	                        sets a model's pool and session count; send
-//	                        {"engine","model","clear":true} to remove it
+//	PUT /pair/v1/capacity   {"engine","model","contextTokens","maxSessions","replyTokens"?}
+//	                        sets a model's pool, session count and reply
+//	                        budget; send {"engine","model","clear":true} to
+//	                        remove it
 const capacityAPIPath = "/pair/v1/capacity"
 
 func (f *facade) serveCapacityAPI(w http.ResponseWriter, r *http.Request) bool {
@@ -45,7 +46,7 @@ func (f *facade) serveCapacityAPI(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 		slog.Info("context capacity changed", "engine", row.Engine, "model", row.Model,
-			"context_tokens", row.ContextTokens, "max_sessions", row.MaxSessions)
+			"context_tokens", row.ContextTokens, "max_sessions", row.MaxSessions, "reply_tokens", row.ReplyTokens)
 		writeSessionJSON(w, http.StatusOK, row)
 	default:
 		methodNotAllowed(w, "GET, PUT")

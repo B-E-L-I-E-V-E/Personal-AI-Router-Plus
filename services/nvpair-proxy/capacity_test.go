@@ -291,3 +291,17 @@ func TestLocalUsageByModel(t *testing.T) {
 		t.Fatalf("usage after expiry = %+v, want none", got)
 	}
 }
+
+func TestReplyBudgetLeavesTheRestForMessages(t *testing.T) {
+	k := capacityKey{Engine: "ollama", Model: "m"}
+	row := effective(k, &capacitySetting{ContextTokens: 40960 * 2, MaxSessions: 2, ReplyTokens: 8192}, nil, localUsage{})
+	if row.SessionShare != 40960 || row.ReplyTokens != 8192 || row.MessageTokens != 32768 {
+		t.Fatalf("share %d reply %d messages %d", row.SessionShare, row.ReplyTokens, row.MessageTokens)
+	}
+	if (capacitySetting{ContextTokens: 8192, MaxSessions: 1, ReplyTokens: 8192}).validate() == nil {
+		t.Fatal("a reply budget as large as the window was accepted")
+	}
+	if (capacitySetting{ContextTokens: 8192, MaxSessions: 1}).validate() != nil {
+		t.Fatal("no reply budget must stay valid")
+	}
+}

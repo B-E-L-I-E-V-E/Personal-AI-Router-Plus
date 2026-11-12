@@ -726,6 +726,81 @@ that.
   session. Release is best effort; an unreleased slot frees when the peer's copy
   of the session goes idle.
 
+### 5.15 Capacity planner
+
+`capacity/plan` sizes one model's sessions from GPU memory the caller supplies
+(the desktop passes this node's GPUs from node-info). It is pure apart from
+reading the model:
+
+- **Model description** (`modelSpec`). Ollama: `/api/show` (verbose) for the
+  architecture and `/api/tags` for the weights' size; when the architecture is
+  missing (MLX/safetensors models), a loaded copy is measured from `/api/ps`
+  as (size − weights) ÷ (context × configured slots). llama.cpp: the GGUF file
+  named by `/props?model=` (shards summed). LM Studio: `/api/v1/models` for
+  size and maximum context, and the GGUF in `~/.lmstudio/models` when present.
+  The GGUF reader parses only the metadata section, with bounds on key count,
+  string length and array size.
+- **Cost per token** (f16): Σ over attention layers of KV heads × (key length
+  + value length) × 2 bytes. Per-layer `head_count_kv` arrays and
+  `full_attention_interval` exclude linear-attention layers, whose fixed state
+  (from `ssm.*`) is counted per session. Sliding-window layers (pattern from
+  metadata or a table of known architectures) cost at most their window per
+  session. q8_0 and q4_0 caches scale by 34/64 and 18/64; a measured cost is
+  not scaled.
+- **Budget**: total VRAM − reserve (default 10% of each GPU, at least 1 GiB
+  each; at least a quarter of the total for unified memory) − weights − other
+  resident models. A window belongs to one conversation, so every session
+  gets the whole `windowTokens` (default and ceiling: the model's maximum) and
+  sessions = budget ÷ one session's cost, at most `maxSessions` (default and
+  ceiling 256). The cap never shrinks the window. With the engine not running,
+  `spec.notes` says so. A model that does not fit still reports its
+  per-session cost, so the desktop's calculator can show what it would need.
+- **Expert offload**: for a mixture-of-experts model (`expert_count` > 1),
+  `spec.expertBytes` is the exact size of the routed-expert tensors
+  (`blk.N.ffn_{up,down,gate,gate_up}_exps`, shared experts excluded), summed
+  from the GGUF tensor table (every shard) or Ollama's `/api/show` tensor
+  list. With `offloadExperts` and `systemRamBytes`, those bytes count against
+  system memory (reserve: a quarter, at least 4 GiB) instead of GPU memory.
+  `canOffloadExperts` is false, with `offloadNote` saying why, on unified
+  memory, on Ollama, or when the size is unknown; asking anyway is an error.
+  Saved plans carry `offloadExperts`, applied to llama.cpp as `--cpu-moe`.
+- **Reply budget**: a plan's `replyTokens` (default 8192, at most half the
+  window) is kept from each session's window for replies. Applying the plan
+  sets the model's capacity with `replyTokens`; `messageTokens` = share −
+  reply is what a session's conversation may use. Admission refuses a turn
+  once the measured conversation reaches `messageTokens` (instead of the whole
+  share) and the request is not shorter. Changing only `replyTokens` keeps an
+  applied plan applied and updates the capacity at once. On this node's own
+  attempts for a session request, `withSessionBudget` sets `truncate: false`
+  on Ollama's `/api/chat` and `/api/generate` and caps an unset reply length
+  (`options.num_predict`, or `max_tokens` on OpenAI-compatible routes) at the
+  reply budget; replies carry `X-PAIR-Context-Reply-Tokens` and
+  `X-PAIR-Context-Message-Limit`. A node serving a session for another node
+  (cluster ingress) applies its own conversation limit and the same rewrite.
+  `GET /pair/v1/sessions/{id}` adds, to each context this node serves,
+  `windowTokens`, `replyTokens`, `conversationLimitTokens` and
+  `postRoomTokens`; `capacity/plan` takes `replyTokens` and returns
+  `replyTokens` and `postTokens`.
+- A model that cannot be sized returns a result with `error` and whatever
+  `spec` was learned, not a JSON-RPC error.
+
+`capacity/planner` and `capacity/planner-set` keep the node's saved plans in
+`capacity-plans.json` beside the other proxy files, with `autoReload` (default
+on). A plan is pending until `planner-set {applied}` reports the engine was
+reloaded with exactly its numbers; the proxy then sets the model's capacity to
+window × sessions with `maxSessions` = sessions. Ollama's settings are
+engine-wide, so saving an Ollama plan replaces any other. The result carries
+`activity` (sessions, requests in progress, queued) for the idle check.
+
+Applying is the desktop's job, through the broker's engine-settings path:
+Ollama gets `OLLAMA_CONTEXT_LENGTH`, `OLLAMA_NUM_PARALLEL` and, for a
+quantized cache, `OLLAMA_KV_CACHE_TYPE` with flash attention; llama.cpp gets
+`--ctx-size` (window × sessions), `--parallel`, `--cache-type-k/-v` and
+`--flash-attn on`. Other launch tokens are kept verbatim. An engine PAIR did
+not install (`editable: false`) is not restarted. With `autoReload` on, the
+desktop applies a pending plan after two consecutive idle checks 30 s apart,
+and retries a failed one after 10 minutes.
+
 ## 6. Reservations
 
 A reservation is one in-flight dispatch this process has made since the last

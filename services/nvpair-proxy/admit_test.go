@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +27,7 @@ type admitFixture struct {
 	tc     engineCase
 	proxy  *Proxy
 	prompt atomic.Int64 // prompt_eval_count the engines report
+	body   atomic.Value // the last request body an engine received ([]byte)
 }
 
 func newAdmitFixture(t *testing.T, tc engineCase, withOtherNode bool) *admitFixture {
@@ -34,7 +36,12 @@ func newAdmitFixture(t *testing.T, tc engineCase, withOtherNode bool) *admitFixt
 	fx.prompt.Store(100)
 	engine := func(node string) *httptest.Server {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_, _ = io.Copy(io.Discard, r.Body)
+			b, _ := io.ReadAll(r.Body)
+			// Capacity detection queries the same engine in the background;
+			// keep only what inference requests carried.
+			if r.URL.Path == tc.inferencePath {
+				fx.body.Store(b)
+			}
 			w.Header().Set("Content-Type", "application/x-ndjson")
 			w.Header().Set(servedByTestHeader, node)
 			w.WriteHeader(http.StatusOK)
@@ -66,6 +73,14 @@ func (fx *admitFixture) setCapacity(contextTokens int64, maxSessions int) {
 	fx.t.Helper()
 	k := capacityKey{Engine: fx.tc.profile.Name, Model: fx.tc.requestedModel}
 	if err := fx.proxy.capacity.set(k, capacitySetting{ContextTokens: contextTokens, MaxSessions: maxSessions}, false); err != nil {
+		fx.t.Fatalf("set capacity: %v", err)
+	}
+}
+
+func (fx *admitFixture) setCapacityWithReply(contextTokens int64, maxSessions int, reply int64) {
+	fx.t.Helper()
+	k := capacityKey{Engine: fx.tc.profile.Name, Model: fx.tc.requestedModel}
+	if err := fx.proxy.capacity.set(k, capacitySetting{ContextTokens: contextTokens, MaxSessions: maxSessions, ReplyTokens: reply}, false); err != nil {
 		fx.t.Fatalf("set capacity: %v", err)
 	}
 }
@@ -347,4 +362,83 @@ func TestSlots_WaitEndsWhenTheSessionEnds(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("ending the session did not end its wait")
 	}
+}
+
+func TestAdmission_ReplyBudgetLimitsTheConversation(t *testing.T) {
+	forEachEngine(t, func(t *testing.T, tc engineCase) {
+		fx := newAdmitFixture(t, tc, false)
+		fx.setCapacityWithReply(8192, 1, 2048) // 6144 left for the conversation
+		fx.prompt.Store(6500)
+
+		w := fx.send(context.Background(), "conv-1", 200)
+		wantStatus(t, w, http.StatusOK)
+		if w.Header().Get(contextReplyHeader) != "2048" || w.Header().Get(contextMessageHeader) != "6144" {
+			t.Fatalf("reply %q, message limit %q; want 2048 and 6144",
+				w.Header().Get(contextReplyHeader), w.Header().Get(contextMessageHeader))
+		}
+		// Under the window (8192) but over what the conversation may use.
+		w = fx.send(context.Background(), "conv-1", 300)
+		wantStatus(t, w, http.StatusBadRequest)
+		for _, want := range []string{"6510", "8192", "2048", "6144"} {
+			if !strings.Contains(w.Body.String(), want) {
+				t.Fatalf("body = %q, want it to name %s", w.Body.String(), want)
+			}
+		}
+	})
+}
+
+func TestAdmission_SessionRequestsCarryThisNodesBudget(t *testing.T) {
+	forEachEngine(t, func(t *testing.T, tc engineCase) {
+		fx := newAdmitFixture(t, tc, false)
+		fx.setCapacityWithReply(8192, 1, 2048)
+		wantStatus(t, fx.send(context.Background(), "conv-1", 0), http.StatusOK)
+		sent, _ := fx.body.Load().([]byte)
+		var v map[string]any
+		if err := json.Unmarshal(sent, &v); err != nil {
+			t.Fatalf("engine got %q", sent)
+		}
+		switch {
+		case tc.profile.Name == "ollama" && (tc.inferencePath == "/api/chat" || tc.inferencePath == "/api/generate"):
+			opts, _ := v["options"].(map[string]any)
+			if v["truncate"] != false || opts["num_predict"] != float64(2048) {
+				t.Fatalf("engine got %v, want truncate false and num_predict 2048", v)
+			}
+		case isOpenAIInferencePath(tc.inferencePath):
+			if v["max_tokens"] != float64(2048) {
+				t.Fatalf("engine got %v, want max_tokens 2048", v)
+			}
+		}
+		// Outside a session the body goes through exactly as sent.
+		req := httptest.NewRequest(http.MethodPost, tc.inferencePath, strings.NewReader(fmt.Sprintf(`{"model":%q}`, tc.requestedModel)))
+		fx.proxy.soleFacade().handleHTTP(httptest.NewRecorder(), req)
+		if sent, _ := fx.body.Load().([]byte); string(sent) != fmt.Sprintf(`{"model":%q}`, tc.requestedModel) {
+			t.Fatalf("a request outside a session was rewritten: %s", sent)
+		}
+	})
+}
+
+func TestSessionAPI_ReportsThisNodesLimitsAndPostRoom(t *testing.T) {
+	forEachEngine(t, func(t *testing.T, tc engineCase) {
+		fx := newAdmitFixture(t, tc, false)
+		fx.setCapacityWithReply(8192, 1, 2048) // 6144 for the conversation
+		fx.prompt.Store(4000)
+		wantStatus(t, fx.send(context.Background(), "conv-1", 0), http.StatusOK)
+
+		req := httptest.NewRequest(http.MethodGet, sessionsAPIPrefix+"/conv-1", nil)
+		req.RemoteAddr = "127.0.0.1:5555"
+		w := httptest.NewRecorder()
+		if !fx.proxy.soleFacade().serveSessionsAPI(w, req) {
+			t.Fatal("the session API did not answer")
+		}
+		wantStatus(t, w, http.StatusOK)
+		var got sessionJSON
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatalf("body %s: %v", w.Body.String(), err)
+		}
+		c := got.Context[tc.profile.Name]
+		// 4000 prompt + 10 completion measured; 6144 - 4010 = 2134 left.
+		if c.WindowTokens != 8192 || c.ReplyTokens != 2048 || c.ConversationLimitTokens != 6144 || c.PostRoomTokens == nil || *c.PostRoomTokens != 2134 {
+			t.Fatalf("context = %+v, want window 8192, reply 2048, limit 6144, room 2134", c)
+		}
+	})
 }

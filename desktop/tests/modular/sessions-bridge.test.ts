@@ -59,7 +59,10 @@ describe('sessions bridge', () => {
                     expiresAt: '2026-11-11T00:04:03Z',
                     inFlight: 0,
                     requests: 2,
-                    context: { ollama: { model: 'qwen3:0.6b', tokens: 39 } }
+                    context: {
+                        ollama: { model: 'qwen3:0.6b', tokens: 39, postRoomTokens: 6105 },
+                        llamacpp: { model: 'other', tokens: 5 }
+                    }
                 },
                 { sessionId: '', agentId: null }
             ]
@@ -70,7 +73,11 @@ describe('sessions bridge', () => {
             sessionId: 'conv-1',
             agentId: 'planner',
             requests: 2,
-            context: [{ engine: 'ollama', model: 'qwen3:0.6b', tokens: 39 }]
+            context: expect.arrayContaining([
+                { engine: 'ollama', model: 'qwen3:0.6b', tokens: 39, postRoomTokens: 6105 },
+                // Served by another node: its room is unknown here.
+                { engine: 'llamacpp', model: 'other', tokens: 5, postRoomTokens: null }
+            ])
         })
     })
 
@@ -127,5 +134,52 @@ describe('sessions bridge', () => {
             ['capacity/set', { engine: 'ollama', model: 'm', clear: true }],
             ['sessions/end', { sessionId: 'conv-1', agentId: '' }]
         ])
+    })
+
+    it('carries the reply budget both ways', async () => {
+        callProxy.mockResolvedValueOnce({
+            models: [
+                {
+                    engine: 'ollama',
+                    model: 'm',
+                    configured: { contextTokens: 16384, maxSessions: 2, replyTokens: 2048 },
+                    sessionContextTokens: 8192,
+                    replyTokens: 2048,
+                    messageTokens: 6144,
+                    source: 'configured'
+                }
+            ]
+        })
+        const [row] = await getCapacityReport()
+        expect(row).toMatchObject({
+            configured: { contextTokens: 16384, maxSessions: 2, replyTokens: 2048 },
+            replyTokens: 2048,
+            messageTokens: 6144
+        })
+
+        callProxy.mockResolvedValue({})
+        await setCapacity({
+            engine: 'ollama',
+            model: 'm',
+            contextTokens: 16384,
+            maxSessions: 2,
+            replyTokens: 2048
+        })
+        expect(callProxy.mock.calls.at(-1)?.[2]).toEqual({
+            engine: 'ollama',
+            model: 'm',
+            contextTokens: 16384,
+            maxSessions: 2,
+            replyTokens: 2048
+        })
+    })
+
+    it('reads a missing reply budget as none', async () => {
+        callProxy.mockResolvedValueOnce({
+            models: [{ engine: 'ollama', model: 'm', configured: null, source: 'detected' }]
+        })
+        const [row] = await getCapacityReport()
+        expect(row.replyTokens).toBe(0)
+        expect(row.messageTokens).toBe(0)
     })
 })

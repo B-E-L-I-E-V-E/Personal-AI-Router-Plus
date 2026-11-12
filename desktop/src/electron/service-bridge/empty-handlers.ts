@@ -37,6 +37,12 @@ import {
     setCapacity,
     setSessionPolicy
 } from './sessions-bridge'
+import {
+    applyPlan,
+    getPlanner,
+    planCapacity,
+    setPlanner
+} from '@/electron/service-bridge/capacity-planner'
 
 type BridgeHandler<C extends WsInvokeChannel> = (
     payload?: WsInvokeRequest<C>
@@ -732,7 +738,11 @@ const EMPTY_SERVICE_BRIDGE_HANDLERS: BridgeHandlerMap = {
     'sessions:list': () => listSessions(),
     'sessions:end': payload => endSession(payload),
     'capacity:get-report': () => getCapacityReport(),
-    'capacity:set': payload => setCapacity(payload)
+    'capacity:set': payload => setCapacity(payload),
+    'capacity:plan': payload => planCapacity(payload),
+    'capacity:get-planner': () => getPlanner(),
+    'capacity:set-planner': payload => setPlanner(payload),
+    'capacity:apply-plan': payload => applyPlan(payload)
 }
 
 export function handleServiceBridgeInvoke<C extends WsInvokeChannel>(

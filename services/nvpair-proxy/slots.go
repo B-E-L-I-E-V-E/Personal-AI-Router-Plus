@@ -205,3 +205,14 @@ func (s *sessionStore) slotKeys() map[capacityKey]bool {
 	}
 	return out
 }
+
+// activityCounts is every live session on this node (its own and those peers
+// hold here) and every request waiting for a slot, for the idle check.
+func (s *sessionStore) activityCounts() (sessions, queued int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, q := range s.queues {
+		queued += len(q)
+	}
+	return len(s.sessions), queued
+}

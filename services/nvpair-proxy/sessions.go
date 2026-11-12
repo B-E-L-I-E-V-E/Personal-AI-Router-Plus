@@ -202,7 +202,9 @@ type sessionView struct {
 	InFlight    int
 	Requests    uint64
 	Nodes       map[string]string
-	Context     map[string]sessionContext
+	// Local is, per engine, whether this node serves the session itself.
+	Local   map[string]bool
+	Context map[string]sessionContext
 }
 
 type sessionStore struct {
@@ -647,6 +649,10 @@ func (s *sessionStore) viewLocked(sess *session) sessionView {
 	for k, v := range sess.nodes {
 		nodes[k] = v
 	}
+	local := make(map[string]bool, len(sess.local))
+	for k, v := range sess.local {
+		local[k] = v
+	}
 	ctxs := make(map[string]sessionContext, len(sess.context))
 	for k, v := range sess.context {
 		ctxs[k] = v
@@ -665,6 +671,7 @@ func (s *sessionStore) viewLocked(sess *session) sessionView {
 		InFlight:    len(sess.inFlight),
 		Requests:    sess.requests,
 		Nodes:       nodes,
+		Local:       local,
 		Context:     ctxs,
 	}
 }

@@ -351,6 +351,12 @@ paths:
                   type: integer
                   minimum: 1
                   maximum: 1024
+                replyTokens:
+                  type: integer
+                  minimum: 0
+                  description: >
+                    Part of each session's window kept for replies; must be
+                    less than the window. Omit or 0 for no reply budget.
                 clear:
                   type: boolean
                   description: Remove the setting and fall back to detection.
@@ -432,10 +438,22 @@ components:
         an ended or expired session with `410`; a full session table with `503`.
         When this node's context slots for the model are all held and no other
         node can serve, the request waits for a slot, then gets `503` with
-        `Retry-After`. A session whose measured context has reached its share
-        gets `400` until it sends a shorter conversation. The response carries
-        `X-PAIR-Session-Expires-At`, `X-PAIR-Context-Session-Tokens`,
-        `X-PAIR-Context-Session-Limit` and `X-PAIR-Queue-Wait-Ms` as they apply.
+        `Retry-After`. A session's window is shared by its conversation and
+        the model's reply: when the model has a reply budget, the conversation
+        may use the window less that budget. A session whose measured
+        conversation has reached its limit gets `400`, naming the window, the
+        reply budget and what is left, until it sends a shorter conversation.
+        On the node that serves a session request, PAIR sets `truncate: false`
+        on Ollama's `/api/chat` and `/api/generate`, so a conversation longer
+        than the window is refused with its token count instead of silently
+        cut, and caps a reply that sets no length of its own at the reply
+        budget (`options.num_predict`, or `max_tokens` on OpenAI-compatible
+        routes); values the client set are kept. The response carries
+        `X-PAIR-Session-Expires-At`, `X-PAIR-Context-Session-Tokens` (the
+        conversation as last measured), `X-PAIR-Context-Session-Limit` (the
+        session's window), `X-PAIR-Context-Reply-Tokens` (the reply budget),
+        `X-PAIR-Context-Message-Limit` (what the conversation may use) and
+        `X-PAIR-Queue-Wait-Ms` as they apply.
       schema:
         type: string
         maxLength: 128
@@ -547,6 +565,23 @@ components:
               updatedAt:
                 type: string
                 format: date-time
+              windowTokens:
+                type: integer
+                description: >
+                  The session's window on this node. This and the fields below
+                  are present when this node serves the session and the
+                  model's window is known.
+              replyTokens:
+                type: integer
+                description: The part of the window kept for replies; absent when there is no reply budget.
+              conversationLimitTokens:
+                type: integer
+                description: What the conversation may hold, the window less the reply budget.
+              postRoomTokens:
+                type: integer
+                description: >
+                  How many tokens the next post may add before the conversation
+                  reaches conversationLimitTokens; 0 when it has.
     ModelCapacity:
       type: object
       required: [engine, model, configured, detected, contextTokens, maxSessions, sessionContextTokens, source, activeSessions, usedContextTokens, heldSlots, queued]
@@ -562,6 +597,8 @@ components:
             contextTokens:
               type: integer
             maxSessions:
+              type: integer
+            replyTokens:
               type: integer
         detected:
           nullable: true
@@ -584,7 +621,15 @@ components:
           description: Effective session count; 0 when unknown.
         sessionContextTokens:
           type: integer
-          description: Each session's share, contextTokens ÷ maxSessions rounded down to 1024; 0 when unknown.
+          description: Each session's window, contextTokens ÷ maxSessions rounded down to 1024; 0 when unknown.
+        replyTokens:
+          type: integer
+          description: The part of each session's window kept for replies; 0 when there is no reply budget.
+        messageTokens:
+          type: integer
+          description: >
+            What a session's conversation (its posts and history) may use: the
+            window less replyTokens; 0 when there is no reply budget.
         source:
           type: string
           enum: [configured, detected, unknown]

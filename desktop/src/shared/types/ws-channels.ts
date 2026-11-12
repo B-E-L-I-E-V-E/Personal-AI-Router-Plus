@@ -43,8 +43,13 @@ import type { NodeItem } from '@/shared/types/nodes'
 import type { NodeItemMetrics } from '@/shared/types/metrics'
 import type { Workload } from '@/shared/types/workloads'
 import type {
+    ApplyPlanResult,
     CapacityChange,
+    CapacityPlan,
+    CapacityPlanRequest,
     ModelCapacity,
+    PlannerChange,
+    PlannerState,
     SessionPolicy,
     SessionSummary
 } from '@/shared/types/sessions'
@@ -127,6 +132,10 @@ export interface WsInvokeChannelMap {
     'sessions:end': { request: { sessionId: string; agentId: string | null }; response: null }
     'capacity:get-report': { request: void; response: ModelCapacity[] }
     'capacity:set': { request: CapacityChange; response: null }
+    'capacity:plan': { request: CapacityPlanRequest; response: CapacityPlan }
+    'capacity:get-planner': { request: void; response: PlannerState }
+    'capacity:set-planner': { request: PlannerChange; response: PlannerState }
+    'capacity:apply-plan': { request: { engine: string; model: string }; response: ApplyPlanResult }
 }
 
 export type WsInvokeChannel = keyof WsInvokeChannelMap

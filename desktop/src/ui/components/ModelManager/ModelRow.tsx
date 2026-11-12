@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { memo, useMemo } from 'react'
-import { Divider, Stack } from '@nvidia/foundations-react-core'
+import { Divider, Stack, Text } from '@nvidia/foundations-react-core'
 import { useDropdownClickable } from '@/ui/hooks/useDropdownClickable'
 import { ModelRowHeader } from './ModelRowHeader'
 import { ModelRowSecondaryRow } from './ModelRowSecondaryRow'
@@ -32,6 +32,8 @@ function ModelRowInner({
     progress,
     pendingAction,
     displayName,
+    canPlan = false,
+    planLine,
     onAction,
     onExpiryChange
 }: ModelRowProps) {
@@ -62,6 +64,13 @@ function ModelRowInner({
                 disabled: busy || !isRunning || !isLoaded
             })
         }
+        if (canPlan) {
+            items.push({
+                id: 'capacity',
+                children: 'Context & sessions…',
+                disabled: !model.downloaded
+            })
+        }
         if (capabilities.hasDeleteModel) {
             items.push({ id: 'delete', children: 'Delete', danger: true, disabled: busy })
         }
@@ -69,6 +78,7 @@ function ModelRowInner({
     }, [
         capabilities.hasEject,
         capabilities.hasDeleteModel,
+        canPlan,
         isLoaded,
         isRunning,
         model.downloaded,
@@ -100,6 +110,11 @@ function ModelRowInner({
                     expiryDd={expiryDd}
                     onExpiryChange={onExpiryChange}
                 />
+                {planLine && (
+                    <Text kind="body/regular/sm" className="text-subtle-color ml-4 truncate">
+                        {planLine}
+                    </Text>
+                )}
             </Stack>
             <Divider style={{ borderColor: '#ffffff22' }} />
         </Stack>

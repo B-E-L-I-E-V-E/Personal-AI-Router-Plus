@@ -3,22 +3,15 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { Button, Flex, FormField, Stack, Text, TextInput } from '@nvidia/foundations-react-core'
-import type { ModelCapacity, SessionPolicy, SessionSummary } from '@/shared/types/sessions'
+import type { SessionPolicy, SessionSummary } from '@/shared/types/sessions'
 import getErrorString from '@/shared/utils/get-error-string'
 import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
 
 // The proxy owns these settings and their saved state; this panel only reads
-// what it reports and sends changes. It polls while open because sessions and
-// slots change with every request and the proxy pushes no events for them.
+// what it reports and sends changes. It polls while open because sessions
+// change with every request and the proxy pushes no events for them. Each
+// model's context capacity is set in its own menu (CapacityPlannerDialog).
 const REFRESH_MS = 5000
-const SHARE_GRANULARITY = 1024
-const MIN_USEFUL_SHARE = 4096
-
-function sessionShare(pool: number, sessions: number): number {
-    if (pool <= 0 || sessions <= 0) return 0
-    const share = Math.floor(pool / sessions)
-    return share - (share % SHARE_GRANULARITY)
-}
 
 function formatTokens(n: number): string {
     return n > 0 ? n.toLocaleString() : '—'
@@ -96,114 +89,6 @@ function PolicyCard({
     )
 }
 
-function CapacityRow({
-    row,
-    onChanged,
-    onError
-}: {
-    row: ModelCapacity
-    onChanged: () => void
-    onError: (message: string) => void
-}) {
-    const initialPool = row.configured?.contextTokens ?? row.contextTokens
-    const initialSessions = row.configured?.maxSessions ?? row.maxSessions
-    const [pool, setPool] = useState(initialPool > 0 ? String(initialPool) : '')
-    const [sessions, setSessions] = useState(initialSessions > 0 ? String(initialSessions) : '')
-    const [saving, setSaving] = useState(false)
-
-    const poolN = wholeNumber(pool) ?? 0
-    const sessionsN = wholeNumber(sessions) ?? 0
-    const share = sessionShare(poolN, sessionsN)
-    const valid = poolN >= SHARE_GRANULARITY && sessionsN >= 1 && sessionsN <= 1024
-
-    const run = (change: Promise<null>) => {
-        setSaving(true)
-        change
-            .then(onChanged)
-            .catch(err => onError(getErrorString(err) ?? 'Could not change the capacity'))
-            .finally(() => setSaving(false))
-    }
-
-    return (
-        <Stack gap="2" className="pair-paper p-3">
-            <Flex justify="between" align="center" gap="2" wrap="wrap">
-                <Text kind="body/semibold/sm">
-                    {row.model} <span className="text-subtle-color">· {row.engine}</span>
-                </Text>
-                <Text kind="body/regular/sm" className="text-subtle-color">
-                    {row.heldSlots} of {row.maxSessions || '—'} sessions · {row.queued} waiting ·{' '}
-                    {formatTokens(row.usedContextTokens)} tokens in use
-                </Text>
-            </Flex>
-            <Flex align="end" gap="3" wrap="wrap">
-                <FormField slotLabel="Context pool (tokens)">
-                    <TextInput value={pool} onValueChange={setPool} />
-                </FormField>
-                <FormField slotLabel="Max sessions">
-                    <TextInput value={sessions} onValueChange={setSessions} />
-                </FormField>
-                <Stack gap="1">
-                    <Text kind="body/regular/sm" className="text-subtle-color">
-                        Each session gets
-                    </Text>
-                    <Text kind="body/semibold/sm">{formatTokens(share)} tokens</Text>
-                </Stack>
-                <Button
-                    kind="primary"
-                    color="brand"
-                    disabled={!valid || saving}
-                    onClick={() =>
-                        run(
-                            window.pairApi.sessions.setCapacity({
-                                engine: row.engine,
-                                model: row.model,
-                                contextTokens: poolN,
-                                maxSessions: sessionsN
-                            })
-                        )
-                    }
-                >
-                    Save
-                </Button>
-                {row.configured && (
-                    <Button
-                        kind="secondary"
-                        disabled={saving}
-                        onClick={() =>
-                            run(
-                                window.pairApi.sessions.setCapacity({
-                                    engine: row.engine,
-                                    model: row.model,
-                                    clear: true
-                                })
-                            )
-                        }
-                    >
-                        Clear
-                    </Button>
-                )}
-            </Flex>
-            {row.detectedWindowTokens > 0 && (
-                <Text kind="body/regular/sm" className="text-subtle-color">
-                    The engine reports a {formatTokens(row.detectedWindowTokens)}-token window per
-                    request.
-                </Text>
-            )}
-            {valid && share > 0 && share < MIN_USEFUL_SHARE && (
-                <Text kind="body/regular/sm" className="text-subtle-color">
-                    Below {formatTokens(MIN_USEFUL_SHARE)} tokens per session is too little to be
-                    useful.
-                </Text>
-            )}
-            {row.warning && (
-                <Text kind="body/regular/sm" className="text-subtle-color">
-                    {row.warning}
-                </Text>
-            )}
-        </Stack>
-    )
-}
-
 function SessionRow({
     session,
     onEnded,
@@ -215,6 +100,10 @@ function SessionRow({
 }) {
     const [ending, setEnding] = useState(false)
     const tokens = session.context.reduce((sum, c) => sum + c.tokens, 0)
+    const rooms = session.context.flatMap(c =>
+        c.postRoomTokens === null ? [] : [c.postRoomTokens]
+    )
+    const room = rooms.length > 0 ? Math.min(...rooms) : null
     const expires = new Date(session.expiresAt)
     return (
         <Flex justify="between" align="center" gap="3" wrap="wrap" className="pair-paper p-3">
@@ -223,6 +112,11 @@ function SessionRow({
                 <Text kind="body/regular/sm" className="text-subtle-color">
                     {session.agentId ? `Agent ${session.agentId} · ` : ''}
                     {session.requests} requests · {formatTokens(tokens)} tokens
+                    {room === null
+                        ? ''
+                        : room > 0
+                          ? ` · room for ${room.toLocaleString()} more`
+                          : ' · full: shorten the conversation'}
                     {session.inFlight > 0
                         ? ' · running'
                         : Number.isNaN(expires.getTime())
@@ -250,19 +144,13 @@ function SessionRow({
 
 export default function SessionsSettings() {
     const [policy, setPolicy] = useState<SessionPolicy | null>(null)
-    const [capacity, setCapacity] = useState<ModelCapacity[]>([])
     const [sessions, setSessions] = useState<SessionSummary[]>([])
     const [error, setError] = useState<string | null>(null)
 
     const refresh = useCallback(() => {
-        Promise.all([
-            window.pairApi.sessions.getPolicy(),
-            window.pairApi.sessions.getCapacity(),
-            window.pairApi.sessions.list()
-        ])
-            .then(([p, c, s]) => {
+        Promise.all([window.pairApi.sessions.getPolicy(), window.pairApi.sessions.list()])
+            .then(([p, s]) => {
                 setPolicy(p)
-                setCapacity(c)
                 setSessions(s)
             })
             .catch(err => setError(getErrorString(err) ?? 'The router is not reachable'))
@@ -285,27 +173,11 @@ export default function SessionsSettings() {
                     onError={setError}
                 />
             )}
-            <Card title="Context capacity on this node">
-                <Text kind="body/regular/sm" className="text-subtle-color">
-                    Divide a model’s context among a fixed number of sessions. When every session
-                    slot is held, new sessions go to another node or wait.
-                </Text>
-                {capacity.length === 0 ? (
-                    <Text kind="body/regular/sm" className="text-subtle-color">
-                        No models yet. Load a model or start a session to see it here.
-                    </Text>
-                ) : (
-                    capacity.map(row => (
-                        <CapacityRow
-                            key={`${row.engine}/${row.model}/${row.configured?.contextTokens ?? 0}/${row.configured?.maxSessions ?? 0}`}
-                            row={row}
-                            onChanged={refresh}
-                            onError={setError}
-                        />
-                    ))
-                )}
-            </Card>
             <Card title="Active sessions">
+                <Text kind="body/regular/sm" className="text-subtle-color">
+                    Each model’s context window, room for the reply and sessions at once are set in
+                    its menu on the Overview: … → Context &amp; sessions.
+                </Text>
                 {sessions.length === 0 ? (
                     <Text kind="body/regular/sm" className="text-subtle-color">
                         No sessions are open.

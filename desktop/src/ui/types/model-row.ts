@@ -26,6 +26,13 @@ export interface ModelRowProps {
      */
     pendingAction?: EngineCommandType
     displayName: (name: string) => string
+    /**
+     * Offer "Context & sessions…" in the menu. Only this node's models: the
+     * planner measures the memory of the node it runs on.
+     */
+    canPlan?: boolean
+    /** The model's saved capacity plan, in one line, shown under the row. */
+    planLine?: string
     onAction: (modelName: string, action: string) => void
     onExpiryChange: (modelName: string, value: ModelExpiry) => void
 }

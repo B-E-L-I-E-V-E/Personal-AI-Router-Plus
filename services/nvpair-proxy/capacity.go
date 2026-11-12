@@ -58,6 +58,10 @@ type capacityKey struct {
 type capacitySetting struct {
 	ContextTokens int64 `json:"contextTokens"`
 	MaxSessions   int   `json:"maxSessions"`
+	// ReplyTokens is the part of each session's window kept for the model's
+	// replies (thinking included); messages and history get the rest. Zero
+	// keeps nothing back.
+	ReplyTokens int64 `json:"replyTokens,omitempty"`
 }
 
 // detectedCapacity is what an engine reported for one loaded model. Zero means
@@ -109,6 +113,9 @@ func (c capacitySetting) validate() error {
 	}
 	if c.MaxSessions < 1 || c.MaxSessions > maxConfiguredSessions {
 		return fmt.Errorf("maxSessions must be between 1 and %d", maxConfiguredSessions)
+	}
+	if share := sessionShare(c.ContextTokens, c.MaxSessions); c.ReplyTokens < 0 || (c.ReplyTokens > 0 && c.ReplyTokens >= share) {
+		return fmt.Errorf("replyTokens must be less than each session's window (%d)", share)
 	}
 	return nil
 }
@@ -423,9 +430,14 @@ type modelCapacity struct {
 	Detected *detectedJSON `json:"detected"`
 	// The effective values: the setting where there is one, else detection.
 	// Zero means unknown.
-	ContextTokens int64  `json:"contextTokens"`
-	MaxSessions   int    `json:"maxSessions"`
-	SessionShare  int64  `json:"sessionContextTokens"`
+	ContextTokens int64 `json:"contextTokens"`
+	MaxSessions   int   `json:"maxSessions"`
+	SessionShare  int64 `json:"sessionContextTokens"`
+	// ReplyTokens is kept from each session's window for replies, and
+	// MessageTokens is what remains for the conversation itself: the most a
+	// session's messages and history may hold. Zero means no reply budget.
+	ReplyTokens   int64  `json:"replyTokens"`
+	MessageTokens int64  `json:"messageTokens"`
 	Source        string `json:"source"`
 	// Live sessions this node serves for the model, and the context they hold.
 	ActiveSessions int   `json:"activeSessions"`
@@ -464,6 +476,10 @@ func effective(k capacityKey, set *capacitySetting, det *detectedCapacity, use l
 		return row
 	}
 	row.SessionShare = sessionShare(row.ContextTokens, row.MaxSessions)
+	if set != nil && set.ReplyTokens > 0 && set.ReplyTokens < row.SessionShare {
+		row.ReplyTokens = set.ReplyTokens
+		row.MessageTokens = row.SessionShare - set.ReplyTokens
+	}
 	if row.Source == "configured" && det != nil && det.Window > 0 && row.SessionShare > det.Window {
 		row.Warning = fmt.Sprintf("each session's share (%d) exceeds the engine's per-request window (%d); the engine will truncate before PAIR's limit", row.SessionShare, det.Window)
 	}

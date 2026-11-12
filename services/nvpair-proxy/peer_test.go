@@ -30,6 +30,7 @@ type peerFixture struct {
 	tc     engineCase
 	a, b   *facade
 	prompt atomic.Int64
+	body   atomic.Value // the last inference body B's engine received ([]byte)
 }
 
 func newPeerFixture(t *testing.T, tc engineCase) *peerFixture {
@@ -61,7 +62,10 @@ func newPeerFixture(t *testing.T, tc engineCase) *peerFixture {
 	pin(bDir, aDir, "a")
 
 	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
+		b, _ := io.ReadAll(r.Body)
+		if r.URL.Path == tc.inferencePath {
+			fx.body.Store(b)
+		}
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, "{\"done\":true,\"prompt_eval_count\":%d,\"eval_count\":10}\n", fx.prompt.Load())
@@ -89,9 +93,15 @@ func newPeerFixture(t *testing.T, tc engineCase) *peerFixture {
 
 // limitB sets B's capacity for the model and how long B queues.
 func (fx *peerFixture) limitB(contextTokens int64, sessions int, queue time.Duration) {
+	fx.limitBWithReply(contextTokens, sessions, 0, queue)
+}
+
+// limitBWithReply also keeps reply tokens of each of B's session windows for
+// replies.
+func (fx *peerFixture) limitBWithReply(contextTokens int64, sessions int, reply int64, queue time.Duration) {
 	fx.t.Helper()
 	k := capacityKey{Engine: fx.tc.profile.Name, Model: fx.tc.requestedModel}
-	if err := fx.b.host.capacity.set(k, capacitySetting{ContextTokens: contextTokens, MaxSessions: sessions}, false); err != nil {
+	if err := fx.b.host.capacity.set(k, capacitySetting{ContextTokens: contextTokens, MaxSessions: sessions, ReplyTokens: reply}, false); err != nil {
 		fx.t.Fatalf("set capacity: %v", err)
 	}
 	cfg := fx.b.host.sessions.config()
@@ -237,4 +247,35 @@ func mustURL(t *testing.T, raw string) *url.URL {
 		t.Fatalf("parse %q: %v", raw, err)
 	}
 	return u
+}
+
+func TestPeerAdmission_ServingNodeAppliesItsReplyBudget(t *testing.T) {
+	forEachEngine(t, func(t *testing.T, tc engineCase) {
+		fx := newPeerFixture(t, tc)
+		fx.limitBWithReply(8192, 1, 2048, 0) // 6144 left for the conversation on B
+		fx.prompt.Store(6500)
+
+		wantStatus(t, fx.send("conv-1", 200), http.StatusOK)
+		sent, _ := fx.body.Load().([]byte)
+		var v map[string]any
+		if err := json.Unmarshal(sent, &v); err != nil {
+			t.Fatalf("B's engine got %q", sent)
+		}
+		switch {
+		case tc.profile.Name == "ollama" && (tc.inferencePath == "/api/chat" || tc.inferencePath == "/api/generate"):
+			if opts, _ := v["options"].(map[string]any); v["truncate"] != false || opts["num_predict"] != float64(2048) {
+				t.Fatalf("B's engine got %v, want truncate false and num_predict 2048", v)
+			}
+		case isOpenAIInferencePath(tc.inferencePath):
+			if v["max_tokens"] != float64(2048) {
+				t.Fatalf("B's engine got %v, want max_tokens 2048", v)
+			}
+		}
+		// Under B's window but over what its conversation may use.
+		w := fx.send("conv-1", 300)
+		wantStatus(t, w, http.StatusBadRequest)
+		if !strings.Contains(w.Body.String(), "serving node") || !strings.Contains(w.Body.String(), "6144") {
+			t.Fatalf("body = %q, want the serving node's conversation limit", w.Body.String())
+		}
+	})
 }

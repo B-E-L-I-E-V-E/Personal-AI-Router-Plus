@@ -208,11 +208,12 @@ working with **models** (download, load, unload, and delete):
 | Hold a model in memory, when the engine needs it | **Load** |
 | Free that memory without deleting anything | **Eject** |
 | Remove a downloaded model | **Delete**, where the engine supports it |
+| Size a model's context window, room for the reply and sessions at once | **Context & sessions…**, for this node's models (see [Sessions and Context Capacity](sessions.mdx)) |
 
 **Eject** removes a model from memory only. The download stays, and **Load**
 brings it back without fetching it again.
 
-![An engine's model list showing the Load, Eject, and Delete actions against a downloaded model.](assets/onboarding/engine-lifecycle/04-model-actions.png)
+![An engine's model list with a downloaded model's menu open: Load, Eject, Context & sessions…, and Delete.](assets/onboarding/engine-lifecycle/04-model-actions.png)
 
 On a headless machine the terminal interface covers installing, starting,
 stopping, restarting, and uninstalling an engine; pulling a model; and listing,

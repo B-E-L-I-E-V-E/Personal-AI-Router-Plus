@@ -18,7 +18,7 @@ import { PROXY_ENGINES } from './proxy-engines'
  * They are process-wide, so any enabled engine's relay reaches the same
  * store; the first engine whose proxy answers is used.
  */
-async function callSessionProxy(
+export async function callSessionProxy(
     method: string,
     params?: JsonObject
 ): Promise<JsonValue | undefined> {
@@ -75,7 +75,12 @@ function parseSessions(value: JsonValue | undefined): SessionSummary[] {
         for (const engine of Object.keys(ctx ?? {})) {
             const use = objectValue(ctx?.[engine])
             if (!use) continue
-            context.push({ engine, model: stringValue(use.model), tokens: numberValue(use.tokens) })
+            context.push({
+                engine,
+                model: stringValue(use.model),
+                tokens: numberValue(use.tokens),
+                postRoomTokens: typeof use.postRoomTokens === 'number' ? use.postRoomTokens : null
+            })
         }
         out.push({
             sessionId,
@@ -103,13 +108,16 @@ function parseCapacity(value: JsonValue | undefined): ModelCapacity[] {
             configured: configured
                 ? {
                       contextTokens: numberValue(configured.contextTokens),
-                      maxSessions: numberValue(configured.maxSessions)
+                      maxSessions: numberValue(configured.maxSessions),
+                      replyTokens: numberValue(configured.replyTokens)
                   }
                 : null,
             detectedWindowTokens: numberValue(objectValue(obj.detected)?.windowTokens),
             contextTokens: numberValue(obj.contextTokens),
             maxSessions: numberValue(obj.maxSessions),
             sessionContextTokens: numberValue(obj.sessionContextTokens),
+            replyTokens: numberValue(obj.replyTokens),
+            messageTokens: numberValue(obj.messageTokens),
             source: stringValue(obj.source),
             heldSlots: numberValue(obj.heldSlots),
             queued: numberValue(obj.queued),
@@ -158,6 +166,7 @@ export async function setCapacity(change?: CapacityChange): Promise<null> {
     if (change.clear) params.clear = true
     if (typeof change.contextTokens === 'number') params.contextTokens = change.contextTokens
     if (typeof change.maxSessions === 'number') params.maxSessions = change.maxSessions
+    if (typeof change.replyTokens === 'number') params.replyTokens = change.replyTokens
     await callSessionProxy('capacity/set', params)
     return null
 }

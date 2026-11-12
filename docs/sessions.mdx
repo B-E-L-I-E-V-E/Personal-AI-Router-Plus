@@ -95,18 +95,157 @@ include usage (`stream_options.include_usage`), which adds one standard usage
 chunk at the end of the stream. Requests outside a session are forwarded
 exactly as sent.
 
-For each model on a node you can set:
+A context window belongs to one conversation: every session gets the model's
+whole window, and the node's memory decides how many sessions run at once. Each
+model has its own **context window per session** and **sessions at once**, set
+from GPU memory as described below.
 
-| Setting | Meaning |
-| --- | --- |
-| **Context pool** | Total context the model can hold across all its sessions at once |
-| **Max sessions** | How many sessions may share it |
-| **Share per session** | Pool ÷ sessions, rounded down to a multiple of 1024. For example 262,144 ÷ 6 = 43,008 |
+### Messages and the Reply Share One Window
+
+A session's window holds everything the model reads and writes: your messages,
+the conversation so far, and the reply, a thinking model's reasoning included.
+There is no separate limit per message; a message may use whatever the window
+has left after the conversation and room for the reply. With a 40,960-token
+window and 8,192 kept for the reply, a session's messages and history can use
+32,768 tokens.
+
+Engines handle a conversation that does not fit badly. Ollama accepts it and
+keeps only the last half of the window, answering as if nothing were lost; a
+reply with no length of its own keeps going past the window by forgetting the
+start of the conversation. So for session requests on a node with a reply
+budget, PAIR:
+
+- sets `"truncate": false` on Ollama's own endpoints (`/api/chat`,
+  `/api/generate`), so Ollama refuses a conversation longer than the window
+  with its exact token count instead of cutting it. Ollama's OpenAI-compatible
+  endpoints have no such switch;
+- caps a reply that sets no length of its own at the reply budget
+  (`options.num_predict` on Ollama's endpoints, `max_tokens` on
+  OpenAI-compatible ones). Values the client set are kept;
+- refuses, with `400`, a next turn once the conversation PAIR last measured
+  has used the messages' share, naming the window, the reply budget and what
+  is left, so the sender can shorten the conversation;
+- reports `X-PAIR-Context-Reply-Tokens` and `X-PAIR-Context-Message-Limit`
+  with `X-PAIR-Context-Session-Limit` on every reply it serves.
+
+Requests outside a session are forwarded exactly as sent.
 
 Where you set nothing, PAIR fills in what the local engine reports: Ollama's
 per-request window, LM Studio's context length and parallel count, llama.cpp's
 per-slot context and slot count. A value the engine does not report stays
 unknown rather than guessed.
+
+### Plan from GPU Memory
+
+PAIR works out how many sessions fit in this node's GPU memory. On the
+**Overview**, open a model's menu (**…**) in its engine's model list and select
+**Context & sessions…**. This dialog is the one place a model's capacity is
+set. It is offered for this node's models, since PAIR measures the memory of
+the node it runs on. For Ollama, the window and session count apply to every
+model Ollama runs, so planning one Ollama model replaces another's plan.
+
+![An engine's model list with a model's menu open: Load, Eject, Context & sessions…, and Delete.](assets/onboarding/sessions/01-model-menu.png)
+
+Each model row then shows its plan and whether it is applied. In the dialog:
+
+1. Drag **Context window per session**. It stops at 2K, 4K, 8K and so on up
+   to the model's maximum, which is the last stop. Every session gets this
+   whole window.
+2. Drag **Room for the reply** to set how much of each window is kept for the
+   model's reply, a thinking model's reasoning included: 8,192 tokens by
+   default, at most half the window. The rest is what a session's posts and
+   history may use. Changing only this takes effect at once, without
+   restarting the engine.
+
+![The Context & sessions dialog for qwen3:0.6b: the Reload automatically when idle switch, the context window and room-for-the-reply sliders, and a table of how much text fits in one post, the response and the whole window.](assets/onboarding/sessions/02-context-window-and-reply.png)
+
+The table under the sliders follows them. For each kind of text it shows the
+characters each token holds and, in three groups, how much fits in **one
+post** (the window less the reply room), in **the response**, and in the
+**whole window**, in words and pages, and in characters for the whole window.
+The figures were measured with qwen3's tokenizer: ordinary English holds about
+four characters a token, code about three and a half, while hashes, IDs,
+encoded data and Chinese take about one token a character and emoji more than
+one. A page is 500 words; counts are rounded down. **More info** explains the
+conversions.
+
+3. Drag **Sessions at once**. The label shows how many fit; the slider goes
+   further so you can see what more would need.
+4. **Keep free** sets the safety reserve, 10% of each GPU by default (at least
+   1 GB each). On Apple silicon, where the GPU shares system memory, PAIR always
+   keeps at least a quarter of it free for macOS.
+5. Optionally pick a smaller **context cache precision**. 8-bit holds about
+   twice as many tokens as full precision, 4-bit about three and a half times,
+   at a small cost in accuracy.
+
+As you drag, the memory bars show what the settings need:
+
+| Bar | What it adds up |
+| --- | --- |
+| GPU memory | The model's weights on the GPU, sessions × one session's context, and the reserve |
+| System memory | Expert weights kept there (see below), and a quarter of it (at least 4 GB) kept free for the system |
+
+![The lower half of the dialog: the sessions-at-once and keep-free sliders, the cache precision buttons, and the memory bar showing 124.4 GB of 128 GB for 21 sessions of 40,960 tokens.](assets/onboarding/sessions/03-sessions-and-memory.png)
+
+On Apple silicon the GPU and the system share one memory, shown as a single
+bar.
+
+When the settings need more than the node has, the sliders and the bar turn
+red. You can still save and apply such a plan; the engine may then spill onto
+the CPU and run slowly, or fail to load the model.
+
+![The same dialog with 30 sessions where 21 fit: the sliders, the session count and the memory bar are red, reading 163.7 GB of 128 GB, too much.](assets/onboarding/sessions/04-over-capacity.png)
+
+#### Mixture-of-Experts Models
+
+Mixture-of-experts models (Qwen3 30B-A3B, gpt-oss, Mixtral and others) keep most
+of their weights in experts, of which only a few run per token. On a node with
+its own GPU memory, **Keep expert weights in system memory** moves them to
+system memory, so the GPU holds only attention and the context and fits more
+sessions. Tokens come out slower, since the experts then run on the CPU.
+
+PAIR reads the exact size of the expert weights from the model's tensor table.
+The switch appears only where it helps:
+
+| Engine | Expert offload |
+| --- | --- |
+| llama.cpp | Applied with `--cpu-moe` |
+| LM Studio | Planned; turn on keeping expert weights on the CPU when you load the model |
+| Ollama | Not available; Ollama has no setting for it |
+
+On Apple silicon it is never offered: the GPU already uses system memory.
+
+For example, two 32 GB GPUs with an 11 GB model leave about 46 GB for context.
+A model that needs 192 KB per token fits 1 session of its full 128K window
+(3 with an 8-bit cache), or 7 sessions if you lower the window to 32K.
+
+PAIR reads the context cost from the model's architecture (layers, key/value
+heads and head size), counting only the layers whose memory grows with the
+window. For a model the engine does not describe, such as MLX models in
+Ollama, it measures a loaded copy instead, or asks you for the model's size
+and its cost per token.
+
+**Save and apply now** restarts the engine with matching settings and then
+limits PAIR's traffic to the plan:
+
+| Engine | What changes |
+| --- | --- |
+| Ollama | `OLLAMA_CONTEXT_LENGTH` and `OLLAMA_NUM_PARALLEL`. These apply to every model Ollama runs, so one Ollama plan replaces another |
+| llama.cpp | `--ctx-size` (window × sessions) and `--parallel` |
+| LM Studio | Not restarted. PAIR limits traffic to the plan; set the same context length and parallel count when you load the model |
+
+Restarting interrupts requests running on that engine. PAIR cannot restart an
+engine it did not install, such as your own Ollama; it says so instead.
+
+**Reload automatically when idle** (on by default) applies a saved plan by
+itself once the node has had no sessions and no requests for two checks in a
+row, about a minute. Turn it off to apply plans only when you press **Save and
+apply now** or **Apply now**. The switch is in the dialog and covers every model
+on the node. A saved plan's status shows at the top of the dialog, with **Apply
+now** while it is pending and **Remove plan**, which also lifts the limit the
+plan set.
+
+![The top of the dialog with a saved plan: 21 × 40,960 tokens, 8,192 for replies, will apply when this node is idle, with Apply now and Remove plan buttons.](assets/onboarding/sessions/05-saved-plan.png)
 
 ### When Capacity Runs Out
 
@@ -116,8 +255,9 @@ it ends, expires, or moves.
 - **Every slot held.** A new session's request goes to another node with the
   model. With no other node, it waits in line for a slot (60 seconds by default,
   up to 5 minutes), then gets `503` with `Retry-After`.
-- **Session too large.** When a session's measured context has reached its share
-  and the next request is not shorter, it gets `400`, naming both numbers.
+- **Session too large.** When a session's measured conversation has reached its
+  limit (the window, less the reply budget when one is set) and the next request
+  is not shorter, it gets `400`, naming the numbers.
   Shorten or summarize the conversation and send it again; a shorter request is
   accepted and measured afresh.
 
@@ -127,13 +267,16 @@ turn), `X-PAIR-Context-Session-Limit` (its share, when this node served it), and
 
 ## Settings → Sessions
 
-The desktop app's **Settings → Sessions** tab shows and changes all of this:
+The desktop app's **Settings → Sessions** tab holds what is not per model:
 
 - **Session policy:** idle timeout, and how long a request may wait for a slot.
-- **Context capacity on this node:** each model's pool and session count, with
-  each session's share shown as you type, and how many slots are held or waited
-  for.
-- **Active sessions:** with an **End** button.
+- **Active sessions:** each with its size, the room its next post has, and an
+  **End** button.
+
+Each model's context window, room for the reply and sessions at once are set
+in its menu, as described in Plan from GPU Memory.
+
+![Settings > Sessions: the session policy, and an active session for agent docs-writer with 2,220 tokens and room for 30,548 more.](assets/onboarding/sessions/06-sessions-settings.png)
 
 The router saves these itself, so they survive restarts.
 
@@ -145,12 +288,20 @@ Every PAIR endpoint port answers these, from this machine only:
 | --- | --- |
 | `POST /pair/v1/sessions` | Create. Optional body `{"sessionId","agentId","idleTimeoutSeconds"}` |
 | `GET /pair/v1/sessions[?agentId=]` | List live sessions |
-| `GET /pair/v1/sessions/{id}` | Read one, including `expiresAt`, `context`, and a suggested `keepaliveIntervalSeconds` |
+| `GET /pair/v1/sessions/{id}` | Read one, including `expiresAt`, `context`, and a suggested `keepaliveIntervalSeconds`. For a session this node serves, each `context` entry also gives `windowTokens`, `replyTokens`, `conversationLimitTokens` and `postRoomTokens`, the room the next post has |
 | `POST /pair/v1/sessions/{id}/keepalive` | Restart the idle clock |
 | `PATCH /pair/v1/sessions/{id}` | Change `idleTimeoutSeconds` (60–3600) |
 | `DELETE /pair/v1/sessions/{id}` | End now |
-| `GET /pair/v1/capacity` | Each model's capacity and usage on this node |
-| `PUT /pair/v1/capacity` | `{"engine","model","contextTokens","maxSessions"}`, or `{"engine","model","clear":true}` |
+| `GET /pair/v1/capacity` | Each model's capacity and usage on this node, with `replyTokens` and `messageTokens`, the most a new session's first post may use |
+| `PUT /pair/v1/capacity` | `{"engine","model","contextTokens","maxSessions","replyTokens"?}`, or `{"engine","model","clear":true}` |
+
+An agent can size its posts from these: before the first turn, a post may use
+the model's `messageTokens`; after it, `postRoomTokens` on the session.
+
+The planner is available to the desktop through the proxy's JSON-RPC methods
+`capacity/plan` (which takes and returns `replyTokens`, and returns
+`postTokens`), `capacity/planner` and `capacity/planner-set` (plans carry
+`replyTokens`).
 
 Calls that change a session must send the owner's `X-PAIR-Agent-ID`. The
 OpenAPI reference lists the full request and response shapes.
