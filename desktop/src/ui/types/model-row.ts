@@ -31,6 +31,8 @@ export interface ModelRowProps {
      * planner measures the memory of the node it runs on.
      */
     canPlan?: boolean
+    /** What the proxy enforces for the model (sessions, context), in one line. */
+    configLine?: string
     /** The model's saved capacity plan, in one line, shown under the row. */
     planLine?: string
     onAction: (modelName: string, action: string) => void

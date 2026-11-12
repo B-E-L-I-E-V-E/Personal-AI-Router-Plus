@@ -99,3 +99,28 @@ func TestOpenAPI_DocumentsTheNodeState(t *testing.T) {
 		t.Errorf("path %s is not in the OpenAPI reference", nodeStateAPIPath)
 	}
 }
+
+func TestOpenAPI_DocumentsThePerformanceReport(t *testing.T) {
+	doc := openAPIText(t)
+	cases := []struct {
+		schema string
+		fields []string
+	}{
+		{"PerformanceReport", jsonFields(perfReport{})},
+		{"PerfModelSummary", jsonFields(perfModelSummary{})},
+		{"PerfRecord", jsonFields(perfRecord{})},
+		{"PerfStat", jsonFields(perfStat{})},
+		{"PerfSources", jsonFields(perfSources{})},
+		{"BenchmarkRun", jsonFields(benchmarkRun{})},
+		{"BenchmarkStep", jsonFields(benchmarkStep{})},
+		{"BenchmarkPrompt", jsonFields(benchmarkPrompt{})},
+		{"LiveRequest", jsonFields(liveRequest{})},
+		{"PerformanceLive", jsonFields(perfLive{})},
+	}
+	for _, tc := range cases {
+		t.Run(tc.schema, func(t *testing.T) {
+			wantDocumented(t, tc.schema, section(t, doc, "    "+tc.schema+":"), tc.fields)
+		})
+	}
+	wantDocumented(t, "PerfModelSummary.trend", section(t, section(t, doc, "    PerfModelSummary:"), "        trend:"), jsonFields(perfTrendPoint{}))
+}

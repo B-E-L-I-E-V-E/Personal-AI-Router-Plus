@@ -33,6 +33,7 @@ function ModelRowInner({
     pendingAction,
     displayName,
     canPlan = false,
+    configLine,
     planLine,
     onAction,
     onExpiryChange
@@ -64,6 +65,7 @@ function ModelRowInner({
                 disabled: busy || !isRunning || !isLoaded
             })
         }
+        items.push({ id: 'details', children: 'About this model…', disabled: !model.downloaded })
         if (canPlan) {
             items.push({
                 id: 'capacity',
@@ -110,6 +112,15 @@ function ModelRowInner({
                     expiryDd={expiryDd}
                     onExpiryChange={onExpiryChange}
                 />
+                {configLine && (
+                    <Text
+                        kind="body/regular/sm"
+                        className="text-subtle-color ml-4 truncate"
+                        title={configLine}
+                    >
+                        {configLine}
+                    </Text>
+                )}
                 {planLine && (
                     <Text kind="body/regular/sm" className="text-subtle-color ml-4 truncate">
                         {planLine}

@@ -36,6 +36,12 @@ tags:
     description: >
       PAIR's own session API, answered by the local proxy on any engine port and
       never forwarded to an engine. Loopback only.
+  - name: Performance
+    description: >
+      Per-model speeds and thinking time for the requests this node routes, and
+      the fixed benchmark. Answered by the local proxy on any engine port and
+      never forwarded. Loopback only. Only counts and timings are kept, never
+      prompt or reply text, and they reset when the service restarts.
   - name: Node info
     description: Read-only node telemetry polled from discovered PAIR nodes.
 paths:
@@ -369,6 +375,86 @@ paths:
                 $ref: "#/components/schemas/ModelCapacity"
         "204":
           description: The setting was cleared and nothing else is known about the model.
+        default:
+          $ref: "#/components/responses/ErrorResponse"
+  /pair/v1/performance:
+    get:
+      tags:
+        - Performance
+      operationId: getPerformance
+      summary: Report per-model performance on this node
+      description: >
+        Figures for the requests this node's proxy routed, whichever node
+        served them, over each model's last `window` requests, plus recent
+        requests and benchmark runs. Requests other nodes route are measured
+        by those nodes.
+      responses:
+        "200":
+          description: The report.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerformanceReport"
+    delete:
+      tags:
+        - Performance
+      operationId: clearPerformance
+      summary: Forget the figures and finished benchmark runs
+      responses:
+        "204":
+          description: Cleared. A benchmark still running is kept.
+  /pair/v1/performance/live:
+    get:
+      tags:
+        - Performance
+      operationId: getPerformanceLive
+      summary: Requests in progress, with their figures so far
+      description: >
+        Every generation request in progress on this node, whether a client
+        here sent it or another node sent it here to be served, updated as
+        each frame of the reply arrives, and the latest finished requests.
+        Light enough to poll several times a second.
+      responses:
+        "200":
+          description: The live view.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerformanceLive"
+  /pair/v1/performance/benchmark:
+    post:
+      tags:
+        - Performance
+      operationId: runBenchmark
+      summary: Run the fixed benchmark on a model
+      description: >
+        Sends the documented prompts (`benchmarkPrompts` in the report) for the
+        model through this engine's port, one at a time, waiting for the node
+        to be idle before each. It uses the model and loads it if needed. One
+        run at a time; poll the report for its progress.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model]
+              properties:
+                model:
+                  type: string
+      responses:
+        "202":
+          description: The run, started.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BenchmarkRun"
+        "409":
+          description: Another benchmark is running.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         default:
           $ref: "#/components/responses/ErrorResponse"
   /pair/v1/node/state:
@@ -712,6 +798,326 @@ components:
           description: Session requests waiting for a slot.
         warning:
           type: string
+    PerfSources:
+      type: object
+      description: >
+        Where each figure came from: `engine` (the engine reported it),
+        `proxy` (PAIR's clock or a count of streamed chunks) or `estimated`
+        (apportioned, such as a non-streamed reply's thinking share). Absent
+        when the figure is unknown.
+      properties:
+        tokens:
+          $ref: "#/components/schemas/PerfSource"
+        read:
+          $ref: "#/components/schemas/PerfSource"
+        write:
+          $ref: "#/components/schemas/PerfSource"
+        ttft:
+          $ref: "#/components/schemas/PerfSource"
+        thinking:
+          $ref: "#/components/schemas/PerfSource"
+    PerfSource:
+      type: string
+      enum: [engine, proxy, estimated]
+    PerfStat:
+      type: object
+      required: [count, avg, p50, p95, min, max]
+      properties:
+        count:
+          type: integer
+        avg:
+          type: number
+        p50:
+          type: number
+        p95:
+          type: number
+        min:
+          type: number
+        max:
+          type: number
+    PerfRecord:
+      type: object
+      description: One completed generation request. Optional figures are absent when unmeasured.
+      required: [requestId, at, engine, model, nodeId, local, path, streamed, origin, promptTokens, completionTokens, thinking, totalMs, sources]
+      properties:
+        requestId:
+          type: string
+        at:
+          type: integer
+          description: When the request finished, Unix milliseconds.
+        engine:
+          type: string
+          enum: [ollama, lmstudio, llamacpp]
+        model:
+          type: string
+        nodeId:
+          type: string
+          description: The node that served the request.
+        local:
+          type: boolean
+          description: Whether that node is this one.
+        path:
+          type: string
+        streamed:
+          type: boolean
+        sessionId:
+          type: string
+          description: The request's X-PAIR-Session-ID, when it named one.
+        agentId:
+          type: string
+          description: The request's X-PAIR-Agent-ID, when it named one.
+        origin:
+          type: string
+          enum: [routed, peer]
+          description: >
+            `routed`: a client on this machine sent it to this node's proxy.
+            `peer`: another node sent it here to be served by this node's
+            engine.
+        promptTokens:
+          type: integer
+        completionTokens:
+          type: integer
+          description: Generated tokens, thinking included.
+        thinking:
+          type: boolean
+          description: The reply had a reasoning part.
+        thinkingTokens:
+          type: integer
+        readTokensPerSecond:
+          type: number
+          description: Prompt tokens processed per second.
+        writeTokensPerSecond:
+          type: number
+          description: Tokens generated per second.
+        timeToFirstTokenMs:
+          type: number
+          description: Dispatch to the first generated token, thinking or answer.
+        promptMs:
+          type: number
+        generationMs:
+          type: number
+        loadMs:
+          type: number
+          description: Model load time, where the engine reports it.
+        thinkingMs:
+          type: number
+          description: First thinking token to first answer token.
+        totalMs:
+          type: number
+          description: Dispatch to the end of the reply, on PAIR's clock.
+        sources:
+          $ref: "#/components/schemas/PerfSources"
+    PerfModelSummary:
+      type: object
+      description: One model on one node, over its last `window` requests.
+      required: [engine, model, nodeId, local, requests, promptTokens, completionTokens, thinkingRequests, thinkingTokens, lastAt, sources, trend]
+      properties:
+        engine:
+          type: string
+        model:
+          type: string
+        nodeId:
+          type: string
+        local:
+          type: boolean
+        requests:
+          type: integer
+        promptTokens:
+          type: integer
+        completionTokens:
+          type: integer
+        thinkingRequests:
+          type: integer
+        thinkingTokens:
+          type: integer
+        lastAt:
+          type: integer
+        readTokensPerSecond:
+          $ref: "#/components/schemas/PerfStat"
+        writeTokensPerSecond:
+          $ref: "#/components/schemas/PerfStat"
+        timeToFirstTokenMs:
+          $ref: "#/components/schemas/PerfStat"
+        thinkingMs:
+          $ref: "#/components/schemas/PerfStat"
+        totalMs:
+          $ref: "#/components/schemas/PerfStat"
+        loadMs:
+          $ref: "#/components/schemas/PerfStat"
+        sources:
+          $ref: "#/components/schemas/PerfSources"
+        trend:
+          type: array
+          description: The latest requests' figures, oldest first.
+          items:
+            type: object
+            required: [at]
+            properties:
+              at:
+                type: integer
+              readTokensPerSecond:
+                type: number
+              writeTokensPerSecond:
+                type: number
+              timeToFirstTokenMs:
+                type: number
+              thinkingMs:
+                type: number
+    BenchmarkPrompt:
+      type: object
+      required: [name, label, description, thinking, maxTokens]
+      properties:
+        name:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
+        thinking:
+          type: string
+          enum: ["off", "on", default]
+        maxTokens:
+          type: integer
+    BenchmarkStep:
+      type: object
+      required: [name, label, thinking, state]
+      properties:
+        name:
+          type: string
+        label:
+          type: string
+        thinking:
+          type: string
+          enum: ["off", "on", default]
+          description: "`default` where the engine has no thinking switch."
+        state:
+          type: string
+          enum: [pending, running, done, failed, skipped]
+        detail:
+          type: string
+        result:
+          $ref: "#/components/schemas/PerfRecord"
+    BenchmarkRun:
+      type: object
+      required: [id, engine, model, state, startedAt, steps]
+      properties:
+        id:
+          type: string
+        engine:
+          type: string
+        model:
+          type: string
+        state:
+          type: string
+          enum: [running, done, failed]
+        startedAt:
+          type: integer
+        finishedAt:
+          type: integer
+        error:
+          type: string
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/BenchmarkStep"
+    LiveRequest:
+      type: object
+      description: A generation request in progress.
+      required: [requestId, engine, model, nodeId, local, path, origin, phase, receivedAt, elapsedMs, promptTokensEstimate, outputTokens, thinkingTokens]
+      properties:
+        requestId:
+          type: string
+        sessionId:
+          type: string
+        agentId:
+          type: string
+        engine:
+          type: string
+        model:
+          type: string
+        nodeId:
+          type: string
+          description: The node serving it; empty while it is still waiting.
+        local:
+          type: boolean
+        path:
+          type: string
+        origin:
+          type: string
+          enum: [routed, peer]
+        benchmark:
+          type: boolean
+        phase:
+          type: string
+          enum: [waiting, reading, thinking, answering]
+          description: >
+            `waiting`: admission, queueing or choosing a node. `reading`: sent
+            to a node, the engine is reading the prompt. `thinking` and
+            `answering`: the reply's reasoning or answer is streaming.
+        receivedAt:
+          type: integer
+        dispatchedAt:
+          type: integer
+        elapsedMs:
+          type: number
+        promptTokensEstimate:
+          type: integer
+          description: The request body's size at four bytes a token; the engine's count arrives with the finished record.
+        outputTokens:
+          type: integer
+          description: Streamed chunks so far, about one token each.
+        thinkingTokens:
+          type: integer
+        timeToFirstTokenMs:
+          type: number
+        thinkingMs:
+          type: number
+          description: Thinking so far, or until the answer began.
+        writeTokensPerSecond:
+          type: number
+          description: Writing speed so far.
+    PerformanceLive:
+      type: object
+      required: [live, recent]
+      properties:
+        live:
+          type: array
+          description: Requests in progress, oldest first.
+          items:
+            $ref: "#/components/schemas/LiveRequest"
+        recent:
+          type: array
+          description: Latest finished requests, newest first.
+          items:
+            $ref: "#/components/schemas/PerfRecord"
+    PerformanceReport:
+      type: object
+      required: [scope, window, models, recent, benchmarks, benchmarkPrompts]
+      properties:
+        scope:
+          type: string
+          enum: [routed-by-this-node]
+        window:
+          type: integer
+          description: Recent requests per model and node the figures cover.
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/PerfModelSummary"
+        recent:
+          type: array
+          description: Latest requests, newest first.
+          items:
+            $ref: "#/components/schemas/PerfRecord"
+        benchmarks:
+          type: array
+          description: Benchmark runs, newest first.
+          items:
+            $ref: "#/components/schemas/BenchmarkRun"
+        benchmarkPrompts:
+          type: array
+          items:
+            $ref: "#/components/schemas/BenchmarkPrompt"
     ChatRole:
       type: string
       enum:

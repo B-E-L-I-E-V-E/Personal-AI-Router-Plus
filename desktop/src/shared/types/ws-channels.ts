@@ -43,6 +43,7 @@ import type { NodeItem } from '@/shared/types/nodes'
 import type { NodeItemMetrics } from '@/shared/types/metrics'
 import type { Workload } from '@/shared/types/workloads'
 import type { NodeStateChange, NodeStateInfo, NodeStatesSnapshot } from '@/shared/types/node-state'
+import type { ModelDetails, ModelDetailsRequest } from '@/shared/types/model-details'
 import type {
     ApplyPlanResult,
     CapacityChange,
@@ -54,6 +55,7 @@ import type {
     SessionPolicy,
     SessionSummary
 } from '@/shared/types/sessions'
+import type { BenchmarkRun, PerformanceLive, PerformanceReport } from '@/shared/types/performance'
 import type {
     AvailableNode,
     ClusterIdentityPayload,
@@ -137,6 +139,18 @@ export interface WsInvokeChannelMap {
     'capacity:get-planner': { request: void; response: PlannerState }
     'capacity:set-planner': { request: PlannerChange; response: PlannerState }
     'capacity:apply-plan': { request: { engine: string; model: string }; response: ApplyPlanResult }
+
+    // Model details (nvpair-proxy model/details, for this node or a peer)
+    'engine:model-details': { request: ModelDetailsRequest; response: ModelDetails }
+
+    // Per-model performance and benchmarks (nvpair-proxy, relayed by the broker)
+    'performance:get-report': { request: void; response: PerformanceReport }
+    'performance:get-live': { request: void; response: PerformanceLive }
+    'performance:clear': { request: void; response: null }
+    'performance:run-benchmark': {
+        request: { engine: string; model: string }
+        response: BenchmarkRun
+    }
 
     // Node state: pause, stop or resume a node (nvpair-proxy, relayed by the broker)
     'node-state:get-all': { request: void; response: NodeStatesSnapshot }

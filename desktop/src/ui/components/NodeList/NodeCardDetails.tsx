@@ -3,7 +3,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Flex, Stack } from '@nvidia/foundations-react-core'
-import { BarChartOutlined, SettingsOutlined } from '@/ui/components/icons'
+import { BarChartOutlined, SettingsOutlined, Stopwatch } from '@/ui/components/icons'
 import { DismissibleTooltip } from '@/ui/components/DismissibleTooltip/DismissibleTooltip'
 import type { NodeItem } from '@/shared/types/nodes'
 import { useMetricsStore } from '@/ui/stores/metrics.store'
@@ -25,6 +25,7 @@ import { hasInferenceReadyGpu, isGpuInferenceReady } from '@/ui/utils/gpu-infere
 import NodeEnginesInline from './NodeEnginesInline'
 import NodeEngineSettings from './NodeEngineSettings'
 import { NodeServingControls, NodeStateBadge, NodeStateError } from './NodeServingControls'
+import NodeRequestTelemetry from './NodeRequestTelemetry'
 
 const MAX_CHART_SIZE = 60
 
@@ -37,6 +38,7 @@ function NodeCardDetails({ node }: NodeCardDetailsProps) {
     const isLocal = useConnectionStore(state => state.selfId === node.id)
     const [isExpanded, setIsExpanded] = useState(false)
     const [isEngineSettingsExpanded, setIsEngineSettingsExpanded] = useState(false)
+    const [isRequestsExpanded, setIsRequestsExpanded] = useState(false)
     // Mount the heavy engine editor only after the first expand so N node cards
     // don't each render a full BackendRow stack while collapsed.
     const [hasOpenedEngineSettings, setHasOpenedEngineSettings] = useState(false)
@@ -124,12 +126,27 @@ function NodeCardDetails({ node }: NodeCardDetailsProps) {
 
     const jobCount = useNodeActiveJobCount(node.id)
 
-    // Performance chart and engine settings are mutually exclusive — opening one
-    // collapses the other so only a single section is ever expanded per card.
+    // The performance chart, live requests and engine settings are mutually
+    // exclusive — opening one collapses the others so only a single section is
+    // ever expanded per card.
     const togglePerformance = useCallback(() => {
         setIsExpanded(prev => {
             const next = !prev
-            if (next) setIsEngineSettingsExpanded(false)
+            if (next) {
+                setIsEngineSettingsExpanded(false)
+                setIsRequestsExpanded(false)
+            }
+            return next
+        })
+    }, [])
+
+    const toggleRequests = useCallback(() => {
+        setIsRequestsExpanded(prev => {
+            const next = !prev
+            if (next) {
+                setIsExpanded(false)
+                setIsEngineSettingsExpanded(false)
+            }
             return next
         })
     }, [])
@@ -140,6 +157,7 @@ function NodeCardDetails({ node }: NodeCardDetailsProps) {
             if (next) {
                 setHasOpenedEngineSettings(true)
                 setIsExpanded(false)
+                setIsRequestsExpanded(false)
             }
             return next
         })
@@ -152,6 +170,7 @@ function NodeCardDetails({ node }: NodeCardDetailsProps) {
         setIsEngineSettingsExpanded(true)
         setHasOpenedEngineSettings(true)
         setIsExpanded(false)
+        setIsRequestsExpanded(false)
         consumeFocusNode()
         requestAnimationFrame(() => {
             containerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -218,6 +237,23 @@ function NodeCardDetails({ node }: NodeCardDetailsProps) {
                     aria-expanded={isExpanded}
                 >
                     <BarChartOutlined style={{ fontSize: 14 }} />
+                </Button>
+            </DismissibleTooltip>
+            <DismissibleTooltip slotContent="Show requests in real time" placement={placement}>
+                <Button
+                    kind={isRequestsExpanded ? 'primary' : 'tertiary'}
+                    color="neutral"
+                    size="tiny"
+                    className="px-2"
+                    onClick={toggleRequests}
+                    aria-label={
+                        isRequestsExpanded
+                            ? 'Collapse request telemetry'
+                            : 'Expand request telemetry'
+                    }
+                    aria-expanded={isRequestsExpanded}
+                >
+                    <Stopwatch style={{ fontSize: 14 }} />
                 </Button>
             </DismissibleTooltip>
             <DismissibleTooltip slotContent="Show engine settings" placement={placement}>
@@ -323,6 +359,25 @@ function NodeCardDetails({ node }: NodeCardDetailsProps) {
                 >
                     <div className="overflow-hidden min-h-0">
                         <NodePerformance node={node} className="mt-5" />
+                    </div>
+                </div>
+                <div
+                    style={{
+                        display: 'grid',
+                        gridTemplateRows: isRequestsExpanded ? '1fr' : '0fr',
+                        transition: 'grid-template-rows 0.25s ease'
+                    }}
+                >
+                    <div className="overflow-hidden min-h-0">
+                        {isRequestsExpanded && (
+                            <div className="mt-5">
+                                <NodeRequestTelemetry
+                                    nodeId={node.id}
+                                    isLocal={isLocal}
+                                    active={isRequestsExpanded}
+                                />
+                            </div>
+                        )}
                     </div>
                 </div>
                 <div

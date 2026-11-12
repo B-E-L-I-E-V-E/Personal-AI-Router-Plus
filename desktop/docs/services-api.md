@@ -216,6 +216,7 @@
 | `capacity/report` | request (we call) | ✅ yes |
 | `capacity/set` | request (we call) | ✅ yes |
 | `facade/enable` | request (we call) | ⚠️ not called |
+| `model/details` | request (we call) | ✅ yes |
 | `node/add-manual` | request (we call) | ✅ yes |
 | `node/remove-manual` | request (we call) | ✅ yes |
 | `node/select` | request (we call) | ✅ yes |
@@ -225,6 +226,10 @@
 | `node/state` | request (we call) | ✅ yes |
 | `node/states` | request (we call) | ✅ yes |
 | `nodes/list` | request (we call) | ✅ yes |
+| `performance/benchmark` | request (we call) | ✅ yes |
+| `performance/clear` | request (we call) | ✅ yes |
+| `performance/live` | request (we call) | ✅ yes |
+| `performance/report` | request (we call) | ✅ yes |
 | `sessions/configure` | request (we call) | ✅ yes |
 | `sessions/end` | request (we call) | ✅ yes |
 | `sessions/list` | request (we call) | ✅ yes |

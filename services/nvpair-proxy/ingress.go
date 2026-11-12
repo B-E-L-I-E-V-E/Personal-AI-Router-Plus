@@ -95,7 +95,7 @@ func (f *facade) handlePlain(w http.ResponseWriter, r *http.Request) {
 	}
 	// PAIR's own session API is answered here and never forwarded. Being on
 	// the plaintext personality makes it loopback-only, like inference.
-	if f.serveSessionsAPI(w, r) || f.serveCapacityAPI(w, r) || f.serveNodeStateAPI(w, r) {
+	if f.serveSessionsAPI(w, r) || f.serveCapacityAPI(w, r) || f.serveNodeStateAPI(w, r) || f.servePerformanceAPI(w, r) {
 		return
 	}
 	f.handleHTTP(w, r)
@@ -124,6 +124,11 @@ func (f *facade) handleClusterIngress(w http.ResponseWriter, r *http.Request) {
 	}
 	// A calling node releasing a session's slot here (peer.go).
 	if f.servePeerRelease(w, r, peer) {
+		return
+	}
+	// A calling node asking this node to describe one of its models
+	// (modeldetails.go).
+	if f.servePeerModelDetails(w, r) {
 		return
 	}
 	// Any cluster member may read or set this node's state, and each tells
@@ -167,9 +172,14 @@ func (f *facade) handleClusterIngress(w http.ResponseWriter, r *http.Request) {
 	slog.Debug("cluster ingress forwarding to local backend",
 		"peer", peer, "method", r.Method, "path", r.URL.Path, "target", target.Host)
 	rp := f.newLocalReverseProxy(target)
-	if record != nil {
+	perf, endLive := f.measurePeerRequest(r, peer)
+	defer endLive()
+	if record != nil || perf != nil {
 		rp.ModifyResponse = func(resp *http.Response) error {
-			resp.Body = newUsageReader(resp.Body, resp.Header.Get("Content-Type"), record)
+			if resp.StatusCode >= 300 {
+				perf = nil
+			}
+			resp.Body = newObservedBody(resp.Body, resp.Header.Get("Content-Type"), record, perf)
 			return nil
 		}
 	}

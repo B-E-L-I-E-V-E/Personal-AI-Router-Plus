@@ -46,6 +46,9 @@ navigation:
       - page: Pausing and Stopping a Node
         path: ../docs/node-state.mdx
         slug: node-state
+      - page: Model Performance and Benchmarks
+        path: ../docs/performance.mdx
+        slug: performance
       - page: Terminal Interface
         path: ../docs/terminal-interface.mdx
         slug: terminal-interface

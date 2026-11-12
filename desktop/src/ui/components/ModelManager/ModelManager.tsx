@@ -16,8 +16,9 @@ import { isEnginePullInProgress } from '@/shared/utils/engine-progress'
 import { engineManagerName } from '@/shared/utils/engines'
 import { useConnectionStore } from '@/ui/stores/connection.store'
 import { findPlan, useCapacityPlannerStore } from '@/ui/stores/capacity-planner.store'
-import { planStatus } from '@/ui/components/SessionsSettings/plan-status'
+import { findCapacity, modelConfigLines } from './model-config-summary'
 import { CapacityPlannerDialog } from './CapacityPlannerDialog'
+import { ModelDetailsDialog } from './ModelDetailsDialog'
 
 import ModelRow from './ModelRow'
 import { IncomingSyncPullRow } from './IncomingSyncPullRow'
@@ -25,17 +26,27 @@ import { TransientModelStatusRow } from './TransientModelStatusRow'
 import type { IncomingSyncRow } from '@/ui/types/model-manager'
 import type { ModelEntry } from '@/ui/types/model-hub'
 
+const CAPACITY_REFRESH_MS = 15_000
+
 export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId: string }) {
     const [openModelHubModal, setOpenModelHubModal] = useState(false)
     const [modelPendingDelete, setModelPendingDelete] = useState<string | null>(null)
     const [planningModel, setPlanningModel] = useState<string | null>(null)
+    const [aboutModel, setAboutModel] = useState<string | null>(null)
     // The planner measures this node's memory, so only its own models offer it.
     const isSelf = useConnectionStore(s => s.selfId) === nodeId
     const planner = useCapacityPlannerStore(s => s.planner)
+    const capacity = useCapacityPlannerStore(s => s.capacity)
     const refreshPlanner = useCapacityPlannerStore(s => s.refresh)
     const plannerEngine = engineManagerName(backend.type)
+    // Capacity is reported by this node's proxy only; peers' rows show none.
+    // A slow refresh keeps sessions in use and plans applied when idle current;
+    // the planner dialog refreshes at once after a change.
     useEffect(() => {
-        if (isSelf) void refreshPlanner()
+        if (!isSelf) return
+        void refreshPlanner()
+        const timer = setInterval(() => void refreshPlanner(), CAPACITY_REFRESH_MS)
+        return () => clearInterval(timer)
     }, [isSelf, refreshPlanner])
     const models = (backend.models ?? []).sort((a, b) =>
         formatModelDisplayName(a.name, backend.type).localeCompare(
@@ -139,6 +150,9 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
                 case 'capacity':
                     setPlanningModel(modelName)
                     break
+                case 'details':
+                    setAboutModel(modelName)
+                    break
                 case 'delete':
                     if (confirmBeforeDelete) {
                         setModelPendingDelete(modelName)
@@ -235,33 +249,51 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
 
                     {models.length > 0 && (
                         <Stack gap="1">
-                            {models.map(model => (
-                                <ModelRow
-                                    key={model.name}
-                                    model={model}
-                                    isRunning={isRunning}
-                                    capabilities={caps}
-                                    progress={getProgress(nodeId, backend.type, 'pull', model.name)}
-                                    pendingAction={usePendingActionsStore
-                                        .getState()
-                                        .getModelPending(nodeId, backendType, model.name)}
-                                    displayName={displayName}
-                                    canPlan={isSelf}
-                                    planLine={(() => {
-                                        const saved = isSelf
-                                            ? findPlan(planner, plannerEngine, model.name)
-                                            : undefined
-                                        return saved
-                                            ? planStatus(saved, planner?.autoReload ?? true)
-                                            : undefined
-                                    })()}
-                                    onAction={handleAction}
-                                    onExpiryChange={handleExpiryChange}
-                                />
-                            ))}
+                            {models.map(model => {
+                                const lines = isSelf
+                                    ? modelConfigLines(
+                                          findCapacity(capacity, plannerEngine, model.name),
+                                          findPlan(planner, plannerEngine, model.name),
+                                          planner?.autoReload ?? true
+                                      )
+                                    : {}
+                                return (
+                                    <ModelRow
+                                        key={model.name}
+                                        model={model}
+                                        isRunning={isRunning}
+                                        capabilities={caps}
+                                        progress={getProgress(
+                                            nodeId,
+                                            backend.type,
+                                            'pull',
+                                            model.name
+                                        )}
+                                        pendingAction={usePendingActionsStore
+                                            .getState()
+                                            .getModelPending(nodeId, backendType, model.name)}
+                                        displayName={displayName}
+                                        canPlan={isSelf}
+                                        configLine={lines.summary}
+                                        planLine={lines.planLine}
+                                        onAction={handleAction}
+                                        onExpiryChange={handleExpiryChange}
+                                    />
+                                )
+                            })}
                         </Stack>
                     )}
                 </>
+            )}
+
+            {aboutModel && (
+                <ModelDetailsDialog
+                    engineType={backendType}
+                    nodeId={nodeId}
+                    model={aboutModel}
+                    displayName={displayName(aboutModel)}
+                    onClose={() => setAboutModel(null)}
+                />
             )}
 
             {planningModel && (
