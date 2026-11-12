@@ -8,6 +8,7 @@ import {
     nearestStop,
     replyBudget,
     replyStops,
+    sessionsFit,
     sessionsSliderMax,
     shortTokens,
     textKindFits,
@@ -87,6 +88,27 @@ describe('window slider stops', () => {
 })
 
 describe('sessions slider', () => {
+    it('reaches past what a large unified-memory plan fits', () => {
+        // qwen3:0.6b on a 128 GiB Mac: 77 sessions of 40,960 tokens at q4_0.
+        const fit = sessionsFit(plan({ sessions: 77, unified: true }))
+        expect(fit).toBe(77)
+        expect(sessionsSliderMax(fit ?? 0)).toBe(154)
+    })
+
+    it('offers no count when the plan could not size the model', () => {
+        // A model whose context cost is unknown used to leave a 1–8 slider.
+        const unsized = plan({
+            sessions: 0,
+            error: 'the model’s context cost is unknown; enter it per token (kvBytesPerToken)'
+        })
+        expect(sessionsFit(unsized)).toBeNull()
+        expect(sessionsFit(null)).toBeNull()
+    })
+
+    it('keeps a fit of zero, so a too-large window shows every count as over', () => {
+        expect(sessionsFit(plan({ sessions: 0, fits: false }))).toBe(0)
+    })
+
     it('reaches well past what fits, within the proxy limit', () => {
         expect(sessionsSliderMax(0)).toBe(8)
         expect(sessionsSliderMax(3)).toBe(11)

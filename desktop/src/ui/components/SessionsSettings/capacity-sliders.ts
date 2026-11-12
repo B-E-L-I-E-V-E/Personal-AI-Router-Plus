@@ -33,6 +33,15 @@ export function nearestStop(stops: number[], tokens: number): number {
 }
 
 /**
+ * How many sessions of the plan's window fit, or null when the plan could not
+ * size the model (its size or context cost is unknown): then no count can be
+ * judged, so the dialog offers none rather than a slider of arbitrary length.
+ */
+export function sessionsFit(plan: CapacityPlan | null): number | null {
+    return plan && !plan.error ? plan.sessions : null
+}
+
+/**
  * The sessions slider's top: well past what fits, since plans may exceed the
  * hardware (the sliders turn red), but within the proxy's limit.
  */

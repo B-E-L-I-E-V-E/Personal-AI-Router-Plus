@@ -26,6 +26,7 @@ import {
     nearestStop,
     replyBudget,
     replyStops,
+    sessionsFit,
     sessionsSliderMax,
     shortTokens,
     windowStops
@@ -240,9 +241,12 @@ export default function CapacityPlanner({
     const replyIndex = nearestStop(replyOptions, replyBudget(windowNow, reply))
     const replyNow = replyOptions[replyIndex]
     const messageTokens = windowNow - replyNow
-    const fit = plan && !plan.error ? plan.sessions : 0
+    const known = sessionsFit(plan)
     // Reaches past what fits, and never below a saved count.
-    const sessionsMax = Math.max(sessionsSliderMax(fit), Math.min(sessions ?? 0, MAX_SESSIONS))
+    const sessionsMax = Math.max(
+        sessionsSliderMax(known ?? 0),
+        Math.min(sessions ?? 0, MAX_SESSIONS)
+    )
     const chosen = Math.min(sessions ?? 1, sessionsMax)
     const use = plan && !plan.error ? memoryUse(plan, chosen) : null
     const over = use ? use.gpuOver || use.ramOver : false
@@ -337,31 +341,41 @@ export default function CapacityPlanner({
             <Stack gap="1">
                 <Flex justify="between" gap="3">
                     <Text kind="body/semibold/sm">Sessions at once</Text>
-                    <Text
-                        kind="body/semibold/sm"
-                        style={chosen > fit && plan && !plan.error ? DANGER_TEXT : undefined}
-                    >
-                        {chosen} {plan && !plan.error ? `(${fit} fit)` : ''}
-                    </Text>
+                    {known !== null && (
+                        <Text
+                            kind="body/semibold/sm"
+                            style={chosen > known ? DANGER_TEXT : undefined}
+                        >
+                            {chosen} ({known} fit)
+                        </Text>
+                    )}
                 </Flex>
-                <SliderTone over={over}>
-                    <Slider
-                        min={1}
-                        max={sessionsMax}
-                        step={1}
-                        value={chosen}
-                        onValueChange={n => {
-                            setSessions(n)
-                            setSessionsTouched(true)
-                        }}
-                        customSteps={[
-                            1,
-                            ...(fit > 1 && fit < sessionsMax ? [fit] : []),
-                            sessionsMax
-                        ]}
-                        attributes={{ SliderInput: { 'aria-label': 'Sessions at once' } }}
-                    />
-                </SliderTone>
+                {known === null ? (
+                    <Text kind="body/regular/sm" className="text-subtle-color">
+                        {plan
+                            ? 'Chosen once PAIR can size this model; see below for what it needs.'
+                            : 'Sizing this model…'}
+                    </Text>
+                ) : (
+                    <SliderTone over={over}>
+                        <Slider
+                            min={1}
+                            max={sessionsMax}
+                            step={1}
+                            value={chosen}
+                            onValueChange={n => {
+                                setSessions(n)
+                                setSessionsTouched(true)
+                            }}
+                            customSteps={[
+                                1,
+                                ...(known > 1 && known < sessionsMax ? [known] : []),
+                                sessionsMax
+                            ]}
+                            attributes={{ SliderInput: { 'aria-label': 'Sessions at once' } }}
+                        />
+                    </SliderTone>
+                )}
             </Stack>
 
             <Stack gap="1">
