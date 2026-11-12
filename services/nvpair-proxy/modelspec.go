@@ -34,6 +34,15 @@ type modelSpec struct {
 
 	WeightsBytes     int64 `json:"weightsBytes"`
 	MaxContextTokens int64 `json:"maxContextTokens,omitempty"`
+	// ContextSource is "web" when MaxContextTokens was read from the model's
+	// page (model/web-facts) because the engine and the file gave none;
+	// ContextPage is that page and ContextReader the model that read it.
+	ContextSource string `json:"contextSource,omitempty"`
+	ContextPage   string `json:"contextPage,omitempty"`
+	ContextReader string `json:"contextReader,omitempty"`
+	// WebMoE says the model's page calls it a mixture of experts while the
+	// engine and the file describe no experts.
+	WebMoE bool `json:"webMoe,omitempty"`
 
 	// KVBytesPerToken is the f16 key/value cache cost of one token of
 	// context in the layers whose cache grows with the window.

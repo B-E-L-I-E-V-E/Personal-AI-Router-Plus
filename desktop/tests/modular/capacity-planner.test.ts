@@ -154,6 +154,38 @@ describe('expert offload', () => {
     })
 })
 
+describe('web-derived context', () => {
+    it('reads a context the planner took from the model’s page, with its label', async () => {
+        callProxy.mockResolvedValueOnce({
+            spec: {
+                maxContextTokens: 65536,
+                contextSource: 'web',
+                contextPage: 'https://ollama.com/library/example',
+                contextReader: 'qwen3.5:4b',
+                webMoe: true
+            },
+            windowTokens: 65536
+        })
+        const result = await planCapacity({ engine: 'llamacpp', model: 'm' })
+        expect(result.spec).toMatchObject({
+            maxContextTokens: 65536,
+            contextSource: 'web',
+            contextPage: 'https://ollama.com/library/example',
+            contextReader: 'qwen3.5:4b',
+            webMoe: true
+        })
+    })
+
+    it('treats an unknown context source as the engine’s own', async () => {
+        callProxy.mockResolvedValueOnce({
+            spec: { maxContextTokens: 40960, contextSource: 'guess' }
+        })
+        const result = await planCapacity({ engine: 'ollama', model: 'm' })
+        expect(result.spec.contextSource).toBe('')
+        expect(result.spec.webMoe).toBe(false)
+    })
+})
+
 describe('post and reply budgets', () => {
     it('asks the planner for a reply budget and reads the split back', async () => {
         callProxy.mockResolvedValueOnce({

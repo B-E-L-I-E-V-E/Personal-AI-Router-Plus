@@ -306,6 +306,7 @@ func (p *Proxy) planCapacity(ctx context.Context, raw json.RawMessage) (*planRes
 	} else {
 		spec.Notes = append(spec.Notes, "this engine is not running on this node")
 	}
+	applyWebFacts(&spec, p.webFacts.result(webFactsKey{Engine: req.Engine, Model: req.Model}))
 	res, err := computePlan(req, spec)
 	if err != nil {
 		res.Error = err.Error()

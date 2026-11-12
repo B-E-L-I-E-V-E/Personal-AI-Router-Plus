@@ -225,6 +225,19 @@ older PAIR, or one that is not a trusted member of your cluster, says so
 instead. llama.cpp names a model's file only while the model is loaded, so
 load it first to see what its file says.
 
+When the engine leaves something out (a description, the context window, the
+download size, or whether the model is a mixture of experts), and the model
+has a page, **About this model…** offers **Look up on the web**. PAIR reads the
+model's own pages (the buttons above, never other sites) with a small model on
+this computer's Ollama, `qwen3.5:4b` unless you name another, and shows what it
+found in its own section, labelled with the page and the model that read it.
+Nothing is guessed: a value the page does not give stays empty, and when the
+page gives two different values PAIR shows both and fills neither. What the
+engine reports always wins. The reader model has to be downloaded in Ollama
+first; PAIR says so instead of using another one. A context window found this
+way also feeds **Context & sessions…**, but only for a model whose engine and
+file report none, with a note saying where the number came from.
+
 ![An engine's model list with a downloaded model's menu open: Load, Eject, Context & sessions…, and Delete.](assets/onboarding/engine-lifecycle/04-model-actions.png)
 
 On a headless machine the terminal interface covers installing, starting,

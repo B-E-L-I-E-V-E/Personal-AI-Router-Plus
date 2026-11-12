@@ -13,6 +13,13 @@ release workflow, with macOS builds signed and notarized; the app updates from
 those releases. A build made locally from source is unsigned unless built with
 `PAIR_MAC_SIGN=1`, and updates only once a release exists.
 
+## 1.2.5 — Look up a model's missing facts on its web page (#10)
+
+- About this model… has a Look up on the web button when the engine left something out (description, context window, download size, mixture of experts). PAIR reads the model's own pages with a small model on this computer's Ollama (qwen3.5:4b unless you name another) and shows what it found in its own section, labelled with the page and the model that read it. What the engine reports always wins.
+- Nothing is guessed: a value the page doesn't give stays empty, and when the page gives two different values, both are shown and neither is filled.
+- Context & sessions… uses a context window from the model's page only when the engine and the model file report none, and says where the number came from.
+- The proxy has new model/web-facts-start and model/web-facts methods.
+
 ## 1.2.4 — Other nodes' model settings on the Overview (#8)
 
 - Models on other nodes now show their sessions at once (and how many are in use), the context window per session, and the response and post context, as that node enforces them. A node that cannot be reached, or runs an older PAIR, shows none.

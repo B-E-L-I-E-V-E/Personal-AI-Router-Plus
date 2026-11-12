@@ -15,7 +15,7 @@ import type {
     EngineCommandPayload
 } from '@/shared/types/engine-api'
 import type { EngineProgress, EngineType } from '@/shared/types/engines'
-import type { ModelDetails } from '@/shared/types/model-details'
+import type { ModelDetails, WebFactsStatus } from '@/shared/types/model-details'
 import { usePendingActionsStore } from '@/ui/stores/pending-actions.store'
 import type {
     EngineSettingsTarget,
@@ -65,6 +65,15 @@ export interface IEngineApi {
     setModelExpiry(engineType: EngineType, nodeId: string, model: string, expiry: string): void
     /** What the engine and the model file say about one downloaded model. */
     getModelDetails(engineType: EngineType, nodeId: string, model: string): Promise<ModelDetails>
+    /** The last web lookup of a model's page, and the one in progress. */
+    getModelWebFacts(engineType: EngineType, nodeId: string, model: string): Promise<WebFactsStatus>
+    /** Starts reading the model's web pages with a local model; poll getModelWebFacts. */
+    startModelWebFacts(
+        engineType: EngineType,
+        nodeId: string,
+        model: string,
+        readerModel: string
+    ): Promise<WebFactsStatus>
     /** Load an engine catalog or explicitly search its upstream registry. */
     searchHub(engineType: EngineType, query?: string): Promise<EngineHubSearchResponse>
 
@@ -119,6 +128,15 @@ export function createEngineApi(transport: ServiceTransport): IEngineApi {
             }),
         getModelDetails: (engineType, nodeId, model) =>
             transport.invoke('engine:model-details', { engineType, nodeId, model }),
+        getModelWebFacts: (engineType, nodeId, model) =>
+            transport.invoke('engine:model-web-facts', { engineType, nodeId, model }),
+        startModelWebFacts: (engineType, nodeId, model, readerModel) =>
+            transport.invoke('engine:model-web-facts-start', {
+                engineType,
+                nodeId,
+                model,
+                readerModel
+            }),
         searchHub: (engineType, query) =>
             transport.invoke(
                 'engine:search-hub',

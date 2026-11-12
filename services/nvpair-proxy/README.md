@@ -237,7 +237,7 @@ New requests go to other nodes that can serve them, or get `503` when none
 can. A paused node's cluster ingress refuses peers with `503` and
 `X-PAIR-Node-State`, it announces its state to every pinned peer, and any peer
 may set it over mTLS (`node/state` with a `nodeId`). The state is saved in
-`node-state.json`. See `spec.md` §5.18.
+`node-state.json`. See `spec.md` §5.19.
 
 **Persisted port.** A port chosen at runtime via `set-port` is saved to the
 per-user data dir (`%LocalAppData%\Nvidia Corporation\Personal AI Router` on

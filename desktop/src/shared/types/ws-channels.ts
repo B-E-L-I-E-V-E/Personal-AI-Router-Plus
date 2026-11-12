@@ -43,7 +43,12 @@ import type { NodeItem } from '@/shared/types/nodes'
 import type { NodeItemMetrics } from '@/shared/types/metrics'
 import type { Workload } from '@/shared/types/workloads'
 import type { NodeStateChange, NodeStateInfo, NodeStatesSnapshot } from '@/shared/types/node-state'
-import type { ModelDetails, ModelDetailsRequest } from '@/shared/types/model-details'
+import type {
+    ModelDetails,
+    ModelDetailsRequest,
+    WebFactsRequest,
+    WebFactsStatus
+} from '@/shared/types/model-details'
 import type {
     ApplyPlanResult,
     CapacityChange,
@@ -152,6 +157,10 @@ export interface WsInvokeChannelMap {
         request: { engine: string; model: string }
         response: BenchmarkRun
     }
+
+    // Filling gaps from the model's web page (nvpair-proxy model/web-facts)
+    'engine:model-web-facts': { request: WebFactsRequest; response: WebFactsStatus }
+    'engine:model-web-facts-start': { request: WebFactsRequest; response: WebFactsStatus }
 
     // Node state: pause, stop or resume a node (nvpair-proxy, relayed by the broker)
     'node-state:get-all': { request: void; response: NodeStatesSnapshot }
