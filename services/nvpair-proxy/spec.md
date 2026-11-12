@@ -725,6 +725,15 @@ that.
   that node frees the slot at once. Only the originating node may release its
   session. Release is best effort; an unreleased slot frees when the peer's copy
   of the session goes idle.
+- **Reading a peer's capacity.** A peer's mTLS ingress answers
+  `GET /pair/v1/peer/capacity` with its own capacity report, the body of
+  `GET /pair/v1/capacity`, and refuses every other method there with `405`.
+  Nothing on the ingress changes capacity. The process-wide JSON-RPC request
+  `capacity/peer-report` `{"nodeId"}` fetches that report for a discovered,
+  pinned peer (this node's own ID answers locally) and returns
+  `{"nodeId","models"}`; an unknown, unpinned or unreachable node is an error.
+  It is answered off the control loop, so a slow peer holds up no other
+  request.
 
 ### 5.15 Capacity planner
 
