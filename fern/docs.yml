@@ -79,4 +79,7 @@ navigation:
   - section: API Reference
     skip-slug: true
     contents:
+      - page: HTTP API Guide
+        path: ../docs/api.mdx
+        slug: api-guide
       - api: PAIR API

@@ -1,0 +1,649 @@
+---
+title: HTTP API Guide
+description: Every HTTP call a client can make to a PAIR Plus node, with the headers and JSON bodies it sends back, recorded from a real node.
+---
+
+{/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+*/}
+
+This page shows what a PAIR Plus node accepts and what it sends back, call by
+call: the headers to send, the JSON body to post, and the response, headers
+included. The examples were recorded from PAIR Plus's own proxy code serving
+`qwen3:0.6b` on a real Ollama. Long reply text is shortened with `…`, and node
+IDs are replaced with a sample UUID. Every other value is what the node
+returned. The [API reference](../fern/openapi.yml) has the formal schema of
+every object.
+
+## The basics
+
+**Base URL.** Each engine (Ollama, LM Studio, llama.cpp) has its own PAIR
+endpoint on your machine. Copy it from PAIR's **Endpoints** window. The
+examples use `http://127.0.0.1:11434`, an Ollama endpoint. Don't assume the
+engine's usual port: PAIR may have moved it.
+
+**Two kinds of call.**
+
+- **Inference** (`/api/chat`, `/api/generate`, `/v1/chat/completions`,
+  `/v1/messages` and the engine's other routes) is forwarded to one node that
+  has the model. The body is the engine's own format, unchanged. PAIR adds the
+  headers below and, for sessions, limits the reply.
+- **PAIR's own API** (`/pair/v1/…`) is answered by the local proxy and never
+  forwarded. It accepts calls only from the same machine (loopback), on any
+  engine's endpoint.
+
+**Headers you can send.**
+
+| Header | Meaning |
+|---|---|
+| `X-Request-ID` | Your ID for the request: 1–128 letters, digits, `.`, `_`, `:` or `-`. PAIR mints a UUID when you don't send one, or send one it can't use. |
+| `X-PAIR-Session-ID` | The conversation. Send the same value on every turn and PAIR keeps the turns on one node. The first request creates the session. |
+| `X-PAIR-Agent-ID` | The agent that owns the session. Only that agent can use it afterwards. |
+
+**Headers PAIR sends back.**
+
+| Header | When | Meaning |
+|---|---|---|
+| `X-Request-ID` | Always, errors included | The request ID PAIR used. |
+| `X-PAIR-Session-ID` | Session requests | The session the request ran in. |
+| `X-PAIR-Session-Expires-At` | Session requests and session API | When the session ends if nothing touches it. |
+| `X-PAIR-Context-Session-Limit` | Session requests, when the window is known | The session's context window, in tokens. |
+| `X-PAIR-Context-Reply-Tokens` | Same, when the model has a reply budget | The part of the window kept for the reply. |
+| `X-PAIR-Context-Message-Limit` | Same | What the conversation may use: the window less the reply budget. |
+| `X-PAIR-Context-Session-Tokens` | After the session's first measured turn | The conversation's size as last measured. |
+| `X-PAIR-Queue-Wait-Ms` | When the request waited for a slot | How long it waited. |
+| `Retry-After` | `503` from a full model | Seconds to wait before trying again. |
+
+**Errors** are JSON with an `error` message, and a `code` where a client
+might want to act on it:
+
+```json
+{ "error": "session has ended or expired; start a new session" }
+```
+
+## Inference in a session
+
+Post an ordinary engine request with the session headers.
+
+```http
+POST /api/chat
+Content-Type: application/json
+X-PAIR-Session-ID: docs-demo
+X-PAIR-Agent-ID: docs-agent
+
+{
+  "model": "qwen3:0.6b",
+  "stream": false,
+  "think": true,
+  "messages": [
+    { "role": "user", "content": "In one sentence, what is a context window?" }
+  ]
+}
+```
+
+The response is the engine's own body, plus PAIR's headers. Here the model had
+a 2,048-token reply budget (see [Context capacity](#context-capacity)). The
+request set no reply length, so PAIR capped it at the budget: `eval_count` is
+2048 and `done_reason` is `length`.
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+X-Request-Id: b7f1a60e-7892-4d6f-b9fe-b35a619b3303
+X-Pair-Session-Id: docs-demo
+X-Pair-Session-Expires-At: 2026-11-12T04:35:44Z
+X-Pair-Context-Session-Limit: 8192
+X-Pair-Context-Reply-Tokens: 2048
+X-Pair-Context-Message-Limit: 6144
+
+{
+  "model": "qwen3:0.6b",
+  "created_at": "2026-11-12T04:22:06.708072Z",
+  "message": { "role": "assistant", "content": "Okay, the user is asking … " },
+  "done": true,
+  "done_reason": "length",
+  "eval_count": 2048,
+  "eval_duration": 65226422000,
+  "load_duration": 15644119167
+}
+```
+
+When the session serves a request, PAIR changes the body it forwards in two
+ways:
+
+- On Ollama's `/api/chat` and `/api/generate` it sets `"truncate": false`.
+  A conversation longer than the engine's window is then refused with its
+  token count instead of being silently cut.
+- If the request sets no reply length, PAIR caps the reply at the reply budget,
+  with `options.num_predict` on Ollama routes and `max_tokens` on
+  OpenAI-compatible routes. A value the client set is kept.
+
+The same session works on the OpenAI-compatible route. After the first
+measured turn, the response also says how big the conversation is
+(`X-Pair-Context-Session-Tokens`):
+
+```http
+POST /v1/chat/completions
+Content-Type: application/json
+X-PAIR-Session-ID: docs-demo
+X-PAIR-Agent-ID: docs-agent
+
+{
+  "model": "qwen3:0.6b",
+  "messages": [
+    { "role": "user", "content": "In one sentence, what is a context window?" },
+    { "role": "user", "content": "/no_think Now say it in five words." }
+  ]
+}
+```
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+X-Request-Id: e55bb0f2-f6ea-4354-beef-a99968cf89f7
+X-Pair-Session-Id: docs-demo
+X-Pair-Session-Expires-At: 2026-11-12T04:37:06Z
+X-Pair-Context-Session-Limit: 8192
+X-Pair-Context-Reply-Tokens: 2048
+X-Pair-Context-Message-Limit: 6144
+X-Pair-Context-Session-Tokens: 2068
+
+{
+  "id": "chatcmpl-218",
+  "object": "chat.completion",
+  "created": 1794457326,
+  "model": "qwen3:0.6b",
+  "system_fingerprint": "fp_ollama",
+  "choices": [
+    {
+      "index": 0,
+      "message": { "role": "assistant", "content": "…", "reasoning": "…" },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 30,
+    "completion_tokens": 18,
+    "total_tokens": 48,
+    "prompt_tokens_details": { "cached_tokens": 12 }
+  }
+}
+```
+
+### When a conversation outgrows its window
+
+PAIR measures a session's conversation from the token counts the engine
+reports after each turn. When the conversation as last measured has used up
+what it may hold (the window less the reply budget), the next turn is refused
+before it reaches the engine. The error names the numbers:
+
+```http
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+X-Pair-Session-Id: docs-long
+X-Pair-Context-Session-Tokens: 9065
+
+{
+  "error": "the session's conversation has reached its limit on this node: it holds 9065 tokens, and each session's 8192-token window keeps 2048 for the reply, leaving 6144 for the conversation; shorten the conversation or end the session"
+}
+```
+
+Before PAIR has measured a conversation, it can't check it: that is the first
+turn, or the first turn on a new node. That turn goes to the engine. A turn
+longer than the engine's own window is still refused there (`truncate: false`),
+with its token count. Read `postRoomTokens` from the session (below) to know
+how much the next post may add.
+
+## Sessions
+
+A session is created by its first inference request, or explicitly:
+
+```http
+POST /pair/v1/sessions
+Content-Type: application/json
+X-PAIR-Agent-ID: docs-agent
+
+{ "sessionId": "docs-demo", "agentId": "docs-agent", "idleTimeoutSeconds": 900 }
+```
+
+All three fields are optional. PAIR mints a UUID when `sessionId` is missing,
+and the idle timeout defaults to 10 minutes (60–3600 seconds allowed).
+
+```http
+HTTP/1.1 201 Created
+X-Pair-Session-Expires-At: 2026-11-12T04:35:44Z
+
+{
+  "sessionId": "docs-demo",
+  "agentId": "docs-agent",
+  "createdAt": "2026-11-12T04:20:44.810504Z",
+  "lastActiveAt": "2026-11-12T04:20:44.810504Z",
+  "expiresAt": "2026-11-12T04:35:44.810504Z",
+  "idleTimeoutSeconds": 900,
+  "keepaliveIntervalSeconds": 300,
+  "inFlight": 0,
+  "requests": 0,
+  "nodes": {},
+  "context": {}
+}
+```
+
+**Read one** with `GET /pair/v1/sessions/docs-demo`. After two turns it shows
+which node serves the session on each engine, and how full the conversation
+is:
+
+```json
+{
+  "sessionId": "docs-demo",
+  "agentId": "docs-agent",
+  "createdAt": "2026-11-12T04:20:44.810504Z",
+  "lastActiveAt": "2026-11-12T04:22:06.864041Z",
+  "expiresAt": "2026-11-12T04:37:06.864041Z",
+  "idleTimeoutSeconds": 900,
+  "keepaliveIntervalSeconds": 300,
+  "inFlight": 0,
+  "requests": 2,
+  "nodes": { "ollama": "7c9e6679-7425-40de-944b-e07fc1f90ae7" },
+  "context": {
+    "ollama": {
+      "model": "qwen3:0.6b",
+      "tokens": 48,
+      "promptTokens": 30,
+      "completionTokens": 18,
+      "updatedAt": "2026-11-12T04:22:06.864004Z",
+      "windowTokens": 8192,
+      "replyTokens": 2048,
+      "conversationLimitTokens": 6144,
+      "postRoomTokens": 6096
+    }
+  }
+}
+```
+
+`postRoomTokens` is how many tokens the next post can add before the
+conversation reaches `conversationLimitTokens`. It is `0` when the
+conversation has reached it:
+
+```json
+"context": {
+  "ollama": {
+    "model": "qwen3:0.6b",
+    "tokens": 9065,
+    "promptTokens": 7017,
+    "completionTokens": 2048,
+    "windowTokens": 8192,
+    "replyTokens": 2048,
+    "conversationLimitTokens": 6144,
+    "postRoomTokens": 0
+  }
+}
+```
+
+The window fields appear only on the node that serves the session, once the
+model's window is known.
+
+| Call | What it does | Response |
+|---|---|---|
+| `GET /pair/v1/sessions` | Every live session, oldest first. `?agentId=` keeps one agent's. | `{ "sessions": [ Session, … ] }` |
+| `GET /pair/v1/sessions/{id}` | One session. | `Session` |
+| `PATCH /pair/v1/sessions/{id}` with `{ "idleTimeoutSeconds": 1800 }` | Changes the idle timeout. `keepaliveIntervalSeconds` follows it, at one third. | `Session` |
+| `POST /pair/v1/sessions/{id}/keepalive` | Restarts the idle clock. | `Session`, with a new `expiresAt` |
+| `DELETE /pair/v1/sessions/{id}` | Ends the session now and cancels its running requests. | `204` |
+
+Send `X-PAIR-Agent-ID` on `PATCH`, keepalive and `DELETE` when the session has
+an owner.
+
+## Context capacity
+
+Each model's capacity on this node: the context window every session gets,
+the reply budget, and how many sessions run at once. The desktop's
+**Context & sessions…** dialog sets it. A client can set it too:
+
+```http
+PUT /pair/v1/capacity
+Content-Type: application/json
+
+{
+  "engine": "ollama",
+  "model": "qwen3:0.6b",
+  "contextTokens": 16384,
+  "maxSessions": 2,
+  "replyTokens": 2048
+}
+```
+
+`contextTokens` is the whole pool, shared by `maxSessions` sessions. Each
+session's window is the pool divided by the session count, rounded down to a
+multiple of 1,024: here 8,192. `replyTokens` must be less than that window.
+
+```json
+{
+  "engine": "ollama",
+  "model": "qwen3:0.6b",
+  "configured": { "contextTokens": 16384, "maxSessions": 2, "replyTokens": 2048 },
+  "detected": { "windowTokens": 40960 },
+  "source": "configured",
+  "contextTokens": 16384,
+  "maxSessions": 2,
+  "sessionContextTokens": 8192,
+  "replyTokens": 2048,
+  "messageTokens": 6144,
+  "activeSessions": 0,
+  "usedContextTokens": 0,
+  "heldSlots": 0,
+  "queued": 0
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `configured` | What was set, or `null`. |
+| `detected` | What the engine reports for the loaded model, or `null`. |
+| `source` | Which of the two is in force: `configured`, `detected` or `unknown`. |
+| `sessionContextTokens` | Each session's window. |
+| `messageTokens` | What a session's conversation may use: the window less `replyTokens`. |
+| `activeSessions`, `heldSlots`, `queued` | Live sessions on this node, sessions holding a slot, and requests waiting for one. |
+| `usedContextTokens` | The context those sessions hold now. |
+| `warning` | Present when the numbers are incomplete. |
+
+`GET /pair/v1/capacity` returns `{ "models": [ … ] }` with one such object per
+model that has a setting, a detection or live sessions. To remove a setting,
+send `{ "engine": "ollama", "model": "qwen3:0.6b", "clear": true }`. The model
+then falls back to what the engine reports:
+
+```json
+{
+  "engine": "ollama",
+  "model": "qwen3:0.6b",
+  "configured": null,
+  "detected": { "windowTokens": 40960 },
+  "source": "detected",
+  "contextTokens": 0,
+  "maxSessions": 0,
+  "sessionContextTokens": 40960,
+  "replyTokens": 0,
+  "messageTokens": 0,
+  "activeSessions": 1,
+  "usedContextTokens": 20018,
+  "heldSlots": 0,
+  "queued": 0,
+  "warning": "the engine reports its per-request window but not how many requests share the pool; set contextTokens and maxSessions to control it"
+}
+```
+
+Setting capacity here only tells PAIR the numbers. It doesn't restart the
+engine with a matching window. **Save and apply now** in the desktop dialog
+does both.
+
+When every session of a model is taken on every node that has it, a new
+session's request waits up to the queue timeout (Settings → Sessions), then
+gets `503` with `Retry-After: 5`.
+
+## Pausing and stopping this node
+
+```http
+GET /pair/v1/node/state
+```
+
+```json
+{ "state": "running", "serving": 0 }
+```
+
+Change it with `PUT` and one of `running`, `paused` or `stopped`:
+
+```http
+PUT /pair/v1/node/state
+Content-Type: application/json
+
+{ "state": "paused" }
+```
+
+Pausing while a request is running lets that request finish:
+
+```json
+{ "state": "paused", "since": "2026-11-12T04:28:09Z", "serving": 1 }
+```
+
+Stopping cancels it. `cancelled` says how many requests the stop ended:
+
+```json
+{ "state": "stopped", "since": "2026-11-12T04:28:10Z", "serving": 1, "cancelled": 1 }
+```
+
+`{ "state": "running" }` resumes. While a node is paused or stopped, its
+clients' requests go to other nodes that have the model. If no other node can
+serve them, they are refused:
+
+```http
+HTTP/1.1 503 Service Unavailable
+Content-Type: application/json
+
+{ "code": "nodes-held", "error": "every node that can serve this request is paused or stopped" }
+```
+
+The state survives a restart. `since` is absent until the state is first
+changed. [Pausing and Stopping a Node](node-state.mdx) covers the desktop
+controls and how sessions behave.
+
+## Performance
+
+`GET /pair/v1/performance` reports what this node has measured for the
+requests it routed. It never keeps prompt or reply text, and the figures reset
+when the service restarts.
+
+```json
+{
+  "scope": "routed-by-this-node",
+  "window": 100,
+  "models": [ PerfModelSummary, … ],
+  "recent": [ PerfRecord, … ],
+  "benchmarks": [ BenchmarkRun, … ],
+  "benchmarkPrompts": [ BenchmarkPrompt, … ]
+}
+```
+
+**One finished request** (`PerfRecord`). This one is the benchmark's thinking
+step, streamed from Ollama:
+
+```json
+{
+  "requestId": "bench-b387c24b-4-thinking",
+  "at": 1794457433784,
+  "engine": "ollama",
+  "model": "qwen3:0.6b",
+  "nodeId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "local": true,
+  "path": "/api/chat",
+  "streamed": true,
+  "origin": "routed",
+  "promptTokens": 63,
+  "completionTokens": 1024,
+  "thinking": true,
+  "thinkingTokens": 1024,
+  "readTokensPerSecond": 2879.34,
+  "writeTokensPerSecond": 27.87,
+  "timeToFirstTokenMs": 48.05,
+  "promptMs": 21.88,
+  "generationMs": 36736.24,
+  "loadMs": 0.6,
+  "thinkingMs": 36727.83,
+  "totalMs": 36776.17,
+  "sources": {
+    "tokens": "engine",
+    "read": "engine",
+    "write": "engine",
+    "ttft": "proxy",
+    "thinking": "proxy"
+  }
+}
+```
+
+`sources` says where each figure came from:
+
+- `engine`: the engine reported it, for example Ollama's durations or
+  llama.cpp's `timings`.
+- `proxy`: PAIR's own clock or a count of streamed chunks.
+- `estimated`: apportioned, for example the thinking share of a reply that
+  wasn't streamed.
+
+A figure PAIR couldn't measure is left out. `origin` is `routed` for a request
+from a client on this machine, and `peer` for one another node sent here to be
+served. `sessionId` and `agentId` appear when the request named them.
+
+**One model on one node** (`PerfModelSummary`), over its last `window`
+requests:
+
+```json
+{
+  "engine": "ollama",
+  "model": "qwen3:0.6b",
+  "nodeId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+  "local": true,
+  "requests": 3,
+  "promptTokens": 20061,
+  "completionTokens": 2073,
+  "thinkingRequests": 1,
+  "thinkingTokens": 1,
+  "lastAt": 1794457381153,
+  "readTokensPerSecond": { "count": 2, "avg": 194.97, "p50": 194.96, "p95": 352.68, "min": 19.73, "max": 370.2 },
+  "writeTokensPerSecond": { "count": 2, "avg": 33.38, "p50": 33.38, "p95": 35.16, "min": 31.4, "max": 35.36 },
+  "timeToFirstTokenMs": { "count": 2, "avg": 35357.19, "p50": 35357.19, "p95": 52186.41, "min": 16658.05, "max": 54056.32 },
+  "totalMs": { "count": 3, "avg": 45445.34, "p50": 54285.13, "p95": 79148.05, "min": 140.28, "max": 81910.6 },
+  "loadMs": { "count": 2, "avg": 7823.04, "p50": 7823.04, "p95": 14862.01, "min": 1.95, "max": 15644.12 },
+  "sources": { "tokens": "engine", "read": "engine", "write": "engine", "ttft": "engine" },
+  "trend": [
+    { "at": 1794457326721, "readTokensPerSecond": 19.73, "writeTokensPerSecond": 31.4, "timeToFirstTokenMs": 16658.05 },
+    { "at": 1794457326864 },
+    { "at": 1794457381153, "readTokensPerSecond": 370.2, "writeTokensPerSecond": 35.36, "timeToFirstTokenMs": 54056.32 }
+  ]
+}
+```
+
+Each statistic counts only the requests where that figure was measured.
+`thinkingMs` appears once a request has thought.
+
+**Requests in progress.** `GET /pair/v1/performance/live` is light enough to
+poll several times a second:
+
+```json
+{
+  "live": [
+    {
+      "requestId": "ce82055a-2f20-4a0d-9cc0-8fc7374c9024",
+      "sessionId": "docs-live",
+      "agentId": "docs-agent",
+      "engine": "ollama",
+      "model": "qwen3:0.6b",
+      "nodeId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "local": true,
+      "path": "/api/chat",
+      "origin": "routed",
+      "phase": "answering",
+      "receivedAt": 1794457685383,
+      "dispatchedAt": 1794457685383,
+      "elapsedMs": 4000.97,
+      "promptTokensEstimate": 38,
+      "outputTokens": 165,
+      "thinkingTokens": 0,
+      "timeToFirstTokenMs": 132.95,
+      "writeTokensPerSecond": 45.11
+    }
+  ],
+  "recent": []
+}
+```
+
+`phase` is one of:
+
+- `waiting`: admission, queueing or choosing a node.
+- `reading`: the engine is reading the prompt.
+- `thinking` or `answering`: the reply's reasoning or answer is streaming.
+
+`promptTokensEstimate` is the body's size at four bytes a token. The engine's
+exact count arrives with the finished record.
+
+**Benchmark.** Post the model name:
+
+```http
+POST /pair/v1/performance/benchmark
+Content-Type: application/json
+
+{ "model": "qwen3:0.6b" }
+```
+
+```http
+HTTP/1.1 202 Accepted
+
+{
+  "id": "bench-b387c24b",
+  "engine": "ollama",
+  "model": "qwen3:0.6b",
+  "state": "running",
+  "startedAt": 1794457381157,
+  "steps": [
+    { "name": "short", "label": "Short prompt", "thinking": "off", "state": "pending" },
+    { "name": "long-input", "label": "Long input", "thinking": "off", "state": "pending" },
+    { "name": "long-output", "label": "Long output", "thinking": "off", "state": "pending" },
+    { "name": "thinking", "label": "Thinking", "thinking": "on", "state": "pending" }
+  ]
+}
+```
+
+The run sends four fixed prompts through this engine's endpoint, one at a
+time, each after the node goes idle. It uses the model, and loads it if
+needed. Poll `GET /pair/v1/performance`: the run in `benchmarks` moves to
+`done` or `failed`, and each step's `result` is a `PerfRecord`. The prompts
+are listed in `benchmarkPrompts`:
+
+```json
+{
+  "name": "long-input",
+  "label": "Long input",
+  "description": "About a thousand tokens of report to summarize in two sentences: reading speed.",
+  "thinking": "off",
+  "maxTokens": 128
+}
+```
+
+Only one run at a time. A second request gets:
+
+```http
+HTTP/1.1 409 Conflict
+
+{ "error": "a benchmark is already running; wait for it to finish" }
+```
+
+`DELETE /pair/v1/performance` forgets the figures and finished runs. It
+returns `204`, and a run still in progress is kept.
+
+## Errors at a glance
+
+All but the slot-timeout row were returned by a real node; that one is quoted from the code:
+
+| Status | When | Body |
+|---|---|---|
+| `400` | `X-PAIR-Session-ID` has characters outside the allowed set | `{"error":"invalid X-PAIR-Session-ID: use 1-128 characters from letters, digits, '.', '_', ':' and '-'"}` |
+| `400` | The conversation reached its limit | `{"error":"the session's conversation has reached its limit on this node: …"}` |
+| `409` | Another agent uses the session | `{"error":"session belongs to a different agent"}` |
+| `409` | A benchmark is already running | `{"error":"a benchmark is already running; wait for it to finish"}` |
+| `410` | The session ended or expired | `{"error":"session has ended or expired; start a new session"}` |
+| `503` | Every node that has the model is paused or stopped | `{"code":"nodes-held","error":"every node that can serve this request is paused or stopped"}` |
+| `503` + `Retry-After: 5` | Every session slot for the model is taken, and the wait ran out | `{"error":"every context slot for this model is in use; timed out waiting for one"}` (or `… and the wait queue is full`) |
+
+An error from the engine itself, such as an unknown model, passes through in
+the engine's own format.
+
+## What isn't an HTTP call
+
+Some PAIR Plus features have no public HTTP route. They run between the desktop
+app and the local proxy, or between cluster members over mutual TLS:
+
+- **About this model…** (the engine's description, tags, capabilities, licence
+  and links) and **Look up on the web** for facts the engine doesn't report.
+- The **Context & sessions…** planner, which sizes sessions from the node's
+  memory and restarts the engine to match.
+- Pausing or stopping **another** node. It goes over the cluster link, so
+  `PUT /pair/v1/node/state` only changes the node you call.
+- The summary line on each model row, which reads `GET /pair/v1/capacity` from
+  each node over the cluster link.

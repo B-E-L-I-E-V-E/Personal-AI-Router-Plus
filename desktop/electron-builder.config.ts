@@ -197,7 +197,7 @@ function assertVcRedistPackagingInput(): void {
 // when the user passes only `--arm64`.
 // PAIR Plus releases. The owner and repository the update feed points at.
 const PAIR_PLUS_RELEASE_OWNER = 'B-E-L-I-E-V-E'
-const PAIR_PLUS_RELEASE_REPO = 'Personal-AI-Router-Pluss'
+const PAIR_PLUS_RELEASE_REPO = 'Personal-AI-Router-Plus'
 const signMac = process.env.PAIR_MAC_SIGN === '1'
 
 const argvHasX64 = argv.includes('--x64')
