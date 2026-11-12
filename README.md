@@ -7,12 +7,12 @@ SPDX-License-Identifier: Apache-2.0
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/security-policy-green.svg)](SECURITY.md)
-[![Latest release](https://img.shields.io/github/v/release/B-E-L-I-E-V-E/Personal-AI-Router-Pluss)](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Pluss/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/B-E-L-I-E-V-E/Personal-AI-Router-Plus)](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Plus/releases/latest)
 
 **PAIR Plus** is an independent fork of
 [NVIDIA Personal AI Router](https://github.com/NVIDIA/Personal-AI-Router)
 1.0.0, maintained at
-[B-E-L-I-E-V-E/Personal-AI-Router-Pluss](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Pluss).
+[B-E-L-I-E-V-E/Personal-AI-Router-Plus](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Plus).
 It is not an NVIDIA product and is not supported by NVIDIA. Its window title
 reads **NVIDIA PAIR Plus**; the installed app keeps the name NVIDIA PAIR, so an
 existing installation's settings, cluster membership, and models carry over.
@@ -40,6 +40,10 @@ in one cluster.
 | Knowing before you send | — | Each session reports the room its next post has |
 | Tracing a request | — | `X-Request-ID` on every request, response, job and log line |
 | Taking a node out of service | — | **Pause** (running requests finish) or **Stop** (they are cancelled), from any node; requests go to other nodes |
+| What a model is | A name and a size | **About this model…**: description, tags, capabilities, quantization, context and licence from the engine, with links to its pages |
+| A model's limits at a glance | — | Each model row reads like `4 sessions · 40,960 per session · 8,192 response · 32,768 post`, on every node |
+| How fast each model is | — | Reading and writing speed, time to first token and thinking time per model and node, live and as a benchmark |
+| A documented API for all of it | — | Sessions, capacity, node state and performance over HTTP, with [every request and response shown](docs/api.mdx) |
 
 ### Sessions and agents
 
@@ -100,6 +104,70 @@ the counts and timings, never the text.
 
 ![The Performance tab: a node's live and per-model figures, and a finished benchmark run.](docs/assets/onboarding/performance/01-performance.png)
 
+### About this model
+
+**About this model…** in a model's menu shows what its engine reports: the
+description, tags, capabilities (tools, vision, thinking), family, parameter
+count, quantization, trained and loaded context, size and licence. Its buttons
+open the model's pages in your browser: the Ollama library page, or the
+Hugging Face and project pages its GGUF file names. It works for models on
+other nodes too. When the engine leaves something out, **Look up on the web**
+reads the model's own page with a small local model and fills only what the
+page states, labelled with where it came from.
+
+### Each model's settings at a glance
+
+Every model row on the Overview shows what its node enforces: sessions at once
+(and how many are in use), the window per session, the room kept for the
+response and what a post may use. Models on other nodes show their node's
+numbers.
+
+![A model row on the Overview with its summary: 4 sessions, 40,960 per session, 8,192 response, 32,768 post.](docs/assets/onboarding/sessions/07-model-row-summary.png)
+
+### Pausing and stopping a node
+
+Each node card has **Pause**, **Stop** and **Resume**. A paused node takes no
+new requests and lets the running ones finish; a stopped node cancels them.
+Either way, new requests go to other nodes that have the model, and the state
+survives a restart. Any cluster member can pause or stop any other. See
+[Pausing and Stopping a Node](docs/node-state.mdx).
+
+### The API
+
+Everything above is available to your own code over HTTP, on the same local
+endpoint you send inference to. A session is two headers on an ordinary
+request:
+
+```bash
+curl http://127.0.0.1:11434/api/chat \
+  -H 'X-PAIR-Session-ID: task-42' -H 'X-PAIR-Agent-ID: planner' \
+  -d '{"model":"qwen3:0.6b","stream":false,"messages":[{"role":"user","content":"Hi"}]}'
+```
+
+The engine's answer comes back unchanged, with PAIR's headers on it. On a
+later turn they include the conversation's measured size:
+
+```http
+X-Pair-Session-Id: task-42
+X-Pair-Context-Session-Limit: 8192
+X-Pair-Context-Reply-Tokens: 2048
+X-Pair-Context-Message-Limit: 6144
+X-Pair-Context-Session-Tokens: 2068
+```
+
+| Call | Use it to |
+|---|---|
+| `GET /pair/v1/sessions/{id}` | See a session's node, size and `postRoomTokens`, the room its next post has |
+| `POST`, `PATCH`, `DELETE /pair/v1/sessions…` | Start a session, change its idle timeout, keep it alive, end it |
+| `GET`, `PUT /pair/v1/capacity` | Read or set each model's window, reply budget and sessions at once |
+| `GET`, `PUT /pair/v1/node/state` | Pause, stop or resume this node |
+| `GET /pair/v1/performance`, `…/live` | Per-model speeds, thinking time and requests in progress |
+| `POST /pair/v1/performance/benchmark` | Run the fixed benchmark on a model |
+
+The [HTTP API Guide](docs/api.mdx) shows every call with the exact JSON a node
+sends back, recorded from a real node, and every error. The
+[OpenAPI reference](fern/openapi.yml) has the schemas.
+
 ### Use case: a harness for distributed agent work
 
 PAIR Plus suits an agent harness that runs long tasks across an office's
@@ -128,9 +196,11 @@ machines:
 - **It traces everything.** `X-Request-ID` ties each answer to its job and log
   lines on whichever node ran it.
 
-Read [Sessions and Context Capacity](docs/sessions.mdx) and
-[Model Performance and Benchmarks](docs/performance.mdx) for the full API, and
-the [API reference](fern/openapi.yml).
+Read the [HTTP API Guide](docs/api.mdx) for every call and response,
+[Sessions and Context Capacity](docs/sessions.mdx),
+[Pausing and Stopping a Node](docs/node-state.mdx) and
+[Model Performance and Benchmarks](docs/performance.mdx), and the
+[OpenAPI reference](fern/openapi.yml).
 
 ## About PAIR
 
@@ -194,7 +264,7 @@ tells you when a newer release exists and installs it on your say-so from
 upgrade it by pulling and rebuilding.
 
 Download PAIR Plus from its
-[GitHub releases page](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Pluss/releases).
+[GitHub releases page](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Plus/releases).
 The macOS builds are signed with a Developer ID and notarized by Apple. The
 Windows and Linux builds are unsigned, so Windows SmartScreen may warn on first
 install. NVIDIA's own signed releases of PAIR are on
@@ -371,7 +441,10 @@ Each entry assumes the ones before it.
    to your models. Then **[Sessions and context capacity](docs/sessions.mdx)**
    covers PAIR Plus's request IDs, sessions, agents, and per-model capacity, and
    **[Pausing and stopping a node](docs/node-state.mdx)** covers taking a node
-   out of service without losing work.
+   out of service without losing work,
+   **[Model performance and benchmarks](docs/performance.mdx)** covers the
+   Performance tab, and the **[HTTP API guide](docs/api.mdx)** shows every PAIR
+   Plus call with the JSON a node sends back.
 5. **[Terminal interface](docs/terminal-interface.mdx)** — the same tasks from a
    terminal, for a machine with no desktop environment. Skip it if every machine
    you run has a desktop.
@@ -400,7 +473,7 @@ Component references, for when you already know what you are looking for:
 
 ## Releases
 
-See the [PAIR Plus releases page](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Pluss/releases)
+See the [PAIR Plus releases page](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Plus/releases)
 and [CHANGELOG.md](CHANGELOG.md) for what changed in each release. Releases are
 built from version tags on `main` by the
 [Release workflow](.github/workflows/release.yml); see

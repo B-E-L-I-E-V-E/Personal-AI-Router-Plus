@@ -8,45 +8,19 @@ SPDX-License-Identifier: Apache-2.0
 Release history for Personal AI Router, newest first. Entries match the
 published releases on GitHub.
 
-PAIR Plus releases are published on GitHub by the B-E-L-I-E-V-E/Personal-AI-Router-Pluss
+PAIR Plus releases are published on GitHub by the B-E-L-I-E-V-E/Personal-AI-Router-Plus
 release workflow, with macOS builds signed and notarized; the app updates from
 those releases. A build made locally from source is unsigned unless built with
 `PAIR_MAC_SIGN=1`, and updates only once a release exists.
 
-## 1.2.6 — Pause, stop and resume a node (#11)
+## 1.3.0 — Performance, model details, node pause and stop, and an API guide
 
-- Each node card has **Pause**, **Resume** and **Stop**. A paused node finishes the requests it is running and takes no new ones; a stopped node also cancels what it is running. Resume brings it back.
-- New requests go to another node that can serve them, or are refused with `503` when none can. A session on the node moves to another node on its next turn.
-- Any member of a cluster can pause, stop or resume any other member. Other nodes stop sending work to a paused node at once.
-- The state survives a restart, and is available on `GET`/`PUT /pair/v1/node/state`.
-
-## 1.2.5 — Look up a model's missing facts on its web page (#10)
-
-- About this model… has a Look up on the web button when the engine left something out (description, context window, download size, mixture of experts). PAIR reads the model's own pages with a small model on this computer's Ollama (qwen3.5:4b unless you name another) and shows what it found in its own section, labelled with the page and the model that read it. What the engine reports always wins.
-- Nothing is guessed: a value the page doesn't give stays empty, and when the page gives two different values, both are shown and neither is filled.
-- Context & sessions… uses a context window from the model's page only when the engine and the model file report none, and says where the number came from.
-- The proxy has new model/web-facts-start and model/web-facts methods.
-
-## 1.2.4 — Other nodes' model settings on the Overview (#8)
-
-- Models on other nodes now show their sessions at once (and how many are in use), the context window per session, and the response and post context, as that node enforces them. A node that cannot be reached, or runs an older PAIR, shows none.
-
-## 1.2.3 — About this model (#7)
-
-- Each downloaded model's menu has About this model…: the description, tags, capabilities, family, parameters, quantization, context length, size and licence that its engine and model file report, with buttons that open its Ollama library or Hugging Face pages.
-- It works for models on other nodes in your cluster too; that node's PAIR answers over the cluster connection.
-- The proxy has a new model/details method.
-
-## 1.2.2 — Model settings on the Overview (#6)
-
-- Each of this node's model rows shows what is in force for the model: sessions at once (and how many are in use), the context window per session, the response context and the post context. A pending plan is shown apart from what is applied.
-
-## 1.2.1 — Performance per model and a benchmark (#9)
-
-- A new Performance tab, with a stopwatch icon next to Settings, shows each model's speed per node: tokens in and out, reading and writing speed in tokens per second, time to first token and, for thinking models, the time spent reasoning.
-- Run benchmark sends four fixed prompts through PAIR, one at a time and only when the node is idle, so models and nodes compare like for like.
-- Each figure says whether the engine reported it or PAIR measured it. Only counts and timings are kept, never prompt or reply text.
-- New APIs: GET and DELETE /pair/v1/performance and POST /pair/v1/performance/benchmark.
+- A new **Performance** tab, with a stopwatch icon next to Settings, shows each model's speed per node: tokens in and out, reading and writing speed in tokens per second, time to first token and, for thinking models, the time spent reasoning. A live view shows every request in progress. **Run benchmark** sends four fixed prompts through PAIR, one at a time and only when the node is idle. Each figure says whether the engine reported it or PAIR measured it, and only counts and timings are kept, never prompt or reply text. New APIs: `GET`/`DELETE /pair/v1/performance`, `GET /pair/v1/performance/live` and `POST /pair/v1/performance/benchmark` (#9).
+- Each model row on the Overview shows what its node enforces: sessions at once (and how many are in use), the context window per session, and the response and post context, for this node's models and other nodes' (#6, #8).
+- Each downloaded model's menu has **About this model…**: the description, tags, capabilities, family, parameters, quantization, context length, size and licence its engine and model file report, with buttons for its Ollama library or Hugging Face pages, for models on any node in the cluster (#7). **Look up on the web** fills facts the engine left out from the model's own page, read by a small local model; nothing is guessed, and the engine's values always win (#10).
+- Each node card has **Pause**, **Resume** and **Stop**. A paused node finishes its running requests and takes no new ones; a stopped node also cancels them. New requests go to other nodes that can serve them, or get `503` when none can. Any cluster member can manage any other, and the state survives a restart; `GET`/`PUT /pair/v1/node/state` (#11).
+- A new **HTTP API Guide** shows every call with the JSON a node sends back, recorded from a real node, and every error. The OpenAPI error object now matches what PAIR sends (`error`, with `code` where it helps), and the `X-PAIR-Served-By` header, which PAIR never sent, is gone from it.
+- The repository is now [B-E-L-I-E-V-E/Personal-AI-Router-Plus](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Plus); the old address redirects, and updates come from the new one.
 
 ## 1.2.0 — Context & sessions per model (#3)
 

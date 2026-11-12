@@ -51,7 +51,7 @@ n/a
 
 ## Checklist
 
-- [ ] I have read the [Contributing Guidelines](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Pluss/blob/main/CONTRIBUTING.md).
+- [ ] I have read the [Contributing Guidelines](https://github.com/B-E-L-I-E-V-E/Personal-AI-Router-Plus/blob/main/CONTRIBUTING.md).
 - [ ] Every commit is signed off (`git commit -s`), certifying the [Developer Certificate of Origin](https://developercertificate.org/).
 - [ ] New or existing tests cover the change.
 - [ ] Relevant documentation is updated.

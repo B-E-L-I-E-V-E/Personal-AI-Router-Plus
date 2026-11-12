@@ -83,10 +83,6 @@ paths:
               $ref: "#/components/headers/RequestID"
             X-PAIR-Session-ID:
               $ref: "#/components/headers/SessionID"
-            X-PAIR-Served-By:
-              description: Stable host UUID of the node that served the request.
-              schema:
-                type: string
           content:
             application/json:
               schema:
@@ -142,10 +138,6 @@ paths:
               $ref: "#/components/headers/RequestID"
             X-PAIR-Session-ID:
               $ref: "#/components/headers/SessionID"
-            X-PAIR-Served-By:
-              description: Stable host UUID of the node that served the request.
-              schema:
-                type: string
           content:
             application/json:
               schema:
@@ -1348,16 +1340,20 @@ components:
             $ref: "#/components/schemas/NodeModel"
     Error:
       type: object
+      description: >
+        PAIR's own errors. The request ID is in the `X-Request-ID` header.
+        Errors from the engine itself pass through in the engine's format.
       required:
-        - code
-        - message
+        - error
       properties:
+        error:
+          type: string
+          description: What went wrong, in words.
+          example: session has ended or expired; start a new session
         code:
           type: string
-          example: model_not_available
-        message:
-          type: string
-          example: No eligible node has the requested model available.
-        requestId:
-          type: string
-          example: req_01J0D5TCGS8JQ2N8TZFRA0VN08
+          description: >
+            A short tag, where a client may want to act on it, for example
+            `nodes-held` when every node that can serve the request is paused
+            or stopped.
+          example: nodes-held
