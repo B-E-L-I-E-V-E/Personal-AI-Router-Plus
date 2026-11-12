@@ -215,6 +215,10 @@ type Broker struct {
 	// policy-derived), relaying the set to the daemon and replaying it whenever
 	// the daemon (re)starts.
 	regCache *relay.RegistrationCache
+	// servicesPushMu orders pushServicesToNodeInfo calls so a snapshot taken
+	// earlier can never be written after a newer one (each runs on its own
+	// goroutine).
+	servicesPushMu sync.Mutex
 
 	// workersMu guards the supervised worker handles below. They are no
 	// longer assigned once in Serve and then treated as read-only: each
@@ -431,6 +435,7 @@ func (b *Broker) registerService(p noderec.RegisterParams) {
 	if sc := b.getScanner(); sc != nil {
 		go sc.pushRegister(p)
 	}
+	go b.pushServicesToNodeInfo()
 }
 
 // unregisterService removes a local service from the cache and the daemon.
@@ -441,6 +446,7 @@ func (b *Broker) unregisterService(svc noderec.ServiceKey) {
 	if sc := b.getScanner(); sc != nil {
 		go sc.pushUnregister(svc)
 	}
+	go b.pushServicesToNodeInfo()
 }
 
 // get*/set* are the workersMu-guarded accessors for the supervised worker
@@ -660,6 +666,7 @@ func (b *Broker) spawnNodeInfo() (supervisedHandle, error) {
 	// /v1/node-info but holds no cluster dir to read it from, so this push is the
 	// only source. It runs on every spawn, which also covers a supervised restart.
 	b.pushClusterIdentityToNodeInfo()
+	b.pushServicesToNodeInfo()
 	// Register node-info's service so the daemon advertises ni= on _nvpair-node.
 	// node-info binds the fixed :14318 (force_ports is inert), so the broker
 	// knows its port. Idempotent across restarts.
@@ -1482,6 +1489,33 @@ func (b *Broker) pushClusterIdentityToNodeInfo() {
 	if err := np.SetClusterIdentity(b.clusterPrincipal()); err != nil {
 		slog.Warn("failed to push cluster identity to node-info", "err", err)
 	}
+}
+
+// pushServicesToNodeInfo sends node-info this node's advertised service ports
+// (the registration cache), so /v1/node-info can carry them to a cluster peer
+// that cannot receive the mDNS record. Best-effort like the identity push: the
+// next registration change or node-info spawn pushes the full set again.
+func (b *Broker) pushServicesToNodeInfo() {
+	b.servicesPushMu.Lock()
+	defer b.servicesPushMu.Unlock()
+	np := b.getNodeInfo()
+	if np == nil {
+		return
+	}
+	if err := np.SetServices(servicesFromRegistrations(b.regCache.Snapshot())); err != nil {
+		slog.Warn("failed to push service ports to node-info", "err", err)
+	}
+}
+
+// servicesFromRegistrations folds registrations into the service-port map.
+func servicesFromRegistrations(regs []noderec.RegisterParams) map[noderec.ServiceKey]int {
+	out := make(map[noderec.ServiceKey]int, len(regs))
+	for _, r := range regs {
+		if r.Service != "" && r.Port > 0 {
+			out[r.Service] = r.Port
+		}
+	}
+	return out
 }
 
 // forwardEngineNotification / forwardManualNodesNotification /

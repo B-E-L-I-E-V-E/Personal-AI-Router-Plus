@@ -122,3 +122,25 @@ func TestBuildResponseClusterUUIDWireStates(t *testing.T) {
 		t.Errorf("clusterUuid = %v, want our-principal", got)
 	}
 }
+
+// The broker's service-port push is reported on /v1/node-info so a peer outside
+// mDNS range can rebuild this node's record; nothing is added before a push.
+func TestServicesPushReportedOnNodeInfo(t *testing.T) {
+	var services serviceSet
+	body := buildResponse(nil, nil, 0, statsSnapshot{}, "host", nil)
+	if got := withServices(body, services.get()); string(got) != string(body) {
+		t.Fatalf("no push yet: body changed to %s", got)
+	}
+
+	params, _ := json.Marshal(noderec.ServicesParams{Services: map[noderec.ServiceKey]int{"ni": 14318, "cl": 14321, "bad": 0}})
+	handleServices(applog.StdinMessage{Method: noderec.MethodSetServices, Params: params}, &services)
+	handleServices(applog.StdinMessage{Method: noderec.MethodSetServices, Params: json.RawMessage(`{`)}, &services)
+
+	var out NodeInfoResponse
+	if err := json.Unmarshal(withServices(body, services.get()), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.HostUUID != "host" || len(out.Services) != 2 || out.Services["ni"] != 14318 || out.Services["cl"] != 14321 {
+		t.Fatalf("response = %+v", out)
+	}
+}

@@ -197,6 +197,10 @@ things are needed:
   netsh advfirewall firewall add rule name="PAIR engines" dir=in action=allow protocol=TCP localport=11434,1234,8080 remoteip=192.168.1.0/24
   ```
 
+  Over a VPN, add the VPN's client range too, for example
+  `remoteip=192.168.1.0/24,192.168.3.0/24`. Installs of PAIR Plus 1.3.8 or later
+  already allow private and VPN address ranges on PAIR's own rules.
+
 Pausing, stopping, **About this model…** and running a benchmark on that node
 use the same link.
 

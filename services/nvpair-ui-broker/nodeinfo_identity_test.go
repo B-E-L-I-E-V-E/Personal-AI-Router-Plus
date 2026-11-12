@@ -73,3 +73,37 @@ func TestWriteClusterIdentityFrame(t *testing.T) {
 		})
 	}
 }
+
+// The service-port frame node-info reads is a complete map, so a push after
+// every service unregistered still sends an (empty) object, never null.
+func TestWriteServicesFrame(t *testing.T) {
+	var mu sync.Mutex
+	var buf bytes.Buffer
+	regs := []noderec.RegisterParams{
+		{Service: noderec.ServiceNodeInfo, Port: 14318},
+		{Service: noderec.ServiceCluster, Port: 14321},
+		{Service: "", Port: 1},
+		{Service: noderec.ServiceOllama, Port: 0},
+	}
+	if err := writeServicesFrame(&mu, &buf, servicesFromRegistrations(regs)); err != nil {
+		t.Fatal(err)
+	}
+	var frame struct {
+		Method string                 `json:"method"`
+		Params noderec.ServicesParams `json:"params"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &frame); err != nil {
+		t.Fatal(err)
+	}
+	if frame.Method != noderec.MethodSetServices || len(frame.Params.Services) != 2 || frame.Params.Services[noderec.ServiceCluster] != 14321 {
+		t.Fatalf("frame = %+v", frame)
+	}
+
+	buf.Reset()
+	if err := writeServicesFrame(&mu, &buf, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte(`"services":{}`)) {
+		t.Fatalf("empty push = %s, want an empty services object", buf.Bytes())
+	}
+}

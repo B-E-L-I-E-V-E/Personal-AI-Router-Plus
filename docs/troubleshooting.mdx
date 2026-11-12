@@ -46,6 +46,30 @@ PAIR discovers peers on the local network. If **Add node** or
 - Allow PAIR through host firewalls on each system.
 - Retry with the peer's IP address in **Add node**.
 
+## Peers Are Missing Over a VPN
+
+Discovery uses mDNS, which stays on the local network and does not cross a
+routed VPN such as OpenVPN or WireGuard. From PAIR Plus 1.3.8, nodes that are
+already in your cluster are still found across a VPN or from another subnet:
+PAIR asks each one directly at the address it last had. Pair new nodes while
+they are on the same network, or add them with their IP address in
+**Add node**.
+
+If cluster nodes still do not appear across the VPN:
+
+- Check that this machine can reach the peer's address at all, for example
+  with `ping`.
+- On Windows, allow the VPN's client address range through the peer's
+  firewall. Installs of 1.3.8 or later allow private and VPN ranges on
+  PAIR's own rules. Rules you added yourself keep the scope you gave them,
+  and any **Block** rule for a PAIR program overrides them. Windows creates
+  one when someone clicks **Cancel** on a firewall prompt. From an
+  Administrator Command Prompt, with a VPN range of `192.168.3.0/24`:
+
+  ```bat
+  powershell -NoProfile -Command "Get-NetFirewallRule -DisplayName 'Personal AI Router*' | Get-NetFirewallAddressFilter | Set-NetFirewallAddressFilter -RemoteAddress LocalSubnet,192.168.3.0/24"
+  ```
+
 ## Pairing Fails or Stalls
 
 A PIN belongs to one invitation attempt. A mistyped PIN, a canceled or expired

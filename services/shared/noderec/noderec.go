@@ -327,6 +327,14 @@ const (
 	// record keeps its last observed value indefinitely.
 	MethodSetClusterIdentity = "nodeinfo:set-cluster-identity"
 
+	// MethodSetServices is broker -> nvpair-node-info: the service ports this
+	// node advertises (the same map the _nvpair-node record carries as ni=, ol=,
+	// cl= and so on). node-info reports them on /v1/node-info so a cluster peer
+	// that cannot receive this node's mDNS record — one across a routed VPN or
+	// on another subnet — can still build the record from a direct request.
+	// The set is always complete; node-info replaces what it holds.
+	MethodSetServices = "nodeinfo:set-services"
+
 	// NotifyObservedAddresses is nvpair-node-info -> broker: the local addresses
 	// peers have actually reached this node on, learned from its own accepted
 	// connections.
@@ -397,6 +405,12 @@ type UnregisterParams struct {
 // announced — so the field is always sent.
 type ClusterIdentityParams struct {
 	ClusterUUID string `json:"clusterUuid"`
+}
+
+// ServicesParams carries this node's advertised service ports for
+// MethodSetServices. An empty map means no service is registered yet.
+type ServicesParams struct {
+	Services map[ServiceKey]int `json:"services"`
 }
 
 // ObservedAddressesParams carries the local addresses remote peers have reached
