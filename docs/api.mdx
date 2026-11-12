@@ -73,7 +73,7 @@ machine.
 
 | Route | What it does |
 |---|---|
-| `GET /v1/models` | Every model on every node and engine, as one OpenAI model list. |
+| `GET /v1/models` | Every model the router can route, on every node and engine, as one OpenAI model list. |
 | `POST /v1/chat/completions`, `/v1/completions`, `/v1/embeddings` | OpenAI-format inference, routed by `model`. |
 | `POST /v1/messages` | Anthropic-format inference, routed by `model`. llama.cpp is not considered, because it has no such route. |
 | `/pair/v1/…` | PAIR's own API, as on every endpoint. |
@@ -112,7 +112,10 @@ that listed it, with a `pair` member saying where else it is:
 }
 ```
 
-A node or engine that does not answer is left out of the list. When nothing
+The list holds only models PAIR will route. A model an engine lists that the
+node's model inventory does not carry is left out. For example, LM Studio lists
+DFlash draft models, which it cannot serve on their own. A node or engine that
+does not answer is also left out of the list. When nothing
 answers, the list is `503` with code `inventory_unavailable`.
 
 **When no node has the model** the router answers before contacting any engine:

@@ -137,7 +137,7 @@ unaddressed, on bring-up and after a move.
 
 | Route | Behavior |
 |---|---|
-| `GET /v1/models` | Every engine's OpenAI model list from every routable node, de-duplicated by `id`, each record given `"pair": {"engines": [...], "nodes": [{"id","name","engine"}]}`. Unanswering sources are left out; `503` `inventory_unavailable` when none answers. |
+| `GET /v1/models` | Every engine's OpenAI model list from every routable node, kept to the models that node's inventory advertises (so every listed model routes), de-duplicated by `id`, each record given `"pair": {"engines": [...], "nodes": [{"id","name","engine"}]}`. Unanswering sources are left out; `503` `inventory_unavailable` when none answers. |
 | `POST /v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/messages` | Candidates are every enabled engine that has the route (llama.cpp has no `/v1/messages`) and advertises the model under its own naming rule, unioned and ordered by scheduler priority, node ID, then engine table order; reservations then put the least loaded node first. The body is forwarded unchanged through that engine's own path, and failover may cross engines. |
 | `/pair/v1/*` | As on an engine port, answered through the first enabled engine facade. |
 | anything else | `404` `not_found`. |

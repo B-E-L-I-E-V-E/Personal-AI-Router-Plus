@@ -1154,8 +1154,10 @@ A loopback facade that fronts no engine (`router.go`), enabled with
   Admission (§5.13) applies to the first local candidate's engine, and the
   reply budget only when that engine serves.
 - **Model list.** `GET /v1/models` fetches every engine's OpenAI list from each
-  of its routable candidates and returns one list de-duplicated by `id`, first
-  record wins, with `pair.engines` and `pair.nodes`. Partial when sources fail;
+  of its routable candidates, keeps only ids that node's inventory advertises
+  under the engine's naming rule (the same match routing uses, so a listed model
+  always routes), and returns one list de-duplicated by `id`, first record wins,
+  with `pair.engines` and `pair.nodes`. Partial when sources fail;
   `503` when none answers. No CORS merge: a browser origin gets no grant.
 - **Surface.** Anything other than the model list, the inference paths and
   `/pair/v1/*` is `404`. The mTLS personality answers `404`: peers reach this

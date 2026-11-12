@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -41,6 +42,9 @@ type fakeEngineSpec struct {
 	nodeID string
 	// models is what the node advertises to discovery and lists.
 	models []string
+	// unadvertised are listed on the engine's /v1/models but absent from the
+	// node's inventory, as LM Studio does with DFlash draft models.
+	unadvertised []string
 	// status answers inference; zero means 200.
 	status int
 	// stream answers inference with these server-sent event chunks.
@@ -52,8 +56,8 @@ func startFakeEngine(t *testing.T, spec fakeEngineSpec) *fakeEngine {
 	fe := &fakeEngine{engine: spec.engine, nodeID: spec.nodeID}
 	fe.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && (r.URL.Path == "/v1/models" || r.URL.Path == "/models") {
-			data := make([]map[string]string, 0, len(spec.models))
-			for _, m := range spec.models {
+			data := make([]map[string]string, 0, len(spec.models)+len(spec.unadvertised))
+			for _, m := range slices.Concat(spec.models, spec.unadvertised) {
 				data = append(data, map[string]string{"id": m, "object": "model", "owned_by": spec.engine})
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -414,6 +418,50 @@ func TestRouter_ModelListCombinesEveryEngineAndNamesWhereEachModelRuns(t *testin
 		}
 		if fmt.Sprint(m.Pair.Nodes) != fmt.Sprint(w.nodes) {
 			t.Errorf("%s nodes = %v, want %v", m.ID, m.Pair.Nodes, w.nodes)
+		}
+	}
+}
+
+func TestRouter_ModelListOmitsModelsTheNodeDoesNotAdvertise(t *testing.T) {
+	// node-a's LM Studio lists a draft model it cannot serve on its own; node-b
+	// lists "shared-model" without its inventory carrying it yet.
+	p, _ := routerProxy(t,
+		fakeEngineSpec{engine: "lmstudio", nodeID: "node-a", models: []string{"shared-model"}, unadvertised: []string{"nemotron-dflash"}},
+		fakeEngineSpec{engine: "ollama", nodeID: "node-b", models: []string{"llama3"}, unadvertised: []string{"shared-model"}},
+	)
+
+	rec := routerRequest(t, p, http.MethodGet, "/v1/models", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	var list struct {
+		Data []struct {
+			ID   string          `json:"id"`
+			Pair routerModelInfo `json:"pair"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	got := map[string][]routerNode{}
+	for _, m := range list.Data {
+		got[m.ID] = m.Pair.Nodes
+	}
+	if _, listed := got["nemotron-dflash"]; listed {
+		t.Error("listed a model no node's inventory advertises, which the router would refuse to route")
+	}
+	if want := []routerNode{{ID: "node-a", Name: "node-a.local.", Engine: "lmstudio"}}; fmt.Sprint(got["shared-model"]) != fmt.Sprint(want) {
+		t.Errorf("shared-model nodes = %v, want only the node that advertises it: %v", got["shared-model"], want)
+	}
+	if _, listed := got["llama3"]; !listed {
+		t.Errorf("llama3 missing; Ollama's untagged inventory name must match its listed id: %v", got)
+	}
+
+	// Every listed model routes.
+	for id := range got {
+		if rec := routerRequest(t, p, http.MethodPost, "/v1/chat/completions", chatBody(id)); rec.Code != http.StatusOK {
+			t.Errorf("listed model %s does not route: status %d, body %s", id, rec.Code, rec.Body)
 		}
 	}
 }

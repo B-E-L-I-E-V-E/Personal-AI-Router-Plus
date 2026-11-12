@@ -357,7 +357,8 @@ The router has no cluster ingress of its own: an mTLS connection to it is
 refused, because peers reach this node's engines through their own ports. Its
 port is persisted in `router-proxy-port.json` beside the engines' port files.
 `GET /v1/models` on the router is the union of every engine's model list on
-every routable node, with a `pair` member naming where each model runs; refer
+every routable node, kept to models that node's inventory advertises so every
+listed model routes, with a `pair` member naming where each model runs; refer
 to [API](api.mdx#the-pair-router).
 
 ### Models Do Not Need to Be on Every Node

@@ -363,7 +363,9 @@ type routerModel struct {
 type routerListSource struct {
 	fac  *facade
 	cand candidate
-	name string
+	// node is the discovery record the candidate came from. Its inventory
+	// decides which listed models the router keeps.
+	node Node
 }
 
 // serveRouterModels answers GET /v1/models with every engine's inventory on
@@ -382,12 +384,12 @@ func (f *facade) serveRouterModels(w http.ResponseWriter, r *http.Request) {
 
 	var sources []routerListSource
 	for _, ef := range p.engineFacadesInOrder() {
-		names := make(map[string]string)
+		byID := make(map[string]Node)
 		for _, n := range ef.discovery.Nodes() {
-			names[n.ID] = n.Host
+			byID[n.ID] = n
 		}
 		for _, c := range ef.resolveCandidates("") {
-			sources = append(sources, routerListSource{fac: ef, cand: c, name: names[c.id]})
+			sources = append(sources, routerListSource{fac: ef, cand: c, node: byID[c.id]})
 		}
 	}
 
@@ -419,6 +421,14 @@ func (f *facade) serveRouterModels(w http.ResponseWriter, r *http.Request) {
 			if err := json.Unmarshal(raw, &identity); err != nil || identity.ID == "" {
 				continue
 			}
+			// List only what routing would send to this node. An engine's
+			// OpenAI list can name models its inventory does not: LM Studio
+			// lists DFlash draft models there, which it cannot serve alone and
+			// answers with whatever model is loaded instead. A model the
+			// router lists must be one it routes.
+			if !nodeAdvertisesModel(src.fac.profile, src.node, identity.ID) {
+				continue
+			}
 			m := byID[identity.ID]
 			if m == nil {
 				m = &routerModel{raw: raw}
@@ -428,7 +438,7 @@ func (f *facade) serveRouterModels(w http.ResponseWriter, r *http.Request) {
 			if !slices.Contains(m.info.Engines, engine) {
 				m.info.Engines = append(m.info.Engines, engine)
 			}
-			node := routerNode{ID: src.cand.id, Name: src.name, Engine: engine}
+			node := routerNode{ID: src.cand.id, Name: src.node.Host, Engine: engine}
 			if !slices.Contains(m.info.Nodes, node) {
 				m.info.Nodes = append(m.info.Nodes, node)
 			}
