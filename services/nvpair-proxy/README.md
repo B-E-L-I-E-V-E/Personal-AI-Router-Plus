@@ -191,6 +191,20 @@ local engine's own report fills in what it can. For streamed OpenAI-compatible
 session requests the proxy adds `stream_options.include_usage` so the engine
 reports counts. See `spec.md` §5.12.
 
+**Performance.** PAIR measures every generation request this node routes:
+tokens in and out, reading and writing speed in tokens per second, time to
+first token, model load time and, for thinking models, the tokens and time
+spent reasoning. It keeps only the numbers, in memory, for the last 100
+requests per model and node, and runs a fixed four-prompt benchmark on request:
+
+```bash
+curl -s http://127.0.0.1:11434/pair/v1/performance
+curl -s -X POST http://127.0.0.1:11434/pair/v1/performance/benchmark -d '{"model":"qwen3:0.6b"}'
+```
+
+Each figure says whether the engine reported it or the proxy measured it. See
+`spec.md` §5.16.
+
 **Admission.** With a session count set for a model, each session holds one of
 its slots on this node. When they are all held, a new session's request goes to
 another node with the model, or waits here up to 60 seconds for a slot (`503`

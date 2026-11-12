@@ -20,6 +20,7 @@ import {
     Search as LucideSearch,
     Settings,
     Square as LucideSquare,
+    Timer,
     X,
     type LucideProps
 } from 'lucide-react'
@@ -60,6 +61,7 @@ export const OpenInNew = appIcon(ExternalLink)
 export const Public = appIcon(Globe)
 export const Search = appIcon(LucideSearch)
 export const SettingsOutlined = appIcon(Settings)
+export const Stopwatch = appIcon(Timer)
 
 /**
  * Classic Windows "restore down" glyph (a front square with the back square's

@@ -1,0 +1,108 @@
+---
+title: Model Performance and Benchmarks
+description: See how fast each model reads prompts and writes replies in PAIR Plus, how long thinking models spend reasoning, and compare models and nodes with a fixed benchmark.
+---
+
+{/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+*/}
+
+PAIR Plus measures every request it routes and shows, per model and per node,
+how fast the model works. The **Performance** tab, with the stopwatch icon next
+to **Settings**, shows the figures, and a fixed benchmark lets you compare
+models and nodes like for like.
+
+![The Performance tab: one card per model and node, and a finished benchmark run](assets/onboarding/performance/01-performance.png)
+
+## What is measured
+
+For each request that generates text (chat and completion routes on Ollama,
+LM Studio and llama.cpp, and the Anthropic Messages route), PAIR records:
+
+| Figure | Meaning |
+|---|---|
+| Tokens in / out | Prompt tokens and generated tokens, thinking included |
+| Reading | Prompt tokens processed per second |
+| Writing | Tokens generated per second |
+| Time to first token | From sending the request to the node until the first token, thinking or answer, arrives |
+| Thinking per request | For thinking models, how long the model reasoned before it began its answer, and roughly how many tokens that took |
+| Load | Time the engine spent loading the model, where it reports it |
+
+Each model card shows the average with the median (p50) and the slowest 5%
+(p95) over the model's last 100 requests on that node, and a line of its recent
+writing speed.
+
+PAIR keeps only counts and timings. It never stores, logs or shows the text of
+a prompt or reply. The figures live in memory and reset when the service
+restarts; **Reset figures** clears them sooner.
+
+### Where each figure comes from
+
+Hover a figure to see its source:
+
+- **Reported by the engine.** Ollama reports how long it spent reading the
+  prompt and writing the reply; llama.cpp reports the same in its `timings`.
+  These are the most accurate figures.
+- **Measured by PAIR.** Where the engine reports no timings (LM Studio, and
+  OpenAI-compatible routes on Ollama), PAIR times the stream itself. Reading
+  speed measured this way includes model loading and network time, so it reads
+  lower than the engine's own figure. Time to first token and thinking time on
+  a streamed reply are always measured by PAIR.
+- **Estimated.** For a reply that is not streamed, thinking time and tokens
+  are apportioned by how much of the reply was reasoning. For a stream that
+  reported no token counts, tokens are counted from the stream.
+
+Thinking is recognized in Ollama's `thinking` field, the OpenAI-compatible
+`reasoning_content` and `reasoning` fields, Anthropic thinking blocks, and
+`<think>` tags inside the reply.
+
+### Which requests are covered
+
+The figures cover the requests **this node routes**, on whichever node serves
+them, so a model on another node appears with that node's name once you send
+it requests through this node. Requests that other nodes route are measured on
+those nodes, in their own app. Benchmark requests are kept apart and never
+change the live figures.
+
+## Benchmark
+
+**Run benchmark** sends four fixed requests to a model through PAIR, one at a
+time, and records the same figures:
+
+| Step | Request | Thinking | Measures |
+|---|---|---|---|
+| Short prompt | A one-sentence question | Off | Time to first token |
+| Long input | About 1,000 tokens of text to summarize | Off | Reading speed |
+| Long output | A 300-word story | Off | Writing speed |
+| Thinking | A short reasoning puzzle | On | Time spent thinking |
+
+The benchmark uses the model: it loads it if it is not loaded and generates up
+to about 1,600 tokens in all. Before each step it waits for other requests on
+this node to finish, so it does not compete with your work, and it skips a step
+if the node stays busy for two minutes. Only one benchmark runs at a time.
+
+On LM Studio PAIR cannot switch thinking on or off, so every step runs with the
+model's default. A model that cannot think shows the thinking step as skipped.
+
+Each run shows its steps in a table and a summary line: reading speed from the
+long-input step, writing speed from the long-output step, time to first token
+from the short prompt and thinking time from the thinking step. The last 20
+runs are kept until the service restarts. Runs on the same model through
+different nodes, or on different models, can be compared directly because the
+prompts never change.
+
+## API
+
+The same figures are available from any engine port on this machine:
+
+```bash
+curl -s http://127.0.0.1:11434/pair/v1/performance
+curl -s -X POST http://127.0.0.1:11434/pair/v1/performance/benchmark \
+  -d '{"model":"qwen3:0.6b"}'
+curl -s -X DELETE http://127.0.0.1:11434/pair/v1/performance
+```
+
+`POST …/benchmark` runs on the engine whose port you call and answers `202`
+with the run; poll `GET /pair/v1/performance` for its progress. See the API
+reference for the full report.

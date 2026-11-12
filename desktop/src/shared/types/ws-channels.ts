@@ -53,6 +53,7 @@ import type {
     SessionPolicy,
     SessionSummary
 } from '@/shared/types/sessions'
+import type { BenchmarkRun, PerformanceReport } from '@/shared/types/performance'
 import type {
     AvailableNode,
     ClusterIdentityPayload,
@@ -136,6 +137,14 @@ export interface WsInvokeChannelMap {
     'capacity:get-planner': { request: void; response: PlannerState }
     'capacity:set-planner': { request: PlannerChange; response: PlannerState }
     'capacity:apply-plan': { request: { engine: string; model: string }; response: ApplyPlanResult }
+
+    // Per-model performance and benchmarks (nvpair-proxy, relayed by the broker)
+    'performance:get-report': { request: void; response: PerformanceReport }
+    'performance:clear': { request: void; response: null }
+    'performance:run-benchmark': {
+        request: { engine: string; model: string }
+        response: BenchmarkRun
+    }
 }
 
 export type WsInvokeChannel = keyof WsInvokeChannelMap

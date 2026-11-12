@@ -93,7 +93,7 @@ func (f *facade) handlePlain(w http.ResponseWriter, r *http.Request) {
 	}
 	// PAIR's own session API is answered here and never forwarded. Being on
 	// the plaintext personality makes it loopback-only, like inference.
-	if f.serveSessionsAPI(w, r) || f.serveCapacityAPI(w, r) {
+	if f.serveSessionsAPI(w, r) || f.serveCapacityAPI(w, r) || f.servePerformanceAPI(w, r) {
 		return
 	}
 	f.handleHTTP(w, r)
