@@ -449,3 +449,60 @@ func TestPlanReportsPostAndReplyBudgets(t *testing.T) {
 		t.Fatal("a reply budget as large as the window was accepted")
 	}
 }
+
+func TestDescribeLMStudio_ReadsModelsFromTheFolderItsSettingsName(t *testing.T) {
+	home := t.TempDir()
+	models := filepath.Join(t.TempDir(), "big-drive", "models")
+	dir := filepath.Join(models, "example", "example-GGUF")
+	if err := os.MkdirAll(filepath.Join(home, ".lmstudio"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	settings, _ := json.Marshal(map[string]string{"downloadsFolder": models})
+	if err := os.WriteFile(filepath.Join(home, ".lmstudio", "settings.json"), settings, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gguf := ggufFile(t, []any{"general.architecture", "llama", "llama.block_count", uint32(2),
+		"llama.attention.head_count", uint32(4), "llama.attention.head_count_kv", uint32(2), "llama.embedding_length", uint32(512)})
+	if err := os.WriteFile(filepath.Join(dir, "example-Q4_K_M.gguf"), gguf, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := engineFixture(t, map[string]string{"/api/v1/models": `{"models":[
+		{"key":"example","path":"example/example-GGUF","format":"gguf","size_bytes":4000000000,"max_context_length":32768}]}`})
+	reader := &specClient{client: http.DefaultClient, homeDir: func() (string, error) { return home, nil }}
+
+	s, err := reader.describe(context.Background(), "lmstudio", base, "example", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 2 layers × 2 KV heads × 128 dims × (key + value) × 2 bytes.
+	if s.Source != "metadata" || s.KVBytesPerToken != 2*2*128*2*2 || s.WeightsBytes != 4000000000 {
+		t.Fatalf("spec %+v", s)
+	}
+}
+
+func TestLMStudioModelsDir_DefaultsUnderHomeWithoutAUsableSetting(t *testing.T) {
+	cases := []struct {
+		name     string
+		settings string
+	}{
+		{name: "no settings file"},
+		{name: "folder not set", settings: `{"other":1}`},
+		{name: "relative folder", settings: `{"downloadsFolder":"models"}`},
+		{name: "unreadable settings", settings: `{`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if tc.settings != "" {
+				os.MkdirAll(filepath.Join(home, ".lmstudio"), 0o700)
+				os.WriteFile(filepath.Join(home, ".lmstudio", "settings.json"), []byte(tc.settings), 0o600)
+			}
+			if got, want := lmStudioModelsDir(home), filepath.Join(home, ".lmstudio", "models"); got != want {
+				t.Fatalf("got %s, want %s", got, want)
+			}
+		})
+	}
+}

@@ -762,8 +762,9 @@ reading the model:
   missing (MLX/safetensors models), a loaded copy is measured from `/api/ps`
   as (size − weights) ÷ (context × configured slots). llama.cpp: the GGUF file
   named by `/props?model=` (shards summed). LM Studio: `/api/v1/models` for
-  size and maximum context, and the GGUF in `~/.lmstudio/models` when present.
-  The GGUF reader parses only the metadata section, with bounds on key count,
+  size and maximum context, and the GGUF in LM Studio's models folder when
+  present (the `downloadsFolder` in `~/.lmstudio/settings.json`, else
+  `~/.lmstudio/models`). The GGUF reader parses only the metadata section, with bounds on key count,
   string length and array size.
 - **Cost per token** (f16): Σ over attention layers of KV heads × (key length
   + value length) × 2 bytes. Per-layer `head_count_kv` arrays and
@@ -925,7 +926,8 @@ is omitted, never filled in.
   note says so.
 - **LM Studio**: `/api/v1/models` for type, publisher, display name,
   architecture, quantization, size, parameter string, maximum and loaded
-  context and capabilities, and the GGUF in `~/.lmstudio/models` when present.
+  context and capabilities, and the GGUF in LM Studio's models folder (as for
+  the capacity planner) when present.
   The engine's own answer wins where it and the file disagree.
 - **GGUF** `general.*` keys: `name`, `description`, `author`/`organization`,
   `license`, `size_label`, `parameter_count`, `file_type` (named as llama.cpp

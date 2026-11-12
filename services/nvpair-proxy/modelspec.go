@@ -494,6 +494,19 @@ func (c *specClient) describeLMStudio(ctx context.Context, base *url.URL, s *mod
 	return nil
 }
 
+// lmStudioModelsDir is LM Studio's models folder: the one its settings name
+// (users often move it to a bigger drive), else the default under home.
+func lmStudioModelsDir(home string) string {
+	var settings struct {
+		DownloadsFolder string `json:"downloadsFolder"`
+	}
+	if raw, err := os.ReadFile(filepath.Join(home, ".lmstudio", "settings.json")); err == nil &&
+		json.Unmarshal(raw, &settings) == nil && filepath.IsAbs(settings.DownloadsFolder) {
+		return filepath.Clean(settings.DownloadsFolder)
+	}
+	return filepath.Join(home, ".lmstudio", "models")
+}
+
 // lmStudioFile resolves LM Studio's relative model path to a GGUF file in its
 // models folder, or "" when it is not a GGUF model there.
 func (c *specClient) lmStudioFile(rel string) string {
@@ -504,7 +517,7 @@ func (c *specClient) lmStudioFile(rel string) string {
 	if err != nil {
 		return ""
 	}
-	root := filepath.Join(home, ".lmstudio", "models")
+	root := lmStudioModelsDir(home)
 	p := filepath.Join(root, filepath.FromSlash(rel))
 	if !strings.HasPrefix(p, root+string(filepath.Separator)) {
 		return ""
