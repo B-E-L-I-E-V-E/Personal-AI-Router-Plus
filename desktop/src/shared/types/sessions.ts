@@ -94,8 +94,18 @@ export interface ModelSpec {
     kvBytesPerToken: number
     /** Routed experts in a mixture-of-experts model (0 for a dense model). */
     expertCount: number
+    /** Experts each token runs (0 when unknown). */
+    expertUsedCount: number
     /** Size of the expert weights, which llama.cpp can keep in system memory. */
     expertBytes: number
+    /**
+     * The expert weights of each layer (blk.i), in the order llama.cpp's
+     * --n-cpu-moe takes them; 0 for a layer without experts.
+     */
+    expertLayerBytes: number[]
+    /** Every weight in the tensor table, and those one token runs (0 when unknown). */
+    totalParams: number
+    activeParams: number
     notes: string[]
 }
 
@@ -116,8 +126,11 @@ export interface CapacityPlanRequest {
     maxSessions?: number
     /** Kept from each session's window for replies; omitted means the default. */
     replyTokens?: number
-    /** Keep a mixture-of-experts model's expert weights in system memory. */
-    offloadExperts?: boolean
+    /**
+     * Keep the expert weights of a mixture-of-experts model's first N layers
+     * in system memory (llama.cpp --n-cpu-moe N); omitted means none.
+     */
+    cpuExpertLayers?: number
     cacheType?: KvCacheType
     reservePercent?: number
     otherModelsBytes?: number
@@ -130,7 +143,7 @@ export interface CapacityPlan {
     totalBytes: number
     reserveBytes: number
     weightsBytes: number
-    /** The weights on the GPU: all, or all but the experts when offloaded. */
+    /** The weights on the GPU: all less the experts kept in system memory. */
     gpuWeightsBytes: number
     otherModelsBytes: number
     contextBytes: number
@@ -148,7 +161,8 @@ export interface CapacityPlan {
     fits: boolean
     /** Whether this model, engine and node can keep experts in system memory. */
     canOffloadExperts: boolean
-    offloadExperts: boolean
+    /** Layers whose experts are in system memory (llama.cpp --n-cpu-moe). */
+    cpuExpertLayers: number
     expertBytes: number
     /** Why expert offload is unavailable, for a mixture-of-experts model. */
     offloadNote: string
@@ -170,7 +184,8 @@ export interface SavedCapacityPlan {
     sessions: number
     cacheType: KvCacheType
     reservePercent: number
-    offloadExperts: boolean
+    /** Layers whose experts are kept in system memory (llama.cpp --n-cpu-moe). */
+    cpuExpertLayers: number
     /** Kept from each session's window for replies; 0 means the default. */
     replyTokens: number
     applied: boolean

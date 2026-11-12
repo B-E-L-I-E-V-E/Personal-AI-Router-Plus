@@ -13,7 +13,7 @@ function plan(overrides: Partial<SavedCapacityPlan> = {}): SavedCapacityPlan {
         sessions: 21,
         cacheType: 'f16',
         reservePercent: 10,
-        offloadExperts: false,
+        cpuExpertLayers: 0,
         replyTokens: 0,
         applied: false,
         appliedAt: 0,

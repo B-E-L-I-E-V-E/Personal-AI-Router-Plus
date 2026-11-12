@@ -48,9 +48,9 @@ type savedPlan struct {
 	Sessions       int     `json:"sessions"`
 	CacheType      string  `json:"cacheType"`
 	ReservePercent float64 `json:"reservePercent,omitempty"`
-	// OffloadExperts keeps a mixture-of-experts model's expert weights in
-	// system memory (llama.cpp --cpu-moe).
-	OffloadExperts bool `json:"offloadExperts,omitempty"`
+	// CPUExpertLayers keeps the expert weights of a mixture-of-experts
+	// model's first N layers in system memory (llama.cpp --n-cpu-moe N).
+	CPUExpertLayers int `json:"cpuExpertLayers,omitempty"`
 	// ReplyTokens is kept from each session's window for replies; zero means
 	// the default (defaultReplyTokens, at most half the window).
 	ReplyTokens int64 `json:"replyTokens,omitempty"`
@@ -90,6 +90,20 @@ func (s *plannerStore) load() error {
 	st.AutoReload = true
 	if err := json.Unmarshal(data, &st); err != nil {
 		return err
+	}
+	// Plans saved before the expert split kept all experts in system memory
+	// with offloadExperts; every layer is the same thing now.
+	var before struct {
+		Plans []struct {
+			OffloadExperts bool `json:"offloadExperts"`
+		} `json:"plans"`
+	}
+	if json.Unmarshal(data, &before) == nil && len(before.Plans) == len(st.Plans) {
+		for i, p := range before.Plans {
+			if p.OffloadExperts && st.Plans[i].CPUExpertLayers == 0 {
+				st.Plans[i].CPUExpertLayers = maxCPUExpertLayers
+			}
+		}
 	}
 	kept := st.Plans[:0]
 	for _, p := range st.Plans {
@@ -141,7 +155,10 @@ func (p savedPlan) validate() error {
 	if p.ReplyTokens < 0 || (p.ReplyTokens > 0 && p.ReplyTokens >= p.WindowTokens) {
 		return errors.New("replyTokens must be less than windowTokens")
 	}
-	if p.OffloadExperts && p.Engine == "ollama" {
+	if p.CPUExpertLayers < 0 || p.CPUExpertLayers > maxCPUExpertLayers {
+		return fmt.Errorf("cpuExpertLayers must be between 0 and %d", maxCPUExpertLayers)
+	}
+	if p.CPUExpertLayers > 0 && p.Engine == "ollama" {
 		return errors.New("Ollama cannot keep expert weights in system memory")
 	}
 	return nil
@@ -187,7 +204,7 @@ func (s *plannerStore) put(plan savedPlan) error {
 	for _, p := range s.state.Plans {
 		same := p.Engine == plan.Engine && p.Model == plan.Model
 		if same || (plan.Engine == "ollama" && p.Engine == "ollama") {
-			if same && p.sameSettings(plan.WindowTokens, plan.Sessions, plan.CacheType, plan.OffloadExperts) {
+			if same && p.sameSettings(plan.WindowTokens, plan.Sessions, plan.CacheType, plan.CPUExpertLayers) {
 				plan.Applied, plan.AppliedAt = p.Applied, p.AppliedAt
 			}
 			continue
@@ -220,16 +237,16 @@ func (s *plannerStore) setAutoReload(on bool) error {
 
 // markApplied records that the engine now runs plan's numbers. A plan changed
 // since the apply started stays pending.
-func (p savedPlan) sameSettings(window int64, sessions int, cache string, offload bool) bool {
-	return p.WindowTokens == window && p.Sessions == sessions && p.CacheType == cache && p.OffloadExperts == offload
+func (p savedPlan) sameSettings(window int64, sessions int, cache string, cpuExpertLayers int) bool {
+	return p.WindowTokens == window && p.Sessions == sessions && p.CacheType == cache && p.CPUExpertLayers == cpuExpertLayers
 }
 
-func (s *plannerStore) markApplied(engine, model string, window int64, sessions int, cache string, offload bool) (savedPlan, bool, error) {
+func (s *plannerStore) markApplied(engine, model string, window int64, sessions int, cache string, cpuExpertLayers int) (savedPlan, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i, p := range s.state.Plans {
 		if p.Engine == engine && p.Model == model {
-			if !p.sameSettings(window, sessions, cache, offload) {
+			if !p.sameSettings(window, sessions, cache, cpuExpertLayers) {
 				return p, false, nil
 			}
 			s.state.Plans[i].Applied = true
@@ -358,7 +375,7 @@ func (p *Proxy) setPlanner(ctx context.Context, raw json.RawMessage) (map[string
 		if cache == "" {
 			cache = "f16"
 		}
-		plan, ok, err := p.planner.markApplied(a.Engine, a.Model, a.WindowTokens, a.Sessions, cache, a.OffloadExperts)
+		plan, ok, err := p.planner.markApplied(a.Engine, a.Model, a.WindowTokens, a.Sessions, cache, a.CPUExpertLayers)
 		if err != nil {
 			return nil, err
 		}

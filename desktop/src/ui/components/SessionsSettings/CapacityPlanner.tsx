@@ -8,7 +8,6 @@ import {
     FormField,
     Slider,
     Stack,
-    Switch,
     Text,
     TextInput
 } from '@nvidia/foundations-react-core'
@@ -20,10 +19,14 @@ import type {
 } from '@/shared/types/sessions'
 import getErrorString from '@/shared/utils/get-error-string'
 import {
+    cpuExpertBytes,
+    expertLayersOnCpu,
+    expertSplitStops,
     MAX_SESSIONS,
     memoryUse,
     MIN_WINDOW_TOKENS,
     nearestStop,
+    parameterLabel,
     replyBudget,
     replyStops,
     sessionsSliderMax,
@@ -150,6 +153,20 @@ function MemoryBar({
     )
 }
 
+/**
+ * What a mixture-of-experts model holds and runs: every expert stays loaded,
+ * since any token may pick any of them, but each token runs only a few.
+ */
+function moeSummary(plan: CapacityPlan): string {
+    const { expertCount, expertUsedCount, totalParams, activeParams } = plan.spec
+    const counts =
+        totalParams > 0 && activeParams > 0
+            ? `${parameterLabel(totalParams)} total · ${parameterLabel(activeParams)} active per token. `
+            : ''
+    const used = expertUsedCount > 0 ? `${expertUsedCount} of its ${expertCount}` : 'a few of its'
+    return `${counts}A mixture-of-experts model: each token runs ${used} experts per layer, but every expert must stay loaded, in GPU or system memory, because any token may pick any of them.`
+}
+
 export default function CapacityPlanner({
     nodeId,
     engine,
@@ -172,7 +189,9 @@ export default function CapacityPlanner({
     const [sessionsTouched, setSessionsTouched] = useState(saved !== undefined)
     const [cacheType, setCacheType] = useState<KvCacheType>(saved?.cacheType ?? 'f16')
     const [reserve, setReserve] = useState(saved?.reservePercent || 10)
-    const [offload, setOffload] = useState(saved?.offloadExperts ?? false)
+    // llama.cpp's --n-cpu-moe: the first N layers keep their experts in
+    // system memory.
+    const [cpuLayers, setCpuLayers] = useState(saved?.cpuExpertLayers ?? 0)
     // 0 until chosen: the default budget for the window.
     const [reply, setReply] = useState(saved?.replyTokens ?? 0)
     const [weightsGb, setWeightsGb] = useState('')
@@ -195,7 +214,7 @@ export default function CapacityPlanner({
                     cacheType,
                     reservePercent: reserve || undefined,
                     windowTokens: windowTokens ?? undefined,
-                    offloadExperts: offload || undefined,
+                    cpuExpertLayers: cpuLayers || undefined,
                     weightsBytes: weightsN ? Math.round(weightsN * GB) : undefined,
                     kvBytesPerToken: kbN ? Math.round(kbN * 1024) : undefined
                 })
@@ -222,7 +241,7 @@ export default function CapacityPlanner({
         windowTokens,
         cacheType,
         reserve,
-        offload,
+        cpuLayers,
         weightsN,
         kbN,
         manualValid,
@@ -244,7 +263,15 @@ export default function CapacityPlanner({
     // Reaches past what fits, and never below a saved count.
     const sessionsMax = Math.max(sessionsSliderMax(fit), Math.min(sessions ?? 0, MAX_SESSIONS))
     const chosen = Math.min(sessions ?? 1, sessionsMax)
-    const use = plan && !plan.error ? memoryUse(plan, chosen) : null
+    const expertStops = useMemo(
+        () => expertSplitStops(plan?.spec.expertLayerBytes ?? []),
+        [plan?.spec.expertLayerBytes]
+    )
+    const expertLayers = expertStops.length - 1
+    const layersOnCpu = expertLayersOnCpu(expertStops, cpuLayers)
+    const cpuLayersNow = expertStops[layersOnCpu]
+    const use = plan && !plan.error ? memoryUse(plan, chosen, cpuLayersNow) : null
+    const expertsInRam = cpuExpertBytes(plan?.spec.expertLayerBytes ?? [], cpuLayersNow)
     const over = use ? use.gpuOver || use.ramOver : false
     // Settings past the hardware can still be saved; the sliders and bars
     // turn red to say so.
@@ -269,7 +296,7 @@ export default function CapacityPlanner({
                     sessions: chosen,
                     cacheType: plan.cacheType,
                     reservePercent: reserve,
-                    offloadExperts: plan.offloadExperts,
+                    cpuExpertLayers: plan.canOffloadExperts ? cpuLayersNow : 0,
                     replyTokens: replyNow
                 }
             })
@@ -390,24 +417,44 @@ export default function CapacityPlanner({
                 <Choice options={CACHE_TYPES} value={cacheType} onChange={setCacheType} />
             </Stack>
 
-            {plan && (plan.canOffloadExperts || plan.offloadExperts) && (
-                <Flex align="center" gap="3">
-                    <Switch
-                        checked={offload}
-                        size="small"
-                        aria-label="Keep expert weights in system memory"
-                        onCheckedChange={checked => setOffload(checked === true)}
-                    />
-                    <Stack gap="0">
+            {plan && plan.spec.expertCount > 0 && (
+                <Text kind="body/regular/sm" className="text-subtle-color">
+                    {moeSummary(plan)}
+                </Text>
+            )}
+            {plan && plan.canOffloadExperts && expertLayers > 0 && (
+                <Stack gap="1">
+                    <Flex justify="between" gap="3">
+                        <Text kind="body/semibold/sm">Expert layers kept on the GPU</Text>
                         <Text kind="body/semibold/sm">
-                            Keep expert weights in system memory ({gb(plan.expertBytes)})
+                            {expertLayers - layersOnCpu} of {expertLayers}
                         </Text>
-                        <Text kind="body/regular/sm" className="text-subtle-color">
-                            Frees GPU memory for more sessions; tokens come out slower because the
-                            experts run on the CPU.
-                        </Text>
-                    </Stack>
-                </Flex>
+                    </Flex>
+                    <SliderTone over={over}>
+                        <Slider
+                            min={0}
+                            max={expertLayers}
+                            step={1}
+                            value={expertLayers - layersOnCpu}
+                            onValueChange={g => setCpuLayers(expertStops[expertLayers - g])}
+                            customSteps={[0, expertLayers]}
+                            attributes={{
+                                SliderInput: { 'aria-label': 'Expert layers kept on the GPU' }
+                            }}
+                        />
+                    </SliderTone>
+                    <Text kind="body/regular/sm" className="text-subtle-color">
+                        {layersOnCpu === 0
+                            ? `All expert weights on the GPU (${gb(plan.expertBytes)}).`
+                            : `${gb(plan.expertBytes - expertsInRam)} of expert weights on the GPU, ${gb(expertsInRam)} in system memory, where the CPU runs them.`}{' '}
+                        {engine === 'llamacpp' && layersOnCpu > 0
+                            ? `Applied as --n-cpu-moe ${cpuLayersNow}.`
+                            : ''}
+                        {engine === 'lmstudio' && layersOnCpu > 0
+                            ? `In LM Studio: ${cpuLayersNow} layers with MoE weights forced onto the CPU.`
+                            : ''}
+                    </Text>
+                </Stack>
             )}
             {plan?.offloadNote && (
                 <Text kind="body/regular/sm" className="text-subtle-color">
@@ -455,7 +502,7 @@ export default function CapacityPlanner({
                         total={use.gpuTotal}
                         over={use.gpuOver}
                         detail={[
-                            `model ${gb(plan.gpuWeightsBytes)}`,
+                            `model ${gb(plan.weightsBytes - expertsInRam)}`,
                             plan.otherModelsBytes > 0
                                 ? `other models ${gb(plan.otherModelsBytes)}`
                                 : '',
@@ -472,8 +519,8 @@ export default function CapacityPlanner({
                             total={use.ramTotal}
                             over={use.ramOver}
                             detail={[
-                                plan.offloadExperts
-                                    ? `expert weights ${gb(plan.ramUsedBytes)}`
+                                expertsInRam > 0
+                                    ? `expert weights of ${layersOnCpu} layers ${gb(expertsInRam)}`
                                     : 'no model weights',
                                 `kept free for the system ${gb(plan.ramReserveBytes)}`
                             ].join(' · ')}

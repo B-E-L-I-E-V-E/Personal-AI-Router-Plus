@@ -31,12 +31,14 @@ import {
     applyPlan,
     getPlanner,
     llamaCppLaunchText,
+    lmStudioMessage,
     ollamaLaunchText,
     parsePlanner,
     planCapacity,
     runAutoReloadCheckForTest,
     splitLaunchTokens
 } from '@/electron/service-bridge/capacity-planner'
+import type { SavedCapacityPlan } from '@/shared/types/sessions'
 
 const plan = { windowTokens: 32768, sessions: 4, cacheType: 'f16' as const }
 
@@ -136,9 +138,13 @@ describe('launch text', () => {
 })
 
 describe('expert offload', () => {
-    it('keeps llama.cpp experts on the CPU only when the plan says so', () => {
-        expect(llamaCppLaunchText('--temp 0.7', { ...plan, offloadExperts: true })).toBe(
-            '--temp 0.7 --ctx-size 131072 --parallel 4 --cpu-moe'
+    it('keeps the experts of the first layers on the CPU with --n-cpu-moe', () => {
+        expect(llamaCppLaunchText('--temp 0.7', { ...plan, cpuExpertLayers: 12 })).toBe(
+            '--temp 0.7 --ctx-size 131072 --parallel 4 --n-cpu-moe 12'
+        )
+        // A new count replaces every spelling of the old one.
+        expect(llamaCppLaunchText('-cmoe -ncmoe=3', { ...plan, cpuExpertLayers: 40 })).toBe(
+            '--ctx-size 131072 --parallel 4 --n-cpu-moe 40'
         )
         // Turning it off removes every spelling PAIR owns.
         expect(llamaCppLaunchText('-cmoe --n-cpu-moe 12 -ncmoe=3 --temp 0.7', plan)).toBe(
@@ -146,17 +152,37 @@ describe('expert offload', () => {
         )
     })
 
-    it('sends system memory and the offload choice with a plan request', async () => {
+    it('tells the user what to set in LM Studio, expert layers included', () => {
+        const saved: SavedCapacityPlan = {
+            engine: 'lmstudio',
+            model: 'm',
+            windowTokens: 32768,
+            sessions: 2,
+            cacheType: 'f16',
+            reservePercent: 10,
+            cpuExpertLayers: 20,
+            replyTokens: 0,
+            applied: false,
+            appliedAt: 0,
+            savedAt: 0
+        }
+        expect(lmStudioMessage('m', saved)).toContain(
+            'Number of layers for which to force MoE weights onto CPU to 20'
+        )
+        expect(lmStudioMessage('m', { ...saved, cpuExpertLayers: 0 })).not.toContain('MoE')
+    })
+
+    it('sends system memory and the expert split with a plan request', async () => {
         callProxy.mockResolvedValueOnce({ spec: {}, sessions: 3, canOffloadExperts: true })
         const result = await planCapacity({
             engine: 'llamacpp',
             model: 'm',
             windowTokens: 32768,
-            offloadExperts: true
+            cpuExpertLayers: 12
         })
         const params = callProxy.mock.calls[0][2]
         expect(params.systemRamBytes).toBeGreaterThan(0)
-        expect(params.offloadExperts).toBe(true)
+        expect(params.cpuExpertLayers).toBe(12)
         expect(result.canOffloadExperts).toBe(true)
         expect(result.ramFits).toBe(true)
     })
@@ -298,7 +324,7 @@ describe('capacity planner bridge', () => {
                 windowTokens: 32768,
                 sessions: 4,
                 cacheType: 'f16',
-                offloadExperts: false
+                cpuExpertLayers: 0
             }
         })
     })
@@ -370,7 +396,7 @@ describe('capacity planner bridge', () => {
                     windowTokens: 32768,
                     sessions: 4,
                     cacheType: 'f16',
-                    offloadExperts: false
+                    cpuExpertLayers: 0
                 }
             }
         })

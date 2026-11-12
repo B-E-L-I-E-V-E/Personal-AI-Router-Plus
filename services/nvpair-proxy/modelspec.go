@@ -55,10 +55,18 @@ type modelSpec struct {
 	RecurrentBytesPerSession int64 `json:"recurrentBytesPerSession,omitempty"`
 
 	// ExpertCount is the number of routed experts in a mixture-of-experts
-	// model, and ExpertBytes the size of their weights, which llama.cpp can
-	// keep in system memory instead of on the GPU.
-	ExpertCount int   `json:"expertCount,omitempty"`
-	ExpertBytes int64 `json:"expertBytes,omitempty"`
+	// model and ExpertUsedCount how many of them run per token. ExpertBytes
+	// is the size of their weights, which llama.cpp can keep in system
+	// memory instead of on the GPU, and ExpertLayerBytes that size per layer
+	// (blk.i), in the order llama.cpp's --n-cpu-moe takes them.
+	ExpertCount      int     `json:"expertCount,omitempty"`
+	ExpertUsedCount  int     `json:"expertUsedCount,omitempty"`
+	ExpertBytes      int64   `json:"expertBytes,omitempty"`
+	ExpertLayerBytes []int64 `json:"expertLayerBytes,omitempty"`
+	// TotalParams counts every weight in the tensor table, and ActiveParams
+	// those one token runs (all but the unused experts); 0 when unknown.
+	TotalParams  int64 `json:"totalParams,omitempty"`
+	ActiveParams int64 `json:"activeParams,omitempty"`
 
 	Layers          int `json:"layers,omitempty"`
 	AttentionLayers int `json:"attentionLayers,omitempty"`

@@ -337,10 +337,10 @@ func TestPlannerStoreLifecycle(t *testing.T) {
 	if err := s.put(plan); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, _ := s.markApplied("llamacpp", "m", 65536, 4, "f16", false); ok {
+	if _, ok, _ := s.markApplied("llamacpp", "m", 65536, 4, "f16", 0); ok {
 		t.Fatal("applied a plan that changed meanwhile")
 	}
-	if p, ok, err := s.markApplied("llamacpp", "m", 32768, 4, "f16", false); !ok || err != nil || !p.Applied {
+	if p, ok, err := s.markApplied("llamacpp", "m", 32768, 4, "f16", 0); !ok || err != nil || !p.Applied {
 		t.Fatalf("mark applied: %v %v", ok, err)
 	}
 	if err := s.put(plan); err != nil || !s.snapshot().Plans[0].Applied {

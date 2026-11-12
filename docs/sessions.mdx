@@ -240,22 +240,33 @@ the CPU and run slowly, or fail to load the model.
 
 #### Mixture-of-Experts Models
 
-Mixture-of-experts models (Qwen3 30B-A3B, gpt-oss, Mixtral and others) keep most
-of their weights in experts, of which only a few run per token. On a node with
-its own GPU memory, **Keep expert weights in system memory** moves them to
-system memory, so the GPU holds only attention and the context and fits more
-sessions. Tokens come out slower, since the experts then run on the CPU.
+Mixture-of-experts models (Qwen3 30B-A3B, gpt-oss, DeepSeek, Mixtral and
+others) keep most of their weights in experts. Each token runs only a few of
+them per layer, but any token may pick any expert, so every expert must stay
+loaded, in GPU memory or in system memory. The dialog shows both numbers, read
+from the model's tensor table, for example "284B total · 13.8B active per
+token".
 
-PAIR reads the exact size of the expert weights from the model's tensor table.
-The switch appears only where it helps:
+On a node with its own GPU memory, **Expert layers kept on the GPU** chooses
+how the experts are split. Moving a layer's experts to system memory frees
+that much GPU memory for sessions; attention, shared experts and the context
+cache stay on the GPU. The memory bars follow the slider, using each layer's
+exact expert size (layers differ when a model mixes quantizations, and dense
+leading layers have none).
 
-| Engine | Expert offload |
+Experts in system memory run on the CPU. Each token still reads only the
+experts it picks, but the CPU reads system memory much more slowly than the
+GPU reads its own, so every layer moved there makes tokens slower. Keep as
+many layers on the GPU as the sessions you need allow.
+
+| Engine | Expert split |
 | --- | --- |
-| llama.cpp | Applied with `--cpu-moe` |
-| LM Studio | Planned; turn on keeping expert weights on the CPU when you load the model |
-| Ollama | Not available; Ollama has no setting for it |
+| llama.cpp | Applied with `--n-cpu-moe N`: the experts of the first N layers in system memory |
+| LM Studio | Planned; applying tells you the value for **Number of layers for which to force MoE weights onto CPU** in the model's load settings |
+| Ollama | Not available: Ollama has no setting that keeps only the experts on the CPU (`num_gpu` moves whole layers, attention included) |
 
-On Apple silicon it is never offered: the GPU already uses system memory.
+On Apple silicon it is never offered: the GPU and the CPU share one memory, so
+moving experts frees nothing.
 
 For example, two 32 GB GPUs with an 11 GB model leave about 46 GB for context.
 A model that needs 192 KB per token fits 1 session of its full 128K window
