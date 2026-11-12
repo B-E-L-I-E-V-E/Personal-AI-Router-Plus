@@ -59,6 +59,7 @@ function plan(overrides: Partial<CapacityPlan> = {}): CapacityPlan {
             expertCount: 0,
             expertBytes: 0,
             layers: 48,
+            defaults: {},
             notes: []
         },
         totalBytes: 24 * GiB,
