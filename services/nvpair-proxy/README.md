@@ -205,6 +205,20 @@ In the desktop app, **Settings → Sessions** edits the session policy and each
 model's capacity and lists live sessions; changes are saved by the proxy in
 `session-policy.json` and `context-capacity.json`.
 
+**Node state.** A node can be paused (running requests finish, nothing new
+is taken) or stopped (running requests are cancelled too), and resumed:
+
+```bash
+curl -s http://127.0.0.1:11434/pair/v1/node/state
+curl -s -X PUT http://127.0.0.1:11434/pair/v1/node/state -d '{"state":"paused"}'
+```
+
+New requests go to other nodes that can serve them, or get `503` when none
+can. A paused node's cluster ingress refuses peers with `503` and
+`X-PAIR-Node-State`, it announces its state to every pinned peer, and any peer
+may set it over mTLS (`node/state` with a `nodeId`). The state is saved in
+`node-state.json`. See `spec.md` §5.16.
+
 **Persisted port.** A port chosen at runtime via `set-port` is saved to the
 per-user data dir (`%LocalAppData%\Nvidia Corporation\Personal AI Router` on
 Windows, `~/.config/Nvidia Corporation/Personal AI Router` on Linux) and
