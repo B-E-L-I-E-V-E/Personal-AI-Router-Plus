@@ -45,6 +45,10 @@ type daemon struct {
 	dir       *directory
 	responder *mdns.Responder
 	browser   *Discovery
+	// directEvents carries browse events the stored-member fallback produced
+	// (stored_members.go) into run's event loop, so they are folded in on the
+	// same goroutine as mDNS events.
+	directEvents chan DiscoveryEvent
 	// instance is this node's mDNS instance name (the hostname). It names the
 	// registry-driven self directory entry (publishSelf), which is anchored to
 	// our own identity rather than to hearing our own multicast.
@@ -357,6 +361,7 @@ func newDaemon(codec *Codec, mesh *clustertrust.Mesh, clusterDir string, tlsHTTP
 		baseDir:            baseDir,
 		clusterDir:         clusterDir,
 		dir:                newDirectory(),
+		directEvents:       make(chan DiscoveryEvent, 8),
 		http:               &http.Client{Timeout: nodeInfoFetchTimeout, Transport: nodeInfoTransport(nil)},
 		modelsHTTP:         &http.Client{Timeout: modelsFetchTimeout},
 		modelsClients:      clustertrust.NewPeerClientPool(mesh, modelsFetchTimeout),
@@ -413,6 +418,9 @@ func (d *daemon) run(ctx context.Context) {
 
 	events := make(chan DiscoveryEvent, 32)
 	go d.browser.Run(ctx, events)
+	// Reach cluster members mDNS cannot see (a routed VPN, another subnet) at
+	// the addresses cluster-manager last stored for them.
+	go d.storedMembersLoop(ctx)
 	// Converge peer model inventories independently of mDNS change events: the
 	// browse-driven enrichment above only re-runs when the raw mDNS record
 	// changes, but models live off the record (engine-manager's em /v1/models),
@@ -431,6 +439,8 @@ func (d *daemon) run(ctx context.Context) {
 			if !ok {
 				return
 			}
+			d.onBrowse(ev)
+		case ev := <-d.directEvents:
 			d.onBrowse(ev)
 		}
 	}

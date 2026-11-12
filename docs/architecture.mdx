@@ -681,6 +681,26 @@ Discovery confirms the node's identity before dropping that record. A stale
 duplicate therefore cannot linger, and nothing can displace a peer by claiming
 its address.
 
+### Cluster Members Outside mDNS Range
+
+mDNS is link-local multicast and never crosses a router, so a cluster member on
+the far side of a routed VPN (OpenVPN, WireGuard, Tailscale) or on another
+subnet never shows up in the browse map, even when ordinary traffic to it
+works. Every 15 seconds the node scanner takes the members cluster-manager has
+stored in `members.json` that the browse map is missing, and asks node-info at
+each one's stored address who it is. node-info reports its service ports (the
+broker pushes the same map the mDNS record carries), so the scanner rebuilds the
+member's record and folds it into the directory exactly as an mDNS sighting
+would be. A member on an older version reports no ports, so PAIR's fixed ones
+are assumed, which lets one node upgrade on its own.
+
+The scanner accepts the answer only when it names that member's node ID and a
+cluster principal this node holds a pin for. That is a stricter check than an
+mDNS announcement gets, and everything after it (model lists, peer calls,
+inference) runs over cluster mTLS pinned to that principal. A node added this
+way is kept or evicted by the same liveness probe as any other, and a member
+mDNS later does see is updated in place.
+
 ### Manual Nodes
 
 Some networks block or filter multicast, so discovery is not the only path in.

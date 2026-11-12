@@ -99,6 +99,13 @@ type NodeInfoResponse struct {
 	// evidence would have a peer clear a correct annotation and offer an invite
 	// its target will reject.
 	ClusterUUID *string `json:"clusterUuid,omitempty"`
+	// Services is this node's advertised service ports (ni, ol, cl, em, ...),
+	// the same map its _nvpair-node mDNS record carries. It is how a cluster
+	// peer that never receives that record — across a routed VPN or another
+	// subnet — rebuilds it from a direct request to an address it already
+	// holds. Port numbers are not secret: the mDNS record broadcasts them to the
+	// whole link. Absent until the broker pushes them.
+	Services map[string]int `json:"services,omitempty"`
 }
 
 // clusterIdentity is the cluster principal this node reports, kept current by
@@ -145,6 +152,72 @@ func handleClusterIdentity(msg applog.StdinMessage, identity *clusterIdentity) {
 	}
 	identity.set(params.ClusterUUID)
 	slog.Info("cluster identity updated", "clustered", params.ClusterUUID != "")
+}
+
+// serviceSet is the advertised service-port map, pushed by the broker over
+// stdin (noderec.MethodSetServices) and read by every HTTP handler.
+type serviceSet struct {
+	mu       sync.RWMutex
+	services map[string]int
+}
+
+func (s *serviceSet) set(services map[noderec.ServiceKey]int) {
+	out := make(map[string]int, len(services))
+	for k, port := range services {
+		if k != "" && port > 0 {
+			out[string(k)] = port
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.services = out
+}
+
+// get returns a copy, or nil when nothing has been pushed.
+func (s *serviceSet) get() map[string]int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.services) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(s.services))
+	for k, v := range s.services {
+		out[k] = v
+	}
+	return out
+}
+
+// handleServices applies a MethodSetServices notification. A malformed payload
+// is dropped; the broker re-pushes on every registration change.
+func handleServices(msg applog.StdinMessage, services *serviceSet) {
+	if msg.Method != noderec.MethodSetServices {
+		return
+	}
+	var params noderec.ServicesParams
+	if err := json.Unmarshal(msg.Params, &params); err != nil {
+		slog.Warn("ignoring malformed services push", "err", err)
+		return
+	}
+	services.set(params.Services)
+}
+
+// withServices adds the advertised service ports to a marshaled response body.
+// The body is this process's own output, so a decode failure cannot happen in
+// practice; it returns the body unchanged rather than an empty one if it does.
+func withServices(body []byte, services map[string]int) []byte {
+	if len(services) == 0 {
+		return body
+	}
+	var resp NodeInfoResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return body
+	}
+	resp.Services = services
+	out, err := json.Marshal(resp)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 // detectGPUs lives in gpu_windows.go (DXGI), gpu_linux.go (nvidia-smi with a
@@ -408,8 +481,9 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	services := &serviceSet{}
 	mux.HandleFunc("/v1/node-info", nodeInfoHandler(mesh, func() []byte {
-		return buildResponse(gpus, cpu, memTotal, collector.Snapshot(), hostUUID, clusterPrincipal())
+		return withServices(buildResponse(gpus, cpu, memTotal, collector.Snapshot(), hostUUID, clusterPrincipal()), services.get())
 	}))
 
 	// Listener layout (set up below depending on flags). Exactly one of the two
@@ -549,6 +623,7 @@ func main() {
 
 	go applog.StdinRPC(notifier, func(msg applog.StdinMessage) {
 		handleClusterIdentity(msg, identity)
+		handleServices(msg, services)
 	}, func() {
 		log.Print("stdin closed, shutting down")
 		cancel()

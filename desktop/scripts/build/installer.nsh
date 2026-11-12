@@ -140,29 +140,43 @@
   pairNoLeftover:
 !macroend
 
-; Rules use `profile=any remoteip=localsubnet` (NOT profile=private,domain).
+; TCP rules use `profile=any remoteip=${PAIR_PEER_REMOTEIP}` (NOT
+; profile=private,domain): the local subnet plus the private and VPN address
+; ranges (RFC 1918, carrier-grade NAT 100.64/10 used by Tailscale and similar,
+; IPv6 unique-local). `localsubnet` alone dropped every peer reached through a
+; routed VPN (OpenVPN, WireGuard) or from another subnet of the same site, whose
+; source address is not on this machine's link. Public internet addresses stay
+; blocked. Cluster calls are mTLS pinned to the peer's certificate, so the wider
+; scope admits no one the cluster has not paired there; node-info and the
+; inference ports answer whoever reaches them, as they always did on the local
+; link, now including private addresses routed beyond it. The mDNS (UDP 5353) rules keep `localsubnet`: multicast never crosses a
+; router, so a wider scope there would open the port for nothing.
+;
+; Original rationale for profile=any:
 ; A LAN-discovery product must work even when Windows has classified the home
 ; network as Public (common on laptops / when the user declined network
 ; discovery) — private,domain-scoped rules silently don't apply on a Public
 ; network, so inbound TCP 14318 (node-info) is dropped and peers can discover
 ; the node over mDNS but never complete the node-info handshake (no metrics,
-; missing from "Available nodes"). Scoping to localsubnet keeps the ports
-; closed to anything off the local link, so covering all profiles does not
-; expose the node on untrusted public networks.
+; missing from "Available nodes"). The address scope above keeps the ports
+; closed to the public internet, so covering all profiles does not expose the
+; node to it.
 ;
 ; The rule names keep the "Personal AI Router" prefix even though the product is
 ; shown as NVIDIA PAIR: pairRemoveFirewallRules, including the copy inside every
 ; already-installed uninstaller, deletes rules by exact name. Renaming them would
 ; leave the old allow rules behind on upgraded machines.
+!define PAIR_PEER_REMOTEIP "localsubnet,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,fc00::/7"
+
 !macro pairAddFirewallRules
   DetailPrint "Adding NVIDIA PAIR firewall rules..."
-  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Engine Proxy" dir=in action=allow program="$INSTDIR\resources\cli-bin\nvpair-proxy.exe" enable=yes profile=any remoteip=localsubnet'
-  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Node Info" dir=in action=allow program="$INSTDIR\resources\cli-bin\nvpair-node-info.exe" enable=yes profile=any remoteip=localsubnet'
-  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Node Scanner" dir=in action=allow program="$INSTDIR\resources\cli-bin\nvpair-node-scanner.exe" enable=yes profile=any remoteip=localsubnet'
-  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Workload Manager" dir=in action=allow program="$INSTDIR\resources\cli-bin\nvpair-workload-manager.exe" enable=yes profile=any remoteip=localsubnet'
-  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Errors" dir=in action=allow program="$INSTDIR\resources\cli-bin\nvpair-errors.exe" enable=yes profile=any remoteip=localsubnet'
-  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Cluster Manager" dir=in action=allow program="$INSTDIR\resources\cli-bin\nvpair-cluster-manager.exe" enable=yes profile=any remoteip=localsubnet'
-  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Engine Manager" dir=in action=allow program="$INSTDIR\resources\cli-bin\nvpair-engine-manager.exe" enable=yes profile=any remoteip=localsubnet'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Engine Proxy" dir=in action=allow program="$INSTDIR\resources\cli-bin\nvpair-proxy.exe" enable=yes profile=any remoteip=${PAIR_PEER_REMOTEIP}'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Node Info" dir=in action=allow program="$INSTDIR\resources\cli-bin\nvpair-node-info.exe" enable=yes profile=any remoteip=${PAIR_PEER_REMOTEIP}'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Node Scanner" dir=in action=allow program="$INSTDIR\resources\cli-bin\nvpair-node-scanner.exe" enable=yes profile=any remoteip=${PAIR_PEER_REMOTEIP}'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Workload Manager" dir=in action=allow program="$INSTDIR\resources\cli-bin\nvpair-workload-manager.exe" enable=yes profile=any remoteip=${PAIR_PEER_REMOTEIP}'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Errors" dir=in action=allow program="$INSTDIR\resources\cli-bin\nvpair-errors.exe" enable=yes profile=any remoteip=${PAIR_PEER_REMOTEIP}'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Cluster Manager" dir=in action=allow program="$INSTDIR\resources\cli-bin\nvpair-cluster-manager.exe" enable=yes profile=any remoteip=${PAIR_PEER_REMOTEIP}'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Engine Manager" dir=in action=allow program="$INSTDIR\resources\cli-bin\nvpair-engine-manager.exe" enable=yes profile=any remoteip=${PAIR_PEER_REMOTEIP}'
   ; No mDNS rule for nvpair-proxy: it opens no UDP socket. Its routing targets
   ; arrive over the broker's discovery relay, and zeroconf/miekg are indirect
   ; dependencies it never browses with. The pre-unification ollama-proxy did
@@ -172,9 +186,9 @@
   nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router mDNS Node Scanner (UDP 5353)" dir=in action=allow protocol=UDP localport=5353 program="$INSTDIR\resources\cli-bin\nvpair-node-scanner.exe" enable=yes profile=any remoteip=localsubnet'
   nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router mDNS Workload Manager (UDP 5353)" dir=in action=allow protocol=UDP localport=5353 program="$INSTDIR\resources\cli-bin\nvpair-workload-manager.exe" enable=yes profile=any remoteip=localsubnet'
   nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router mDNS Errors (UDP 5353)" dir=in action=allow protocol=UDP localport=5353 program="$INSTDIR\resources\cli-bin\nvpair-errors.exe" enable=yes profile=any remoteip=localsubnet'
-  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Workload Manager (TCP 14320)" dir=in action=allow protocol=TCP localport=14320 program="$INSTDIR\resources\cli-bin\nvpair-workload-manager.exe" enable=yes profile=any remoteip=localsubnet'
-  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Cluster Manager (TCP 14321)" dir=in action=allow protocol=TCP localport=14321 program="$INSTDIR\resources\cli-bin\nvpair-cluster-manager.exe" enable=yes profile=any remoteip=localsubnet'
-  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Engine Manager (TCP 14322)" dir=in action=allow protocol=TCP localport=14322 program="$INSTDIR\resources\cli-bin\nvpair-engine-manager.exe" enable=yes profile=any remoteip=localsubnet'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Workload Manager (TCP 14320)" dir=in action=allow protocol=TCP localport=14320 program="$INSTDIR\resources\cli-bin\nvpair-workload-manager.exe" enable=yes profile=any remoteip=${PAIR_PEER_REMOTEIP}'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Cluster Manager (TCP 14321)" dir=in action=allow protocol=TCP localport=14321 program="$INSTDIR\resources\cli-bin\nvpair-cluster-manager.exe" enable=yes profile=any remoteip=${PAIR_PEER_REMOTEIP}'
+  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Personal AI Router Engine Manager (TCP 14322)" dir=in action=allow protocol=TCP localport=14322 program="$INSTDIR\resources\cli-bin\nvpair-engine-manager.exe" enable=yes profile=any remoteip=${PAIR_PEER_REMOTEIP}'
 !macroend
 
 !macro pairRemoveFirewallRules

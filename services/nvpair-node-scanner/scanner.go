@@ -50,6 +50,11 @@ type NodeInfoResponse struct {
 	// membership, while a node reporting "" is asserting it has none. Reading
 	// absent as unclustered would mark a clustered peer invitable.
 	ClusterUUID *string `json:"clusterUuid"`
+	// Services is the node's advertised service ports, the same map its
+	// _nvpair-node record carries. Present on nodes new enough to report it;
+	// the stored-member fallback (stored_members.go) needs it to rebuild the
+	// record of a peer whose mDNS announcement never reaches this host.
+	Services map[string]int `json:"services,omitempty"`
 }
 
 type ReadyParams struct {
