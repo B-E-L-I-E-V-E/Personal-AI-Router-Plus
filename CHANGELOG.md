@@ -13,6 +13,13 @@ release workflow, with macOS builds signed and notarized; the app updates from
 those releases. A build made locally from source is unsigned unless built with
 `PAIR_MAC_SIGN=1`, and updates only once a release exists.
 
+## 1.2.6 — Pause, stop and resume a node (#11)
+
+- Each node card has **Pause**, **Resume** and **Stop**. A paused node finishes the requests it is running and takes no new ones; a stopped node also cancels what it is running. Resume brings it back.
+- New requests go to another node that can serve them, or are refused with `503` when none can. A session on the node moves to another node on its next turn.
+- Any member of a cluster can pause, stop or resume any other member. Other nodes stop sending work to a paused node at once.
+- The state survives a restart, and is available on `GET`/`PUT /pair/v1/node/state`.
+
 ## 1.2.5 — Look up a model's missing facts on its web page (#10)
 
 - About this model… has a Look up on the web button when the engine left something out (description, context window, download size, mixture of experts). PAIR reads the model's own pages with a small model on this computer's Ollama (qwen3.5:4b unless you name another) and shows what it found in its own section, labelled with the page and the model that read it. What the engine reports always wins.
