@@ -91,7 +91,7 @@ func TestLiveOllama_PerformanceFiguresAndBenchmark(t *testing.T) {
 	t.Run("benchmark", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(f.handlePlain))
 		defer srv.Close()
-		run, err := p.perf.beginRun(tc.profile.Name, model)
+		run, err := p.perf.beginRun(tc.profile.Name, model, "")
 		if err != nil {
 			t.Fatal(err)
 		}

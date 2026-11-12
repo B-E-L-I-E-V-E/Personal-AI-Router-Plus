@@ -183,8 +183,22 @@ everything happens on that node.
   the plan from here.
 - **Remove plan** removes it on that node and lifts the limit there.
 
-A node on PAIR Plus 1.3.0 or older offers no **Context & sessions…** for its
-models from other nodes; update it first.
+When this machine cannot reach the other node's planner, **Context &
+sessions…** says why instead of offering the sliders, with **Try again**. Two
+things are needed:
+
+- **PAIR Plus 1.3.1 or later** on that node.
+- **Its firewall open to this machine** on the engine ports PAIR's cluster link
+  uses: 11434 (Ollama), 1234 (LM Studio) and 8080 (llama.cpp), besides
+  14318–14323. On Windows, from an Administrator Command Prompt, for a home
+  network of `192.168.1.x`:
+
+  ```bat
+  netsh advfirewall firewall add rule name="PAIR engines" dir=in action=allow protocol=TCP localport=11434,1234,8080 remoteip=192.168.1.0/24
+  ```
+
+Pausing, stopping, **About this model…** and running a benchmark on that node
+use the same link.
 
 ![A model row on the Overview with its summary: 4 sessions, 40,960 per session, 8,192 response, 32,768 post.](assets/onboarding/sessions/07-model-row-summary.png)
 
@@ -224,7 +238,7 @@ As you drag, the memory bars show what the settings need:
 
 | Bar | What it adds up |
 | --- | --- |
-| GPU memory | The model's weights on the GPU, sessions × one session's context, and the reserve |
+| GPU memory | The model's weights in memory (on the GPU), sessions × one session's context, and the reserve |
 | System memory | Expert weights kept there (see below), and a quarter of it (at least 4 GB) kept free for the system |
 
 ![The lower half of the dialog: the sessions-at-once and keep-free sliders, the cache precision buttons, and the memory bar showing 124.4 GB of 128 GB for 21 sessions of 40,960 tokens.](assets/onboarding/sessions/03-sessions-and-memory.png)
@@ -272,11 +286,46 @@ For example, two 32 GB GPUs with an 11 GB model leave about 46 GB for context.
 A model that needs 192 KB per token fits 1 session of its full 128K window
 (3 with an 8-bit cache), or 7 sessions if you lower the window to 32K.
 
-PAIR reads the context cost from the model's architecture (layers, key/value
-heads and head size), counting only the layers whose memory grows with the
-window. For a model the engine does not describe, such as MLX models in
-Ollama, it measures a loaded copy instead, or asks you for the model's size
-and its cost per token.
+#### The Model's Size and Context Cost
+
+The plan rests on two figures about the model, each with a slider that snaps
+to round values and an exact field beside it. Both start at what the model
+reports; move the slider or type a value to override it, and the plan uses
+yours. **Use the model's** puts it back. Overrides are not saved with the plan.
+
+**Model weights in memory** is the memory the weights take once loaded: in
+GPU memory, and in system memory for any part kept there. It is not the
+download, though the two are often close. The dialog shows each size it knows
+and says which one the plan uses:
+
+| Size | What it is | Where PAIR reads it |
+| --- | --- | --- |
+| Download size | The model on disk | Ollama's model list (`/api/tags`), LM Studio's model list, or the GGUF files added up for llama.cpp |
+| In memory when loaded | The model's weight tensors added up, which is what they occupy once loaded: quantized GGUF weights load as stored | The tensor table, from Ollama's `/api/show` or the GGUF file |
+| Loaded now | Everything a copy loaded in Ollama takes right now, the part on the GPU and its context: weights, context cache and working buffers together, so more than the weights | Ollama's `/api/ps` |
+
+The plan uses the in-memory size when the tensor table gives it. When it
+does not, as for MLX and other safetensors models, the plan uses the
+download size as an estimate and says so. Quantized weights load at about
+their download size; a 4B MLX model on Ollama took 4.1 GB loaded with a
+4,096-token context against a 4.0 GB download. When the download holds more
+than a tenth beyond the weight tensors, such as a vision projector that loads
+too, the plan counts the download size.
+
+Sizes are shown in binary units: 1 GB is 1024³ bytes. Ollama's own list
+uses 1000³, so it shows a larger number for the same model; the 4B model
+above is 3.7 GB here and 4.0 GB in `ollama list`.
+
+**Context cache per token** is the memory each token of a session's
+context keeps for its keys and values. PAIR computes it from the model's
+architecture (attention layers × key/value heads × head size), counting only
+the layers whose memory grows with the window, at full precision (f16). For
+a model the engine does not describe, such as MLX models in Ollama, it
+measures a loaded copy instead, at the engine's current cache precision, or
+asks you for it. Under the slider the dialog shows what the plan counts at
+the cache precision you chose, and what one session of the window needs.
+
+![The model figures in the Context & sessions dialog for qwen3.5:4b: the model weights in memory slider at 3.7 GB with the download size from Ollama's model list, and the context cache per token slider.](assets/onboarding/sessions/06-model-size-and-cost.png)
 
 **Save and apply now** restarts the engine with matching settings and then
 limits PAIR's traffic to the plan:

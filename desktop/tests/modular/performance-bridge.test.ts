@@ -109,6 +109,30 @@ describe('performance bridge', () => {
         expect(run.state).toBe('running')
     })
 
+    it('runs a benchmark on a chosen node and reads the node back', async () => {
+        callProxy.mockResolvedValueOnce({
+            run: {
+                id: 'bench-3',
+                engine: 'ollama',
+                model: 'qwen3:0.6b',
+                nodeId: 'node-ultron',
+                state: 'running',
+                steps: []
+            }
+        })
+        const run = await runBenchmark({
+            engine: 'ollama',
+            model: 'qwen3:0.6b',
+            nodeId: 'node-ultron'
+        })
+        expect(callProxy).toHaveBeenCalledWith('ollama', 'performance/benchmark', {
+            engine: 'ollama',
+            model: 'qwen3:0.6b',
+            nodeId: 'node-ultron'
+        })
+        expect(run.nodeId).toBe('node-ultron')
+    })
+
     it('refuses an unknown engine without calling the proxy', async () => {
         await expect(runBenchmark({ engine: 'other', model: 'x' })).rejects.toThrow()
         expect(callProxy).not.toHaveBeenCalled()

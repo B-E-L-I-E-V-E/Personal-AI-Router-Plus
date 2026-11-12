@@ -47,7 +47,12 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
     const peerPlanner = useCapacityPlannerStore(s => (isSelf ? undefined : s.peerPlanner[nodeId]))
     const planner = isSelf ? ownPlanner : (peerPlanner ?? null)
     const capacity = isSelf ? ownCapacity : (peerCapacity ?? null)
-    const canPlan = isSelf || peerPlanner !== undefined
+    const peerPlannerError = useCapacityPlannerStore(s =>
+        isSelf ? undefined : s.peerPlannerError[nodeId]
+    )
+    // A peer whose planner did not answer still offers the dialog, which says
+    // why it cannot plan that node.
+    const canPlan = isSelf || peerPlanner !== undefined || peerPlannerError !== undefined
     const refreshPlanner = useCapacityPlannerStore(s => s.refresh)
     const plannerEngine = engineManagerName(backend.type)
     // This node's capacity and plans come from its own proxy. Peers' rows show
@@ -262,18 +267,23 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
                     {models.length > 0 && (
                         <Stack gap="1">
                             {models.map(model => {
-                                const lines = canPlan
-                                    ? modelConfigLines(
-                                          findCapacity(capacity, plannerEngine, model.name),
-                                          findPlan(planner, plannerEngine, model.name),
-                                          planner?.autoReload ?? true
-                                      )
-                                    : {
-                                          summary:
-                                              capacitySummary(
-                                                  findCapacity(capacity, plannerEngine, model.name)
-                                              ) ?? undefined
-                                      }
+                                const lines =
+                                    isSelf || peerPlanner
+                                        ? modelConfigLines(
+                                              findCapacity(capacity, plannerEngine, model.name),
+                                              findPlan(planner, plannerEngine, model.name),
+                                              planner?.autoReload ?? true
+                                          )
+                                        : {
+                                              summary:
+                                                  capacitySummary(
+                                                      findCapacity(
+                                                          capacity,
+                                                          plannerEngine,
+                                                          model.name
+                                                      )
+                                                  ) ?? undefined
+                                          }
                                 return (
                                     <ModelRow
                                         key={model.name}

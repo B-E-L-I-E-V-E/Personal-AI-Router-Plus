@@ -5,7 +5,6 @@ import { useEffect, useMemo, useState } from 'react'
 import {
     Button,
     Flex,
-    FormField,
     Slider,
     Stack,
     Text,
@@ -22,17 +21,26 @@ import {
     cpuExpertBytes,
     expertLayersOnCpu,
     expertSplitStops,
+    kvStops,
+    labelledStops,
     MAX_SESSIONS,
     memoryUse,
     MIN_WINDOW_TOKENS,
     nearestStop,
     parameterLabel,
+    parseAmount,
+    perTokenLabel,
     replyBudget,
     replyStops,
+    sessionsFit,
     sessionsSliderMax,
     shortTokens,
-    windowStops
+    sizeLabel,
+    weightStops,
+    windowStops,
+    withStop
 } from './capacity-sliders'
+import { kvFact, kvUsed, loadedFact, sizeFacts, weightsUsed } from './model-size'
 import TextFitDetails from './TextFitDetails'
 
 const GB = 1024 ** 3
@@ -45,23 +53,11 @@ function tokens(n: number): string {
     return n > 0 ? n.toLocaleString() : '—'
 }
 
-function decimal(text: string): number | null {
-    const trimmed = text.trim()
-    if (!/^\d+(\.\d+)?$/.test(trimmed)) return null
-    return Number(trimmed)
-}
-
 const CACHE_TYPES: { id: KvCacheType; label: string }[] = [
     { id: 'f16', label: 'Full (f16)' },
     { id: 'q8_0', label: '8-bit' },
     { id: 'q4_0', label: '4-bit' }
 ]
-
-const SOURCE_TEXT: Record<string, string> = {
-    metadata: 'Context cost computed from the model’s architecture.',
-    measured: 'Context cost measured from the loaded model.',
-    manual: 'Using the values you entered.'
-}
 
 /** Window used when the model does not report its maximum. */
 const FALLBACK_WINDOW = 32768
@@ -97,6 +93,113 @@ function Choice<T extends string>({
 /** Turns the sliders inside red when the settings need more than the node has. */
 function SliderTone({ over, children }: { over: boolean; children: React.ReactNode }) {
     return <div className={over ? 'pair-slider-over' : undefined}>{children}</div>
+}
+
+/** The exact amount typed beside a slider, in its unit: 4.25, 112. */
+function amountText(bytes: number, unitBytes: number): string {
+    return String(Number((bytes / unitBytes).toFixed(2)))
+}
+
+/**
+ * A snapping slider for one of the model's figures, with the exact value
+ * editable beside it. Empty means the model's own value; anything set
+ * overrides it.
+ */
+function AmountSlider({
+    label,
+    modelValue,
+    value,
+    stops,
+    unit,
+    unitBytes,
+    format,
+    over,
+    onChange,
+    children
+}: {
+    label: string
+    /** What the model reports; 0 when unknown. */
+    modelValue: number
+    /** The override; null for the model's value. */
+    value: number | null
+    stops: number[]
+    unit: string
+    unitBytes: number
+    format: (bytes: number) => string
+    over: boolean
+    onChange: (bytes: number | null) => void
+    children: React.ReactNode
+}) {
+    const [text, setText] = useState(value === null ? '' : amountText(value, unitBytes))
+    const current = value ?? modelValue
+    const all = useMemo(() => withStop(stops, current), [stops, current])
+    const index = nearestStop(all, current > 0 ? current : all[Math.floor(all.length / 2)])
+    const ticks = useMemo(() => labelledStops(all, modelValue), [all, modelValue])
+    const typedInvalid = text.trim() !== '' && parseAmount(text, unitBytes) === null
+    return (
+        <Stack gap="1">
+            <Flex justify="between" gap="3">
+                <Text kind="body/semibold/sm">{label}</Text>
+                <Text kind="body/semibold/sm">
+                    {current > 0 ? format(current) : 'not reported — set it'}
+                    {value !== null && modelValue > 0 ? ' (yours)' : ''}
+                </Text>
+            </Flex>
+            <Flex align="center" gap="3">
+                <div style={{ flex: 1, minWidth: 0 }}>
+                    <SliderTone over={over}>
+                        <Slider
+                            min={0}
+                            max={all.length - 1}
+                            step={1}
+                            value={index}
+                            onValueChange={i => {
+                                setText(amountText(all[i], unitBytes))
+                                onChange(all[i])
+                            }}
+                            customSteps={ticks}
+                            stepFormatFn={i => format(all[i] ?? 0)}
+                            attributes={{ SliderInput: { 'aria-label': label } }}
+                        />
+                    </SliderTone>
+                </div>
+                <div style={{ width: 112 }}>
+                    <TextInput
+                        value={text}
+                        placeholder={modelValue > 0 ? amountText(modelValue, unitBytes) : ''}
+                        slotEnd={unit}
+                        aria-label={`${label}, exact (${unit})`}
+                        onValueChange={t => {
+                            setText(t)
+                            if (t.trim() === '') return onChange(null)
+                            const bytes = parseAmount(t, unitBytes)
+                            if (bytes !== null) onChange(bytes)
+                        }}
+                    />
+                </div>
+            </Flex>
+            {typedInvalid && (
+                <Text kind="body/regular/sm" style={DANGER_TEXT}>
+                    Enter a number of {unit}.
+                </Text>
+            )}
+            {value !== null && modelValue > 0 && (
+                <div>
+                    <Button
+                        size="small"
+                        kind="tertiary"
+                        onClick={() => {
+                            setText('')
+                            onChange(null)
+                        }}
+                    >
+                        Use the model’s {format(modelValue)}
+                    </Button>
+                </div>
+            )}
+            {children}
+        </Stack>
+    )
 }
 
 /** One labelled memory bar: what the settings need against what there is. */
@@ -194,17 +297,13 @@ export default function CapacityPlanner({
     const [cpuLayers, setCpuLayers] = useState(saved?.cpuExpertLayers ?? 0)
     // 0 until chosen: the default budget for the window.
     const [reply, setReply] = useState(saved?.replyTokens ?? 0)
-    const [weightsGb, setWeightsGb] = useState('')
-    const [kbPerToken, setKbPerToken] = useState('')
+    // Overrides of what the model reports, in bytes; null uses the model's.
+    const [weightsOverride, setWeightsOverride] = useState<number | null>(null)
+    const [kvOverride, setKvOverride] = useState<number | null>(null)
     const [plan, setPlan] = useState<CapacityPlan | null>(null)
     const [busy, setBusy] = useState(false)
 
-    const weightsN = weightsGb.trim() === '' ? 0 : decimal(weightsGb)
-    const kbN = kbPerToken.trim() === '' ? 0 : decimal(kbPerToken)
-    const manualValid = weightsN !== null && kbN !== null
-
     useEffect(() => {
-        if (!manualValid) return
         const timer = setTimeout(() => {
             window.pairApi.sessions
                 .plan({
@@ -215,8 +314,8 @@ export default function CapacityPlanner({
                     reservePercent: reserve || undefined,
                     windowTokens: windowTokens ?? undefined,
                     cpuExpertLayers: cpuLayers || undefined,
-                    weightsBytes: weightsN ? Math.round(weightsN * GB) : undefined,
-                    kvBytesPerToken: kbN ? Math.round(kbN * 1024) : undefined
+                    weightsBytes: weightsOverride ?? undefined,
+                    kvBytesPerToken: kvOverride ?? undefined
                 })
                 .then(result => {
                     // A model that does not report its maximum needs a window
@@ -242,9 +341,8 @@ export default function CapacityPlanner({
         cacheType,
         reserve,
         cpuLayers,
-        weightsN,
-        kbN,
-        manualValid,
+        weightsOverride,
+        kvOverride,
         sessionsTouched,
         onError
     ])
@@ -259,9 +357,12 @@ export default function CapacityPlanner({
     const replyIndex = nearestStop(replyOptions, replyBudget(windowNow, reply))
     const replyNow = replyOptions[replyIndex]
     const messageTokens = windowNow - replyNow
-    const fit = plan && !plan.error ? plan.sessions : 0
+    const known = sessionsFit(plan)
     // Reaches past what fits, and never below a saved count.
-    const sessionsMax = Math.max(sessionsSliderMax(fit), Math.min(sessions ?? 0, MAX_SESSIONS))
+    const sessionsMax = Math.max(
+        sessionsSliderMax(known ?? 0),
+        Math.min(sessions ?? 0, MAX_SESSIONS)
+    )
     const chosen = Math.min(sessions ?? 1, sessionsMax)
     const expertStops = useMemo(
         () => expertSplitStops(plan?.spec.expertLayerBytes ?? []),
@@ -281,7 +382,13 @@ export default function CapacityPlanner({
         use !== null &&
         chosen >= 1 &&
         plan.windowTokens >= MIN_WINDOW_TOKENS
-    const needsManual = plan?.error && /unknown/.test(plan.error)
+    const modelWeights = plan?.spec.weightsBytes ?? 0
+    const modelKv = plan?.spec.kvBytesPerToken ?? 0
+    const sizeStops = useMemo(
+        () => weightStops(modelWeights, plan?.totalBytes ?? 0),
+        [modelWeights, plan?.totalBytes]
+    )
+    const costStops = useMemo(() => kvStops(modelKv), [modelKv])
 
     const save = (apply: boolean) => {
         if (!plan || !usable) return
@@ -364,31 +471,41 @@ export default function CapacityPlanner({
             <Stack gap="1">
                 <Flex justify="between" gap="3">
                     <Text kind="body/semibold/sm">Sessions at once</Text>
-                    <Text
-                        kind="body/semibold/sm"
-                        style={chosen > fit && plan && !plan.error ? DANGER_TEXT : undefined}
-                    >
-                        {chosen} {plan && !plan.error ? `(${fit} fit)` : ''}
-                    </Text>
+                    {known !== null && (
+                        <Text
+                            kind="body/semibold/sm"
+                            style={chosen > known ? DANGER_TEXT : undefined}
+                        >
+                            {chosen} ({known} fit)
+                        </Text>
+                    )}
                 </Flex>
-                <SliderTone over={over}>
-                    <Slider
-                        min={1}
-                        max={sessionsMax}
-                        step={1}
-                        value={chosen}
-                        onValueChange={n => {
-                            setSessions(n)
-                            setSessionsTouched(true)
-                        }}
-                        customSteps={[
-                            1,
-                            ...(fit > 1 && fit < sessionsMax ? [fit] : []),
-                            sessionsMax
-                        ]}
-                        attributes={{ SliderInput: { 'aria-label': 'Sessions at once' } }}
-                    />
-                </SliderTone>
+                {known === null ? (
+                    <Text kind="body/regular/sm" className="text-subtle-color">
+                        {plan
+                            ? 'Chosen once PAIR can size this model; see below for what it needs.'
+                            : 'Sizing this model…'}
+                    </Text>
+                ) : (
+                    <SliderTone over={over}>
+                        <Slider
+                            min={1}
+                            max={sessionsMax}
+                            step={1}
+                            value={chosen}
+                            onValueChange={n => {
+                                setSessions(n)
+                                setSessionsTouched(true)
+                            }}
+                            customSteps={[
+                                1,
+                                ...(known > 1 && known < sessionsMax ? [known] : []),
+                                sessionsMax
+                            ]}
+                            attributes={{ SliderInput: { 'aria-label': 'Sessions at once' } }}
+                        />
+                    </SliderTone>
+                )}
             </Stack>
 
             <Stack gap="1">
@@ -416,6 +533,58 @@ export default function CapacityPlanner({
                 </Text>
                 <Choice options={CACHE_TYPES} value={cacheType} onChange={setCacheType} />
             </Stack>
+
+            {plan && (
+                <AmountSlider
+                    label="Model weights in memory"
+                    modelValue={modelWeights}
+                    value={weightsOverride}
+                    stops={sizeStops}
+                    unit="GB"
+                    unitBytes={GB}
+                    format={sizeLabel}
+                    over={over}
+                    onChange={setWeightsOverride}
+                >
+                    <Text kind="body/regular/sm" className="text-subtle-color">
+                        The memory the weights take once loaded (in GPU memory, and in system memory
+                        for any part kept there), not the download.{' '}
+                        {sizeFacts(plan.spec).join(' · ')}.
+                    </Text>
+                    {loadedFact(plan.spec) && (
+                        <Text kind="body/regular/sm" className="text-subtle-color">
+                            {loadedFact(plan.spec)}
+                        </Text>
+                    )}
+                    <Text kind="body/regular/sm" className="text-subtle-color">
+                        {weightsUsed(plan)}
+                    </Text>
+                </AmountSlider>
+            )}
+
+            {plan && (
+                <AmountSlider
+                    label="Context cache per token"
+                    modelValue={modelKv}
+                    value={kvOverride}
+                    stops={costStops}
+                    unit="KB"
+                    unitBytes={1024}
+                    format={perTokenLabel}
+                    over={over}
+                    onChange={setKvOverride}
+                >
+                    <Text kind="body/regular/sm" className="text-subtle-color">
+                        Every token a session holds keeps its keys and values in memory; this is
+                        that cost for one token. {kvFact(plan)}
+                    </Text>
+                    {kvUsed(plan) && (
+                        <Text kind="body/regular/sm" className="text-subtle-color">
+                            {kvUsed(plan)}
+                        </Text>
+                    )}
+                </AmountSlider>
+            )}
 
             {plan && plan.spec.expertCount > 0 && (
                 <Text kind="body/regular/sm" className="text-subtle-color">
@@ -462,22 +631,6 @@ export default function CapacityPlanner({
                 </Text>
             )}
 
-            {(needsManual || weightsGb || kbPerToken) && (
-                <Flex align="end" gap="3" wrap="wrap">
-                    <FormField slotLabel="Model size (GB)">
-                        <TextInput value={weightsGb} onValueChange={setWeightsGb} />
-                    </FormField>
-                    <FormField slotLabel="Context cost (KB per token)">
-                        <TextInput value={kbPerToken} onValueChange={setKbPerToken} />
-                    </FormField>
-                </Flex>
-            )}
-            {!manualValid && (
-                <Text kind="body/regular/sm" className="text-subtle-color">
-                    Enter numbers only.
-                </Text>
-            )}
-
             {plan?.error && (
                 <Text kind="body/regular/sm" className="text-subtle-color">
                     {plan.error}
@@ -502,7 +655,7 @@ export default function CapacityPlanner({
                         total={use.gpuTotal}
                         over={use.gpuOver}
                         detail={[
-                            `model ${gb(plan.weightsBytes - expertsInRam)}`,
+                            `model weights ${gb(plan.weightsBytes - expertsInRam)}`,
                             plan.otherModelsBytes > 0
                                 ? `other models ${gb(plan.otherModelsBytes)}`
                                 : '',
@@ -526,16 +679,15 @@ export default function CapacityPlanner({
                             ].join(' · ')}
                         />
                     )}
-                    <Text kind="body/regular/sm" className="text-subtle-color">
-                        {SOURCE_TEXT[plan.spec.source] ?? ''}
-                        {plan.spec.maxContextTokens > 0
-                            ? ` The model supports up to ${tokens(plan.spec.maxContextTokens)} tokens${
-                                  plan.spec.contextSource === 'web'
-                                      ? `, according to its page (read by ${plan.spec.contextReader})`
-                                      : ''
-                              }.`
-                            : ''}
-                    </Text>
+                    {plan.spec.maxContextTokens > 0 && (
+                        <Text kind="body/regular/sm" className="text-subtle-color">
+                            The model supports up to {tokens(plan.spec.maxContextTokens)} tokens
+                            {plan.spec.contextSource === 'web'
+                                ? `, according to its page (read by ${plan.spec.contextReader})`
+                                : ''}
+                            .
+                        </Text>
+                    )}
                     {[...plan.spec.notes, ...plan.warnings].map(w => (
                         <Text key={w} kind="body/regular/sm" className="text-subtle-color">
                             {w}

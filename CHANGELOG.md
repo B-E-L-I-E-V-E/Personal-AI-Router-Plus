@@ -13,6 +13,24 @@ release workflow, with macOS builds signed and notarized; the app updates from
 those releases. A build made locally from source is unsigned unless built with
 `PAIR_MAC_SIGN=1`, and updates only once a release exists.
 
+## 1.3.4 — Sliders for the planner's model size and context cost, with exact size labels (#19)
+
+- **Context & sessions…** has two new sliders, **Model weights in memory** and **Context cache per token**. They snap to round values, have an exact field beside them, and are always shown. Both start at what the model reports, and moving one overrides it for the plan. **Use the model's** resets it. They replace the two text fields that only appeared when a value was unknown.
+- The dialog says what the size means. The plan counts the memory the weights take once loaded, not the download. It shows the download size and where it was read (Ollama's or LM Studio's model list, or the GGUF files). It shows the in-memory size (the weight tensors added up) and, for a model Ollama has loaded, what that copy takes now (weights, context cache and buffers together). It also says which size the plan uses. For MLX and safetensors models the download size is used as an estimate, and the dialog says so.
+- The per-token figure says where it came from (the architecture at f16, a measured loaded copy, or your value) and what the plan counts at the chosen cache precision.
+- `capacity/plan` adds `spec.downloadBytes`, `downloadSource`, `tensorBytes`, `weightsSource`, `loadedBytes`, `loadedVramBytes` and `loadedContextTokens`, plus the result's `weightsSource` and `kvSource`. An override no longer changes `spec.source`.
+
+## 1.3.3 — Sessions at once no longer stops at 8 for models PAIR cannot size (#20)
+
+- In **Context & sessions…**, a model whose size or context cost PAIR does not know no longer gets a **Sessions at once** slider that stops at 8. The slider appears once the model can be sized (enter its context cost, or load it so PAIR can measure it), and then reaches past what fits, in red, as before.
+- PAIR now reads LM Studio models from the folder LM Studio's settings name (`downloadsFolder` in `~/.lmstudio/settings.json`), not only `~/.lmstudio/models`, so models kept on another drive are sized without entering their cost by hand.
+
+## 1.3.2 — Run the benchmark on a chosen node (#15)
+
+- **Run benchmark** runs on the node you choose, this one or any other in the cluster. The model list shows each model on each node that has it, and **Benchmark** on a node card's model row runs on that node. Every step runs on that node, or fails if the node can't serve the model.
+- **Context & sessions…** for another node's model says why it can't plan that node: the PAIR version and firewall ports it needs. It also offers **Try again**, instead of leaving the menu item out.
+- `POST /pair/v1/performance/benchmark` and `performance/benchmark` take an optional `nodeId`, and a run reports it.
+
 ## 1.3.1 — Plan another node's Context & sessions from any cluster member (#14)
 
 - **Context & sessions…** is offered for models on other nodes, not only this one. From a laptop you can size, save, apply and remove a workstation's plan.

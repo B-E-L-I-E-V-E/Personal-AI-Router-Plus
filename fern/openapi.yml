@@ -434,6 +434,12 @@ paths:
               properties:
                 model:
                   type: string
+                nodeId:
+                  type: string
+                  description: >
+                    Run every step on this node: this one or a reachable
+                    cluster member. A step the node cannot serve fails rather
+                    than going elsewhere. Omit to let PAIR route each step.
       responses:
         "202":
           description: The run, started.
@@ -999,6 +1005,9 @@ components:
           type: string
         model:
           type: string
+        nodeId:
+          type: string
+          description: The node chosen to serve every step; absent when PAIR routed each step.
         state:
           type: string
           enum: [running, done, failed]

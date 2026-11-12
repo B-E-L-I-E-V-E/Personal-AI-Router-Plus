@@ -374,10 +374,16 @@ function BenchmarkRunCard({
                         <Badge color="gray" kind="outline">
                             {engineLabel(run.engine)}
                         </Badge>
-                        {firstResult && (
+                        {run.nodeId ? (
                             <Text kind="body/regular/sm" className="text-subtle-color">
-                                {nodeName(firstResult.nodeId, firstResult.local)}
+                                on {nodeName(run.nodeId, firstResult?.local ?? false)}
                             </Text>
+                        ) : (
+                            firstResult && (
+                                <Text kind="body/regular/sm" className="text-subtle-color">
+                                    {nodeName(firstResult.nodeId, firstResult.local)}
+                                </Text>
+                            )
                         )}
                         <Text kind="body/regular/sm" className="text-subtle-color">
                             {new Date(run.startedAt).toLocaleString()}
@@ -459,15 +465,18 @@ function BenchmarkRunCard({
 interface BenchmarkTarget {
     engine: string
     model: string
+    /** The node every step runs on. */
+    nodeId: string
 }
 
 function targetKey(t: BenchmarkTarget): string {
-    return `${t.engine}:${t.model}`
+    return `${t.nodeId}:${t.engine}:${t.model}`
 }
 
 function BenchmarkCard({
     report,
     targets,
+    selfId,
     running,
     starting,
     onRun,
@@ -475,15 +484,19 @@ function BenchmarkCard({
 }: {
     report: PerformanceReport
     targets: BenchmarkTarget[]
+    selfId: string | null
     running: boolean
     starting: boolean
     onRun: (target: BenchmarkTarget) => void
     nodeName: (nodeId: string, local: boolean) => string
 }) {
     const [selected, setSelected] = useState<BenchmarkTarget | null>(null)
-    const target = selected ?? targets[0] ?? null
+    const target =
+        (selected && targets.find(t => targetKey(t) === targetKey(selected))) ?? targets[0] ?? null
+    const label = (t: BenchmarkTarget) =>
+        `${t.model} · ${engineLabel(t.engine)} · ${nodeName(t.nodeId, t.nodeId === selfId)}`
     const items: DropdownEntry[] = targets.map(t => ({
-        children: `${t.model} · ${engineLabel(t.engine)}`,
+        children: label(t),
         onSelect: () => setSelected(t)
     }))
     return (
@@ -492,8 +505,12 @@ function BenchmarkCard({
             action={
                 <Flex align="center" gap="2">
                     {targets.length > 0 && (
-                        <Dropdown items={items} size="small" aria-label="Choose a model">
-                            {target ? `${target.model} · ${engineLabel(target.engine)}` : ''}
+                        <Dropdown
+                            items={items}
+                            size="small"
+                            aria-label="Choose a model and the node to run it on"
+                        >
+                            {target ? label(target) : ''}
                         </Dropdown>
                     )}
                     <Button
@@ -510,10 +527,11 @@ function BenchmarkCard({
         >
             <Text kind="body/regular/sm" className="text-subtle-color">
                 A per-model test: sends the same {report.benchmarkPrompts.length || 'fixed'}{' '}
-                requests to the chosen model through PAIR, one at a time, so models compare like for
-                like; each run shows the node that served it. It uses the model — loading it if
-                needed — and waits for other requests on this node to finish before each step. Its
-                figures are kept apart from the live ones above.
+                requests to the chosen model on the chosen node, one at a time, so models and nodes
+                compare like for like. Every step runs on that node, this one or another in the
+                cluster, or fails if it cannot serve the model. It uses the model — loading it if
+                needed — and waits for other requests routed from here to finish before each step.
+                Its figures are kept apart from the live ones above.
             </Text>
             <PromptList prompts={report.benchmarkPrompts} />
             {report.benchmarks.length === 0 ? (
@@ -598,8 +616,8 @@ export default function Performance() {
     )
     const now = useNow(grouped.some(n => n.live.length > 0))
 
-    // The benchmark is per model: anything the cluster has downloaded, or any
-    // model that has served traffic here.
+    // The benchmark is per model and node: each model a node has downloaded,
+    // or has served traffic routed from here, can be run on that node.
     const targets = useMemo(() => {
         const seen = new Map<string, BenchmarkTarget>()
         for (const list of engineModels.values()) {
@@ -607,39 +625,46 @@ export default function Performance() {
             if (!engine) continue
             for (const m of list.models) {
                 if (!m.downloaded) continue
-                const t = { engine, model: m.name }
+                const t = { engine, model: m.name, nodeId: list.nodeId }
                 seen.set(targetKey(t), t)
             }
         }
         for (const m of report?.models ?? []) {
-            const t = { engine: m.engine, model: m.model }
+            const t = { engine: m.engine, model: m.model, nodeId: m.nodeId }
             seen.set(targetKey(t), t)
         }
         // Models that have served traffic here come first, then models loaded
-        // somewhere, so the default is one already in use rather than the
-        // first name in the list, which may be large and on another node.
-        const used = new Set((report?.models ?? []).map(m => targetKey(m)))
+        // somewhere, then this node's, so the default is one already in use
+        // rather than the first name in the list.
+        const used = new Set(
+            (report?.models ?? []).map(m =>
+                targetKey({ engine: m.engine, model: m.model, nodeId: m.nodeId })
+            )
+        )
         const loaded = new Set(
             [...engineModels.values()].flatMap(list => {
                 const engine = proxyEngineName(list.engineType)
                 return engine
                     ? list.models
                           .filter(m => m.status === 'loaded')
-                          .map(m => targetKey({ engine, model: m.name }))
+                          .map(m => targetKey({ engine, model: m.name, nodeId: list.nodeId }))
                     : []
             })
         )
         const rank = (t: BenchmarkTarget) =>
-            used.has(targetKey(t)) ? 0 : loaded.has(targetKey(t)) ? 1 : 2
+            used.has(targetKey(t)) ? 0 : loaded.has(targetKey(t)) ? 1 : t.nodeId === selfId ? 2 : 3
         return [...seen.values()].sort(
-            (a, b) => rank(a) - rank(b) || a.model.localeCompare(b.model)
+            (a, b) =>
+                rank(a) - rank(b) ||
+                a.model.localeCompare(b.model) ||
+                a.nodeId.localeCompare(b.nodeId)
         )
-    }, [engineModels, report])
+    }, [engineModels, report, selfId])
 
     const runBenchmark = (target: BenchmarkTarget) => {
         setStarting(true)
         window.pairApi.performance
-            .runBenchmark(target.engine, target.model)
+            .runBenchmark(target.engine, target.model, target.nodeId)
             .then(refresh)
             .catch(err => setError(getErrorString(err) ?? 'Could not start the benchmark'))
             .finally(() => setStarting(false))
@@ -697,13 +722,16 @@ export default function Performance() {
                         }
                         now={now}
                         benchmarkDisabled={running || starting}
-                        onBenchmark={(engine, model) => runBenchmark({ engine, model })}
+                        onBenchmark={(engine, model) =>
+                            runBenchmark({ engine, model, nodeId: n.nodeId })
+                        }
                     />
                 ))}
                 {report && (
                     <BenchmarkCard
                         report={report}
                         targets={targets}
+                        selfId={selfId}
                         running={running}
                         starting={starting}
                         onRun={runBenchmark}

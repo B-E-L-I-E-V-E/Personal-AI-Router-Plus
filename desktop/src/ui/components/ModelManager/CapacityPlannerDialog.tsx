@@ -54,6 +54,9 @@ export function CapacityPlannerDialog({
     const ownPlanner = useCapacityPlannerStore(s => s.planner)
     const peerPlanner = useCapacityPlannerStore(s => (remote ? s.peerPlanner[remote] : undefined))
     const planner = remote ? (peerPlanner ?? null) : ownPlanner
+    const unreachable = useCapacityPlannerStore(s =>
+        remote && !s.peerPlanner[remote] ? s.peerPlannerError[remote] : undefined
+    )
     const setOwnPlanner = useCapacityPlannerStore(s => s.setPlanner)
     const setPeerPlanner = useCapacityPlannerStore(s => s.setPeerPlanner)
     const refreshOwn = useCapacityPlannerStore(s => s.refresh)
@@ -104,7 +107,29 @@ export function CapacityPlannerDialog({
                         {remote ? ` on ${where}` : ''}
                     </ModalHeading>
                     <Stack gap="3" className="-mt-2">
-                        {remote && !result && (
+                        {unreachable !== undefined && (
+                            <Stack gap="2">
+                                <Text kind="body/regular/sm">
+                                    PAIR here cannot reach {where}’s planner: {unreachable}.
+                                </Text>
+                                <Text kind="body/regular/sm" className="text-subtle-color">
+                                    {where} needs PAIR Plus 1.3.1 or later, and its firewall must
+                                    let this machine reach its engine ports: 11434 (Ollama), 1234
+                                    (LM Studio) and 8080 (llama.cpp), as well as 14318–14323.
+                                </Text>
+                                <Flex gap="2">
+                                    <Button
+                                        size="small"
+                                        kind="secondary"
+                                        disabled={busy}
+                                        onClick={() => run(refresh, 'Could not reach that node')}
+                                    >
+                                        Try again
+                                    </Button>
+                                </Flex>
+                            </Stack>
+                        )}
+                        {remote && unreachable === undefined && !result && (
                             <Text kind="body/regular/sm" className="text-subtle-color">
                                 Planned for {where}’s GPUs and memory, and saved on {where}.
                                 Applying restarts the engine on {where}. Reloading when idle is done
@@ -114,7 +139,7 @@ export function CapacityPlannerDialog({
                         {error && (
                             <InlineErrorBanner message={error} onClose={() => setError(null)} />
                         )}
-                        {saved && !result && (
+                        {saved && !result && unreachable === undefined && (
                             <Flex justify="between" align="center" gap="2" wrap="wrap">
                                 <Text kind="body/regular/sm">{planStatus(saved, autoReload)}</Text>
                                 <Flex gap="2">
@@ -140,7 +165,7 @@ export function CapacityPlannerDialog({
                                 </Flex>
                             </Flex>
                         )}
-                        {!result && (
+                        {!result && unreachable === undefined && (
                             <Flex align="center" gap="3">
                                 <Switch
                                     checked={autoReload}
@@ -164,7 +189,7 @@ export function CapacityPlannerDialog({
                                 </Stack>
                             </Flex>
                         )}
-                        {engine === 'ollama' && !result && (
+                        {engine === 'ollama' && !result && unreachable === undefined && (
                             <Text kind="body/regular/sm" className="text-subtle-color">
                                 Ollama uses one window and session count for every model it runs, so
                                 this plan applies to all Ollama models on {where}.
@@ -184,7 +209,7 @@ export function CapacityPlannerDialog({
                                     </Button>
                                 </Flex>
                             </Stack>
-                        ) : (
+                        ) : unreachable !== undefined ? null : (
                             <CapacityPlanner
                                 nodeId={remote}
                                 engine={engine}
