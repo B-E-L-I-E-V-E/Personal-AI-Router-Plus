@@ -92,6 +92,10 @@ type perfTracker struct {
 	base perfRecord
 
 	inThinkTag bool
+	// failed is set when the engine ended the reply with an error frame
+	// (Ollama's "prediction aborted", an OpenAI or Anthropic error event):
+	// an aborted reply is not a measurement.
+	failed bool
 
 	firstOut, lastOut     time.Time
 	firstThink, lastThink time.Time
@@ -155,6 +159,8 @@ type perfFrame struct {
 	Delta        *perfBlock      `json:"delta"`
 	ContentBlock *perfBlock      `json:"content_block"`
 	Content      json.RawMessage `json:"content"`
+	// Error is any dialect's error field or event.
+	Error json.RawMessage `json:"error"`
 
 	// Ollama timings, in nanoseconds.
 	PromptEvalDuration *int64 `json:"prompt_eval_duration"`
@@ -175,6 +181,10 @@ type perfFrame struct {
 func (t *perfTracker) observe(doc []byte) {
 	var f perfFrame
 	if json.Unmarshal(doc, &f) != nil {
+		return
+	}
+	if e := bytes.TrimSpace(f.Error); len(e) > 0 && !bytes.Equal(e, []byte("null")) {
+		t.failed = true
 		return
 	}
 	at := t.now()
@@ -373,6 +383,9 @@ func (t *perfTracker) record(end time.Time) (perfRecord, bool) {
 	r.At = end.UnixMilli()
 	r.TotalMs = *fptr(msBetween(t.start, end))
 	outChunks := t.thinkChunks + t.answerChunks
+	if t.failed {
+		return perfRecord{}, false
+	}
 	if !t.usageFound && !t.llama.found && outChunks == 0 {
 		return perfRecord{}, false
 	}

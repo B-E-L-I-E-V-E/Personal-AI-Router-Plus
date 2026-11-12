@@ -86,14 +86,15 @@ each one's next post has.
 
 ### Performance per model
 
-The **Performance** tab, with the stopwatch icon next to **Settings**, shows
-how fast each model works on each node: tokens in and out, reading and writing
-speed in tokens per second, time to first token and, for thinking models, the
-time spent reasoning before the answer. **Run benchmark** sends four fixed
-prompts through PAIR so models and nodes compare like for like. PAIR keeps only
+The **Performance** tab, with the stopwatch icon next to **Settings**, has a
+card per node: the models it is running right now, the models it has loaded,
+and for each model it has served, tokens in and out, reading and writing speed
+in tokens per second, time to first token and, for thinking models, the time
+spent reasoning before the answer. **Run benchmark** is a per-model test: four
+fixed prompts through PAIR, so models compare like for like. PAIR keeps only
 the counts and timings, never the text.
 
-![The Performance tab: speeds per model and a finished benchmark run.](docs/assets/onboarding/performance/01-performance.png)
+![The Performance tab: a node's live and per-model figures, and a finished benchmark run.](docs/assets/onboarding/performance/01-performance.png)
 
 ### Use case: a harness for distributed agent work
 

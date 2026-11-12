@@ -8,12 +8,23 @@ SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All 
 SPDX-License-Identifier: Apache-2.0
 */}
 
-PAIR Plus measures every request it routes and shows, per model and per node,
-how fast the model works. The **Performance** tab, with the stopwatch icon next
-to **Settings**, shows the figures, and a fixed benchmark lets you compare
-models and nodes like for like.
+PAIR Plus measures every request it routes and shows how fast each node works.
+The **Performance** tab, with the stopwatch icon next to **Settings**, has one
+card per node: what the node is running right now, which models it has loaded,
+and how fast each of its models has read prompts, written replies and thought.
+A fixed per-model benchmark lets you compare models like for like.
 
-![The Performance tab: one card per model and node, and a finished benchmark run](assets/onboarding/performance/01-performance.png)
+![The Performance tab: a node with its model figures, and a finished benchmark run](assets/onboarding/performance/01-performance.png)
+
+## Each node, live
+
+Every node in the cluster has a card, this node first. **Running now** lists
+the models with requests running or queued on that node, with how many, for
+how long, and the time to first token of the latest one (from when PAIR received
+it, queueing included); it updates as jobs start and finish, the same way the Overview's job
+list does, so it covers every node's work, not only this node's. **Loaded in
+memory** lists the models the node's engines hold. Below them, a table gives one
+row per model the node has served, with a pulsing dot on the models running now.
 
 ## What is measured
 
@@ -29,9 +40,8 @@ LM Studio and llama.cpp, and the Anthropic Messages route), PAIR records:
 | Thinking per request | For thinking models, how long the model reasoned before it began its answer, and roughly how many tokens that took |
 | Load | Time the engine spent loading the model, where it reports it |
 
-Each model card shows the average with the median (p50) and the slowest 5%
-(p95) over the model's last 100 requests on that node, and a line of its recent
-writing speed.
+Each model row shows the average, with the slowest 5% (p95) beneath, over the
+model's last 100 requests on that node, and a line of its recent writing speed.
 
 PAIR keeps only counts and timings. It never stores, logs or shows the text of
 a prompt or reply. The figures live in memory and reset when the service
@@ -59,16 +69,18 @@ Thinking is recognized in Ollama's `thinking` field, the OpenAI-compatible
 
 ### Which requests are covered
 
-The figures cover the requests **this node routes**, on whichever node serves
-them, so a model on another node appears with that node's name once you send
+The speed figures cover the requests **this node routes**, on whichever node
+serves them, so a model on another node appears under that node once you send
 it requests through this node. Requests that other nodes route are measured on
 those nodes, in their own app. Benchmark requests are kept apart and never
 change the live figures.
 
 ## Benchmark
 
-**Run benchmark** sends four fixed requests to a model through PAIR, one at a
-time, and records the same figures:
+The benchmark is a per-model test. Choose a model in **Model benchmark** and
+**Run benchmark**, or use **Benchmark** on a model's row. It sends four fixed
+requests to the model through PAIR, one at a time, and records the same
+figures; each run shows the node that served it:
 
 | Step | Request | Thinking | Measures |
 |---|---|---|---|
@@ -85,7 +97,11 @@ if the node stays busy for two minutes. Only one benchmark runs at a time.
 On LM Studio PAIR cannot switch thinking on or off, so every step runs with the
 model's default. A model that cannot think shows the thinking step as skipped.
 
-Each run shows its steps in a table and a summary line: reading speed from the
+![Model benchmark: the four steps and two runs of qwen3:0.6b, with reading, writing, time to first token and thinking per step](assets/onboarding/performance/02-benchmark.png)
+
+A step fails when the engine ends the reply with an error (Ollama's
+"prediction aborted", for example), since a cut-off reply is not a fair
+measurement. Each run shows its steps in a table and a summary line: reading speed from the
 long-input step, writing speed from the long-output step, time to first token
 from the short prompt and thinking time from the thinking step. The last 20
 runs are kept until the service restarts. Runs on the same model through

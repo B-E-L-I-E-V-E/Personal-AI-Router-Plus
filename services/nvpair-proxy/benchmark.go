@@ -302,7 +302,7 @@ func (p *Proxy) benchmarkStep(client *http.Client, base, engine string, run *ben
 	case rec := <-ch:
 		return &rec, benchDone, ""
 	case <-time.After(5 * time.Second):
-		return nil, benchFailed, "the engine reported no figures for the reply"
+		return nil, benchFailed, "the engine ended the reply with an error, or reported nothing to measure"
 	}
 }
 

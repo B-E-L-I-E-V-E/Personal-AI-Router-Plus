@@ -524,3 +524,23 @@ func TestRunBenchmark_RunsEveryStepThroughTheFacade(t *testing.T) {
 		}
 	})
 }
+
+func TestPerfTracker_ReplyEndingInAnErrorProducesNoRecord(t *testing.T) {
+	cases := []struct{ name, contentType, body string }{
+		{"ollama aborted stream", "application/x-ndjson", ndjson(
+			`{"message":{"role":"assistant","content":"so"},"done":false}`,
+			`{"error":"prediction aborted, token repeat limit reached"}`,
+		)},
+		{"anthropic error event", "text/event-stream", sse(
+			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}`,
+			`{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`,
+		)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if rec, ok := measure(t, tc.contentType, tc.body); ok {
+				t.Fatalf("an aborted reply produced a record: %+v", rec)
+			}
+		})
+	}
+}

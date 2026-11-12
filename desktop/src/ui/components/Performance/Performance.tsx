@@ -21,10 +21,13 @@ import type {
     PerfStat
 } from '@/shared/types/performance'
 import getErrorString from '@/shared/utils/get-error-string'
+import { workloadExecutionNodeId } from '@/shared/utils/workloads'
 import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
 import { Stopwatch } from '@/ui/components/icons'
+import { useConnectionStore } from '@/ui/stores/connection.store'
 import { useEngineModelsStore } from '@/ui/stores/engine-models.store'
 import { useNodesStore } from '@/ui/stores/nodes.store'
+import { useWorkloadsStore } from '@/ui/stores/workloads.store'
 import {
     engineLabel,
     formatCount,
@@ -35,10 +38,12 @@ import {
     sparklinePoints,
     summarizeBenchmark
 } from './performance-format'
+import { groupByNode, liveKey, type LiveModel, type NodePerformance } from './performance-nodes'
 
 // The proxy measures every request it routes and keeps the figures; this page
-// only reads its report. It polls because the proxy pushes no events for
-// them, faster while a benchmark is running so its steps appear as they end.
+// reads its report, polling because the proxy pushes no events for it (faster
+// while a benchmark runs). What each node is running right now comes from the
+// cluster's job list, which is pushed as it changes, so it is live.
 const REFRESH_MS = 4000
 const REFRESH_RUNNING_MS = 1000
 
@@ -64,41 +69,9 @@ function Card({
     )
 }
 
-function Metric({
-    label,
-    value,
-    detail,
-    source
-}: {
-    label: string
-    value: string
-    detail?: string
-    source?: PerfSource
-}) {
-    const hint = source ? sourceLabel(source) : ''
-    return (
-        <Stack gap="1" className="perf-metric" title={hint || undefined}>
-            <Text kind="body/regular/xs" className="text-subtle-color">
-                {label}
-            </Text>
-            <Text kind="body/semibold/lg">{value}</Text>
-            {(detail || hint) && (
-                <Text kind="body/regular/xs" className="text-subtle-color">
-                    {[detail, hint].filter(Boolean).join(' · ')}
-                </Text>
-            )}
-        </Stack>
-    )
-}
-
-function statDetail(stat: PerfStat | null, format: (v: number) => string): string {
-    if (!stat) return ''
-    return `p50 ${format(stat.p50)} · p95 ${format(stat.p95)}`
-}
-
 function Sparkline({ values, label }: { values: number[]; label: string }) {
-    const width = 160
-    const height = 32
+    const width = 96
+    const height = 22
     if (values.length < 2) return null
     return (
         <svg
@@ -132,102 +105,236 @@ function useNodeName(): (nodeId: string, local: boolean) => string {
     )
 }
 
-function ModelCard({
-    summary,
-    nodeName,
+/** Re-renders every second while something is running, so elapsed times tick. */
+function useNow(active: boolean): number {
+    const [now, setNow] = useState(() => Date.now())
+    useEffect(() => {
+        if (!active) return
+        const timer = setInterval(() => setNow(Date.now()), 1000)
+        return () => clearInterval(timer)
+    }, [active])
+    return now
+}
+
+function Figure({
+    value,
+    detail,
+    source
+}: {
+    value: string
+    detail?: string
+    source?: PerfSource
+}) {
+    const hint = source ? sourceLabel(source) : ''
+    return (
+        <td title={hint || undefined}>
+            <span className="perf-figure">{value}</span>
+            {detail && <span className="perf-figure-detail">{detail}</span>}
+        </td>
+    )
+}
+
+function p95(stat: PerfStat | null, format: (v: number) => string): string {
+    return stat ? `p95 ${format(stat.p95)}` : ''
+}
+
+function LiveChip({ live, now }: { live: LiveModel; now: number }) {
+    const parts = [
+        live.running > 0 ? `${live.running} running` : '',
+        live.queued > 0 ? `${live.queued} queued` : ''
+    ].filter(Boolean)
+    return (
+        <span className="perf-live-chip">
+            <span className="perf-live-dot" aria-hidden />
+            <strong>{live.model}</strong>
+            <span className="text-subtle-color">
+                {engineLabel(live.engine)} · {parts.join(', ')} ·{' '}
+                {formatMs(Math.max(0, now - live.since))} ·{' '}
+                {live.firstTokenMs === null
+                    ? 'waiting for the first token'
+                    : `time to first token ${formatMs(live.firstTokenMs)}`}
+            </span>
+        </span>
+    )
+}
+
+function ModelTable({
+    models,
+    liveModels,
     benchmarkDisabled,
     onBenchmark
 }: {
-    summary: PerfModelSummary
-    nodeName: string
+    models: PerfModelSummary[]
+    liveModels: Set<string>
     benchmarkDisabled: boolean
-    onBenchmark: () => void
+    onBenchmark: (engine: string, model: string) => void
 }) {
-    const write = summary.writeTokensPerSecond
-    const read = summary.readTokensPerSecond
-    const ttft = summary.timeToFirstTokenMs
-    const thinking = summary.thinkingMs
-    const writeTrend = summary.trend.flatMap(p =>
-        p.writeTokensPerSecond === null ? [] : [p.writeTokensPerSecond]
+    return (
+        <div className="perf-table-wrap">
+            <table className="perf-table perf-model-table">
+                <thead>
+                    <tr>
+                        <th>Model</th>
+                        <th>Requests</th>
+                        <th>Tokens in / out</th>
+                        <th>Reading</th>
+                        <th>Writing</th>
+                        <th>Time to first token</th>
+                        <th>Thinking / request</th>
+                        <th>Writing trend</th>
+                        <th aria-label="Actions" />
+                    </tr>
+                </thead>
+                <tbody>
+                    {models.map(m => {
+                        const thinkingTokens =
+                            m.thinkingRequests > 0
+                                ? Math.round(m.thinkingTokens / m.thinkingRequests)
+                                : null
+                        const trend = m.trend.flatMap(p =>
+                            p.writeTokensPerSecond === null ? [] : [p.writeTokensPerSecond]
+                        )
+                        return (
+                            <tr key={liveKey(m.engine, m.model)}>
+                                <td>
+                                    <Flex align="center" gap="2">
+                                        {liveModels.has(liveKey(m.engine, m.model)) && (
+                                            <span
+                                                className="perf-live-dot"
+                                                title="Running now"
+                                                aria-label="Running now"
+                                            />
+                                        )}
+                                        <span className="perf-figure">{m.model}</span>
+                                    </Flex>
+                                    <span className="perf-figure-detail">
+                                        {engineLabel(m.engine)}
+                                    </span>
+                                </td>
+                                <Figure
+                                    value={formatCount(m.requests)}
+                                    detail={`last ${new Date(m.lastAt).toLocaleTimeString()}`}
+                                />
+                                <Figure
+                                    value={`${formatCount(m.promptTokens)} / ${formatCount(m.completionTokens)}`}
+                                    source={m.sources.tokens}
+                                />
+                                <Figure
+                                    value={`${formatRate(m.readTokensPerSecond?.avg)} tok/s`}
+                                    detail={p95(m.readTokensPerSecond, formatRate)}
+                                    source={m.sources.read}
+                                />
+                                <Figure
+                                    value={`${formatRate(m.writeTokensPerSecond?.avg)} tok/s`}
+                                    detail={p95(m.writeTokensPerSecond, formatRate)}
+                                    source={m.sources.write}
+                                />
+                                <Figure
+                                    value={formatMs(m.timeToFirstTokenMs?.p50)}
+                                    detail={p95(m.timeToFirstTokenMs, formatMs)}
+                                    source={m.sources.ttft}
+                                />
+                                <Figure
+                                    value={m.thinkingMs ? formatMs(m.thinkingMs.avg) : 'None'}
+                                    detail={
+                                        m.thinkingMs
+                                            ? `${m.thinkingRequests} of ${m.requests}` +
+                                              (thinkingTokens === null
+                                                  ? ''
+                                                  : ` · ~${formatCount(thinkingTokens)} tokens`)
+                                            : ''
+                                    }
+                                    source={m.thinkingMs ? m.sources.thinking : undefined}
+                                />
+                                <td>
+                                    <Sparkline
+                                        values={trend}
+                                        label={`${m.model} writing speed, recent requests`}
+                                    />
+                                </td>
+                                <td>
+                                    <Button
+                                        kind="tertiary"
+                                        size="small"
+                                        disabled={benchmarkDisabled}
+                                        onClick={() => onBenchmark(m.engine, m.model)}
+                                    >
+                                        Benchmark
+                                    </Button>
+                                </td>
+                            </tr>
+                        )
+                    })}
+                </tbody>
+            </table>
+        </div>
     )
-    const thinkingPerRequest =
-        summary.thinkingRequests > 0
-            ? Math.round(summary.thinkingTokens / summary.thinkingRequests)
-            : null
+}
+
+function NodeCard({
+    node,
+    displayName,
+    now,
+    benchmarkDisabled,
+    onBenchmark
+}: {
+    node: NodePerformance
+    displayName: string
+    now: number
+    benchmarkDisabled: boolean
+    onBenchmark: (engine: string, model: string) => void
+}) {
+    const liveModels = new Set(node.live.map(l => liveKey(l.engine, l.model)))
     return (
         <Card
             title={
                 <Flex align="center" gap="2" wrap="wrap">
-                    <span>{summary.model}</span>
-                    <Badge color="gray" kind="outline">
-                        {engineLabel(summary.engine)}
+                    <span>{displayName}</span>
+                    <Badge color={node.live.length > 0 ? 'green' : 'gray'} kind="solid">
+                        {node.live.length > 0 ? 'Busy' : 'Idle'}
                     </Badge>
-                    <Text kind="body/regular/sm" className="text-subtle-color">
-                        {nodeName}
-                    </Text>
                 </Flex>
             }
             action={
-                <Button
-                    kind="secondary"
-                    size="small"
-                    disabled={benchmarkDisabled}
-                    onClick={onBenchmark}
-                >
-                    Run benchmark
-                </Button>
+                node.requests > 0 ? (
+                    <Text kind="body/regular/sm" className="text-subtle-color">
+                        {formatCount(node.requests)} requests · {formatCount(node.promptTokens)}{' '}
+                        tokens in · {formatCount(node.completionTokens)} out
+                    </Text>
+                ) : undefined
             }
         >
-            <div className="perf-grid">
-                <Metric
-                    label="Requests"
-                    value={formatCount(summary.requests)}
-                    detail={`last ${new Date(summary.lastAt).toLocaleTimeString()}`}
-                />
-                <Metric
-                    label="Tokens in / out"
-                    value={`${formatCount(summary.promptTokens)} / ${formatCount(summary.completionTokens)}`}
-                    source={summary.sources.tokens}
-                />
-                <Metric
-                    label="Reading (tokens/s)"
-                    value={formatRate(read?.avg)}
-                    detail={statDetail(read, formatRate)}
-                    source={summary.sources.read}
-                />
-                <Metric
-                    label="Writing (tokens/s)"
-                    value={formatRate(write?.avg)}
-                    detail={statDetail(write, formatRate)}
-                    source={summary.sources.write}
-                />
-                <Metric
-                    label="Time to first token"
-                    value={formatMs(ttft?.p50)}
-                    detail={ttft ? `p95 ${formatMs(ttft.p95)}` : ''}
-                    source={summary.sources.ttft}
-                />
-                <Metric
-                    label="Thinking per request"
-                    value={thinking ? formatMs(thinking.avg) : 'None'}
-                    detail={
-                        thinking
-                            ? `${summary.thinkingRequests} of ${summary.requests} thought` +
-                              (thinkingPerRequest === null
-                                  ? ''
-                                  : ` · ~${formatCount(thinkingPerRequest)} tokens`)
-                            : ''
-                    }
-                    source={thinking ? summary.sources.thinking : undefined}
-                />
-            </div>
-            {writeTrend.length > 1 && (
-                <Flex align="center" gap="3" className="text-subtle-color">
-                    <Sparkline values={writeTrend} label="Writing speed, recent requests" />
-                    <Text kind="body/regular/xs" className="text-subtle-color">
-                        Writing speed over the last {writeTrend.length} requests
+            <Stack gap="2">
+                <Flex align="center" gap="2" wrap="wrap">
+                    <Text kind="body/regular/sm" className="text-subtle-color">
+                        Running now:
                     </Text>
+                    {node.live.length === 0 ? (
+                        <Text kind="body/regular/sm">nothing</Text>
+                    ) : (
+                        node.live.map(l => (
+                            <LiveChip key={liveKey(l.engine, l.model)} live={l} now={now} />
+                        ))
+                    )}
                 </Flex>
+                {node.loaded.length > 0 && (
+                    <Text kind="body/regular/sm" className="text-subtle-color">
+                        Loaded in memory:{' '}
+                        {node.loaded.map(m => `${m.model} (${engineLabel(m.engine)})`).join(', ')}
+                    </Text>
+                )}
+            </Stack>
+            {node.models.length > 0 ? (
+                <ModelTable
+                    models={node.models}
+                    liveModels={liveModels}
+                    benchmarkDisabled={benchmarkDisabled}
+                    onBenchmark={onBenchmark}
+                />
+            ) : (
+                <Text kind="body/regular/sm" className="text-subtle-color">
+                    No requests routed through this node have run here yet.
+                </Text>
             )}
         </Card>
     )
@@ -283,7 +390,7 @@ function BenchmarkRunCard({
                 {run.state !== 'running' && (
                     <Text kind="body/regular/sm" className="text-subtle-color">
                         Reading {formatRate(summary.readTokensPerSecond)} tokens/s · writing{' '}
-                        {formatRate(summary.writeTokensPerSecond)} tokens/s · first token{' '}
+                        {formatRate(summary.writeTokensPerSecond)} tokens/s · time to first token{' '}
                         {formatMs(summary.timeToFirstTokenMs)}
                         {summary.thinkingMs !== null
                             ? ` · thinking ${formatMs(summary.thinkingMs)}`
@@ -302,7 +409,7 @@ function BenchmarkRunCard({
                                 <th>Step</th>
                                 <th>Thinking</th>
                                 <th>Tokens in / out</th>
-                                <th>First token</th>
+                                <th>Time to first token</th>
                                 <th>Reading</th>
                                 <th>Writing</th>
                                 <th>Thought for</th>
@@ -381,7 +488,7 @@ function BenchmarkCard({
     }))
     return (
         <Card
-            title="Benchmark"
+            title="Model benchmark"
             action={
                 <Flex align="center" gap="2">
                     {targets.length > 0 && (
@@ -402,10 +509,11 @@ function BenchmarkCard({
             }
         >
             <Text kind="body/regular/sm" className="text-subtle-color">
-                Sends {report.benchmarkPrompts.length || 'a fixed set of'} requests to the model
-                through PAIR, one at a time, and records the same figures as real traffic. It uses
-                the model — loading it if needed — and waits for other requests on this node to
-                finish before each step. Its figures are kept apart from the live ones above.
+                A per-model test: sends the same {report.benchmarkPrompts.length || 'fixed'}{' '}
+                requests to the chosen model through PAIR, one at a time, so models compare like for
+                like; each run shows the node that served it. It uses the model — loading it if
+                needed — and waits for other requests on this node to finish before each step. Its
+                figures are kept apart from the live ones above.
             </Text>
             <PromptList prompts={report.benchmarkPrompts} />
             {report.benchmarks.length === 0 ? (
@@ -446,7 +554,10 @@ export default function Performance() {
     const [error, setError] = useState<string | null>(null)
     const [starting, setStarting] = useState(false)
     const nodeName = useNodeName()
+    const nodes = useNodesStore(state => state.nodes)
+    const selfId = useConnectionStore(state => state.selfId)
     const engineModels = useEngineModelsStore(state => state.models)
+    const workloads = useWorkloadsStore(state => state.workloads)
 
     const running = report?.benchmarks.some(r => r.state === 'running') ?? false
 
@@ -463,8 +574,32 @@ export default function Performance() {
         return () => clearInterval(timer)
     }, [refresh, running])
 
-    // Anything the cluster has downloaded can be benchmarked, as can any model
-    // that has served traffic here.
+    const grouped = useMemo(
+        () =>
+            groupByNode({
+                nodes: [...nodes.values()].map(n => ({ id: n.id, name: n.name })),
+                selfId,
+                summaries: report?.models ?? [],
+                jobs: [...workloads.values()].map(w => ({
+                    nodeId: workloadExecutionNodeId(w),
+                    model: w.model,
+                    engine: w.engine,
+                    state: w.state,
+                    createdAt: w.createdAt,
+                    startedAt: w.startedAt
+                })),
+                loaded: [...engineModels.values()].flatMap(list =>
+                    list.models
+                        .filter(m => m.status === 'loaded')
+                        .map(m => ({ nodeId: list.nodeId, engine: list.engineType, model: m.name }))
+                )
+            }),
+        [nodes, selfId, report, workloads, engineModels]
+    )
+    const now = useNow(grouped.some(n => n.live.length > 0))
+
+    // The benchmark is per model: anything the cluster has downloaded, or any
+    // model that has served traffic here.
     const targets = useMemo(() => {
         const seen = new Map<string, BenchmarkTarget>()
         for (const list of engineModels.values()) {
@@ -480,7 +615,25 @@ export default function Performance() {
             const t = { engine: m.engine, model: m.model }
             seen.set(targetKey(t), t)
         }
-        return [...seen.values()].sort((a, b) => a.model.localeCompare(b.model))
+        // Models that have served traffic here come first, then models loaded
+        // somewhere, so the default is one already in use rather than the
+        // first name in the list, which may be large and on another node.
+        const used = new Set((report?.models ?? []).map(m => targetKey(m)))
+        const loaded = new Set(
+            [...engineModels.values()].flatMap(list => {
+                const engine = proxyEngineName(list.engineType)
+                return engine
+                    ? list.models
+                          .filter(m => m.status === 'loaded')
+                          .map(m => targetKey({ engine, model: m.name }))
+                    : []
+            })
+        )
+        const rank = (t: BenchmarkTarget) =>
+            used.has(targetKey(t)) ? 0 : loaded.has(targetKey(t)) ? 1 : 2
+        return [...seen.values()].sort(
+            (a, b) => rank(a) - rank(b) || a.model.localeCompare(b.model)
+        )
     }, [engineModels, report])
 
     const runBenchmark = (target: BenchmarkTarget) => {
@@ -507,7 +660,7 @@ export default function Performance() {
                     title={
                         <Flex align="center" gap="2">
                             <Stopwatch style={{ fontSize: 18 }} />
-                            <span>Performance per model</span>
+                            <span>Performance by node</span>
                         </Flex>
                     }
                     action={
@@ -522,27 +675,29 @@ export default function Performance() {
                     }
                 >
                     <Text kind="body/regular/sm" className="text-subtle-color">
-                        Speeds for the requests this node routes, on any node that serves them, over
-                        each model’s last {report?.window ?? 100} requests. Reading is prompt tokens
-                        processed per second, writing is tokens generated per second, and thinking
-                        is the time a reasoning model spent before its answer. Hover a figure to see
-                        whether the engine reported it or PAIR measured it. Requests other nodes
-                        route are measured on those nodes. Only counts and timings are kept — never
-                        prompt or reply text — and they reset when the service restarts.
+                        Each node shows what it is running right now and how fast each of its models
+                        has worked, over the model’s last {report?.window ?? 100} requests that this
+                        node routed. Reading is prompt tokens processed per second, writing is
+                        tokens generated per second, and thinking is the time a reasoning model
+                        spent before its answer. Hover a figure to see whether the engine reported
+                        it or PAIR measured it. Only counts and timings are kept — never prompt or
+                        reply text — and they reset when the service restarts.
                     </Text>
-                    {report && report.models.length === 0 && (
-                        <Text kind="body/regular/sm" className="text-subtle-color">
-                            No requests yet. Send one through PAIR, or run the benchmark below.
-                        </Text>
-                    )}
                 </Card>
-                {report?.models.map(m => (
-                    <ModelCard
-                        key={`${m.engine}:${m.model}:${m.nodeId}`}
-                        summary={m}
-                        nodeName={nodeName(m.nodeId, m.local)}
+                {grouped.map(n => (
+                    <NodeCard
+                        key={n.nodeId}
+                        node={n}
+                        displayName={
+                            n.name
+                                ? n.local
+                                    ? `${n.name} (this node)`
+                                    : n.name
+                                : nodeName(n.nodeId, n.local)
+                        }
+                        now={now}
                         benchmarkDisabled={running || starting}
-                        onBenchmark={() => runBenchmark({ engine: m.engine, model: m.model })}
+                        onBenchmark={(engine, model) => runBenchmark({ engine, model })}
                     />
                 ))}
                 {report && (
