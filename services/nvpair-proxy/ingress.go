@@ -124,6 +124,11 @@ func (f *facade) handleClusterIngress(w http.ResponseWriter, r *http.Request) {
 	if f.servePeerRelease(w, r, peer) {
 		return
 	}
+	// A calling node asking this node to describe one of its models
+	// (modeldetails.go).
+	if f.servePeerModelDetails(w, r) {
+		return
+	}
 	target, ok := f.localBackendTarget()
 	if !ok {
 		writeIngressError(w, http.StatusServiceUnavailable, "no-local-backend",

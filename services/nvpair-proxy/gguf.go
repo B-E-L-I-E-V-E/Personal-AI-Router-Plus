@@ -20,12 +20,15 @@ import (
 // tensor data is never read.
 
 const (
-	ggufMaxKeys       = 1 << 16
-	ggufMaxStringLen  = 1 << 20
-	ggufMaxKeptArray  = 4096
-	ggufMaxArrayItems = 1 << 24
-	ggufMaxTensors    = 1 << 20
-	ggufMaxDims       = 8
+	ggufMaxKeys      = 1 << 16
+	ggufMaxStringLen = 1 << 20
+	ggufMaxKeptArray = 4096
+	// Short string arrays (general.tags, general.languages) are kept for
+	// the model details; tokenizer vocabularies are far longer and skipped.
+	ggufMaxKeptStrings = 64
+	ggufMaxArrayItems  = 1 << 24
+	ggufMaxTensors     = 1 << 20
+	ggufMaxDims        = 8
 )
 
 // ggufTensor is one entry of the tensor table: its name, ggml type and
@@ -37,8 +40,8 @@ type ggufTensor struct {
 }
 
 // ggufValue is one decoded metadata value: an integer, float, bool, string,
-// or a slice of integers. Arrays of other kinds, and long arrays, are skipped
-// and recorded as nil.
+// a slice of integers, or a short slice of strings. Arrays of other kinds, and
+// long arrays, are skipped and recorded as nil.
 type ggufValue any
 
 type ggufReader struct {
@@ -185,6 +188,16 @@ func (g *ggufReader) value(t uint32) ggufValue {
 		g.skip(size * n)
 		return nil
 	}
+	if et == ggufTypeString && n <= ggufMaxKeptStrings {
+		out := make([]string, 0, n)
+		for i := uint64(0); i < n && g.err == nil; i++ {
+			out = append(out, g.str())
+		}
+		if g.err != nil {
+			return nil
+		}
+		return out
+	}
 	if et == ggufTypeString {
 		for i := uint64(0); i < n && g.err == nil; i++ {
 			l := g.u64()
@@ -272,4 +285,14 @@ func readGGUFFile(path string) (map[string]ggufValue, []ggufTensor, error) {
 	}
 	defer f.Close()
 	return readGGUF(f, true)
+}
+
+// readGGUFFileMetadata reads only the metadata keys of a GGUF file.
+func readGGUFFileMetadata(path string) (map[string]ggufValue, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return readGGUFMetadata(f)
 }

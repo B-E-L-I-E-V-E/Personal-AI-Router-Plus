@@ -15,6 +15,7 @@ import type {
     EngineCommandPayload
 } from '@/shared/types/engine-api'
 import type { EngineProgress, EngineType } from '@/shared/types/engines'
+import type { ModelDetails } from '@/shared/types/model-details'
 import { usePendingActionsStore } from '@/ui/stores/pending-actions.store'
 import type {
     EngineSettingsTarget,
@@ -62,6 +63,8 @@ export interface IEngineApi {
     deleteModel(engineType: EngineType, nodeId: string, model: string): void
     /** Set the model keep-alive expiry duration on a node. */
     setModelExpiry(engineType: EngineType, nodeId: string, model: string, expiry: string): void
+    /** What the engine and the model file say about one downloaded model. */
+    getModelDetails(engineType: EngineType, nodeId: string, model: string): Promise<ModelDetails>
     /** Load an engine catalog or explicitly search its upstream registry. */
     searchHub(engineType: EngineType, query?: string): Promise<EngineHubSearchResponse>
 
@@ -114,6 +117,8 @@ export function createEngineApi(transport: ServiceTransport): IEngineApi {
                 model,
                 expiry
             }),
+        getModelDetails: (engineType, nodeId, model) =>
+            transport.invoke('engine:model-details', { engineType, nodeId, model }),
         searchHub: (engineType, query) =>
             transport.invoke(
                 'engine:search-hub',

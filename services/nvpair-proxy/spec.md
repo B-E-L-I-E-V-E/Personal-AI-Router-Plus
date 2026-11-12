@@ -884,6 +884,45 @@ stays busy. Benchmark requests carry `X-PAIR-Benchmark: 1` (stripped before
 forwarding) and a run-scoped `X-Request-ID`; their records go to the run, never
 into the live figures. The last 20 runs are kept, in memory.
 
+### 5.17 Model details
+
+`model/details` `{"engine","model","nodeId"?}` returns what the engine and the
+model's file report about one downloaded model, for the desktop's "About this
+model" view. Every field is copied from a reported value; an unreported field
+is omitted, never filled in.
+
+- **Ollama**: `/api/show` (not verbose) for `details` (family, parameter size,
+  quantization, format), `capabilities`, `license` (cut to 16 KiB),
+  `parameters`, `modified_at` and the `general.*` keys of `model_info`;
+  `/api/tags` for size and digest.
+- **llama.cpp**: `/props?model=` for `modalities` and the loaded `n_ctx`, and
+  the GGUF file it names. A model that is not loaded has no file path, and a
+  note says so.
+- **LM Studio**: `/api/v1/models` for type, publisher, display name,
+  architecture, quantization, size, parameter string, maximum and loaded
+  context and capabilities, and the GGUF in `~/.lmstudio/models` when present.
+  The engine's own answer wins where it and the file disagree.
+- **GGUF** `general.*` keys: `name`, `description`, `author`/`organization`,
+  `license`, `size_label`, `parameter_count`, `file_type` (named as llama.cpp
+  names it), `tags`, `languages`, `<arch>.context_length`. The reader keeps
+  string arrays of at most 64 items, which leaves tokenizer vocabularies out.
+- **Links** come only from reported values: `general.url`, `repo_url`,
+  `source.url`, `source.repo_url`, `source.huggingface.repository`,
+  `license.link` and `base_model.N.url`/`repo_url`, each kept only when it is an
+  absolute http(s) URL; and, for Ollama, the registry the model's name pulled it
+  from (`ollama.com/library/<name>`, `ollama.com/<user>/<name>`, or the Hugging
+  Face repository of an `hf.co/...` name). Each link carries the field it came
+  from.
+- **Another node** (`nodeId` set): the proxy resolves the node in that
+  engine's discovery and, when the node is a pinned cluster peer, sends
+  `GET /pair/v1/peer/models/details?model=` over mTLS. The peer answers from
+  its own engine and files with `X-PAIR-Model-Details: 1`; any other answer
+  (a peer with an older PAIR forwards the path to its engine, which answers
+  `404`) becomes a note, as does an unpinned node. An unknown node is an error.
+
+Failures to read the engine or the file are notes in the result, not JSON-RPC
+errors.
+
 ## 6. Reservations
 
 A reservation is one in-flight dispatch this process has made since the last
@@ -923,6 +962,8 @@ One port per facade, demultiplexed on the connection's first byte:
 - **Cluster mTLS** when `--cluster-dir` shows this node is a member: a peer
   whose client certificate matches a local pin is forwarded straight to the
   local engine reported by `node/set-local-backend`, never re-routed onward.
+  Two paths are answered by the proxy itself instead: a session release
+  (§5.14) and a model details question (§5.17).
 
 Membership and pins are re-derived per request and on a watch, so joining or
 leaving a cluster needs no restart.

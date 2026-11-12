@@ -223,7 +223,7 @@ func max64(a, b int64) int64 {
 	return b
 }
 
-// jsonToMeta converts Ollama's model_info (JSON numbers and arrays) to the
+// jsonToMeta converts Ollama's model_info (JSON numbers, strings and arrays) to the
 // GGUF value form applyArchitecture reads.
 func jsonToMeta(info map[string]any) map[string]ggufValue {
 	out := make(map[string]ggufValue, len(info))
@@ -236,6 +236,10 @@ func jsonToMeta(info map[string]any) map[string]ggufValue {
 		case bool:
 			out[key] = t
 		case []any:
+			if strs, ok := jsonStrings(t); ok {
+				out[key] = strs
+				continue
+			}
 			ints := make([]int64, 0, len(t))
 			for _, e := range t {
 				f, ok := e.(float64)
@@ -251,6 +255,23 @@ func jsonToMeta(info map[string]any) map[string]ggufValue {
 		}
 	}
 	return out
+}
+
+// jsonStrings converts a short, non-empty JSON array of strings
+// (general.tags) to the GGUF form; vocabularies are left out, as in a file.
+func jsonStrings(values []any) ([]string, bool) {
+	if len(values) == 0 || len(values) > ggufMaxKeptStrings {
+		return nil, false
+	}
+	out := make([]string, 0, len(values))
+	for _, e := range values {
+		s, ok := e.(string)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, s)
+	}
+	return out, true
 }
 
 // specClient is the planner's engine reader; tests replace homeDir.

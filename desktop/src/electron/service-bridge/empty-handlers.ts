@@ -43,6 +43,7 @@ import {
     planCapacity,
     setPlanner
 } from '@/electron/service-bridge/capacity-planner'
+import { getModelDetails } from './model-details'
 import {
     clearPerformance,
     getPerformanceLive,
@@ -749,6 +750,7 @@ const EMPTY_SERVICE_BRIDGE_HANDLERS: BridgeHandlerMap = {
     'capacity:get-planner': () => getPlanner(),
     'capacity:set-planner': payload => setPlanner(payload),
     'capacity:apply-plan': payload => applyPlan(payload),
+    'engine:model-details': payload => getModelDetails(payload),
     'performance:get-report': () => getPerformanceReport(),
     'performance:get-live': () => getPerformanceLive(),
     'performance:clear': () => clearPerformance(),
