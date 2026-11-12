@@ -13,6 +13,12 @@ release workflow, with macOS builds signed and notarized; the app updates from
 those releases. A build made locally from source is unsigned unless built with
 `PAIR_MAC_SIGN=1`, and updates only once a release exists.
 
+## 1.3.2 — Run the benchmark on a chosen node (#15)
+
+- **Run benchmark** runs on the node you choose, this one or any other in the cluster. The model list shows each model on each node that has it, and **Benchmark** on a node card's model row runs on that node. Every step runs on that node, or fails if the node can't serve the model.
+- **Context & sessions…** for another node's model says why it can't plan that node: the PAIR version and firewall ports it needs. It also offers **Try again**, instead of leaving the menu item out.
+- `POST /pair/v1/performance/benchmark` and `performance/benchmark` take an optional `nodeId`, and a run reports it.
+
 ## 1.3.1 — Plan another node's Context & sessions from any cluster member (#14)
 
 - **Context & sessions…** is offered for models on other nodes, not only this one. From a laptop you can size, save, apply and remove a workstation's plan.
