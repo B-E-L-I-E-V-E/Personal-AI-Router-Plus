@@ -154,3 +154,78 @@ export function replyStops(windowTokens: number): number[] {
 export function replyBudget(windowTokens: number, saved = 0): number {
     return Math.min(saved || DEFAULT_REPLY_TOKENS, Math.floor(windowTokens / 2))
 }
+
+const GiB = 1024 ** 3
+const KiB = 1024
+
+/** Model weight sizes the size slider stops at, in GB. */
+const WEIGHT_STOPS_GB = [
+    0.25, 0.5, 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024
+]
+/** Context cache costs per token the cost slider stops at, in KB. */
+const KV_STOPS_KB = [
+    2, 4, 8, 16, 24, 32, 48, 64, 96, 128, 160, 192, 256, 320, 384, 512, 768, 1024, 1536, 2048
+]
+
+/** stops with value added in order, unless it is already one (within 1%). */
+export function withStop(stops: number[], value: number): number[] {
+    if (value <= 0 || stops.some(s => Math.abs(s - value) <= value * 0.01)) return stops
+    return [...stops, value].sort((a, b) => a - b)
+}
+
+/**
+ * The weight-size slider's stops, in bytes: round sizes up to well past both
+ * the model's own size and the node's memory, and the model's size itself.
+ */
+export function weightStops(modelBytes: number, memoryBytes: number): number[] {
+    const top = Math.max(2 * modelBytes, 1.5 * memoryBytes, 8 * GiB)
+    const stops: number[] = []
+    for (const gb of WEIGHT_STOPS_GB) {
+        stops.push(gb * GiB)
+        if (gb * GiB >= top) break
+    }
+    return withStop(stops, modelBytes)
+}
+
+/** The context-cost slider's stops, in bytes per token, with the model's own cost. */
+export function kvStops(modelBytesPerToken: number): number[] {
+    const stops = KV_STOPS_KB.map(kb => kb * KiB)
+    return withStop(stops, modelBytesPerToken)
+}
+
+/**
+ * Which stops get a label under the slider: about six spread evenly, the
+ * ends, and the model's own value.
+ */
+export function labelledStops(stops: number[], modelValue: number): number[] {
+    const every = Math.max(1, Math.ceil(stops.length / 6))
+    const keep = new Set<number>([0, stops.length - 1])
+    for (let i = 0; i < stops.length; i += every) keep.add(i)
+    if (modelValue > 0) keep.add(nearestStop(stops, modelValue))
+    return [...keep].sort((a, b) => a - b)
+}
+
+/** Trims a fixed-point number: 4.0 → 4, 1.50 → 1.5. */
+function trimmed(n: number, digits: number): string {
+    return String(Number(n.toFixed(digits)))
+}
+
+/** A weight size for slider labels and the exact field: 512 MB, 1.5 GB, 24 GB. */
+export function sizeLabel(bytes: number): string {
+    if (bytes < GiB) return `${Math.round(bytes / 1024 ** 2)} MB`
+    return `${trimmed(bytes / GiB, bytes < 10 * GiB ? 2 : 1)} GB`
+}
+
+/** A per-token context cost: 112 KB, 59.5 KB, 1.5 MB. */
+export function perTokenLabel(bytes: number): string {
+    if (bytes >= 1024 * KiB) return `${trimmed(bytes / (1024 * KiB), 2)} MB`
+    return `${trimmed(bytes / KiB, bytes < 10 * KiB ? 2 : 1)} KB`
+}
+
+/** Parses a typed amount ("4.2") in unit bytes; null unless a positive number. */
+export function parseAmount(text: string, unitBytes: number): number | null {
+    const trimmedText = text.trim()
+    if (!/^\d+(\.\d+)?$/.test(trimmedText)) return null
+    const bytes = Math.round(Number(trimmedText) * unitBytes)
+    return bytes > 0 ? bytes : null
+}

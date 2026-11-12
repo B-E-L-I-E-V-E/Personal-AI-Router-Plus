@@ -757,8 +757,22 @@ that.
 (the desktop passes this node's GPUs from node-info). It is pure apart from
 reading the model:
 
+- **Weights' size**: `spec.weightsBytes` is the memory the weights take once
+  loaded. `spec.downloadBytes` is the size on disk (`downloadSource`:
+  `ollama-tags`, `lmstudio-models`, or `gguf-files` for the GGUF files and
+  shards added up); `spec.tensorBytes` is the sum of the weight tensors from
+  the tensor table (Ollama `/api/show` verbose, or the GGUF), zero when any
+  tensor's type is not a ggml one (MLX). `weightsBytes` is `tensorBytes`
+  (`weightsSource: "tensors"`), else `downloadBytes` as an estimate
+  (`"download"`); a download more than 10% larger than the tensors (a vision
+  projector) is counted instead, with a note. For an Ollama model loaded now,
+  `loadedBytes`, `loadedVramBytes` and `loadedContextTokens` are `/api/ps`
+  `size`, `size_vram` and `context_length`: weights, context cache and buffers
+  together. A request's `weightsBytes` and `kvBytesPerToken` (f16) override
+  the spec's; the result's `weightsSource` and `kvSource` are the spec's
+  sources or `"manual"`, and `spec` keeps the model's own values.
 - **Model description** (`modelSpec`). Ollama: `/api/show` (verbose) for the
-  architecture and `/api/tags` for the weights' size; when the architecture is
+  architecture and `/api/tags` for the download size; when the architecture is
   missing (MLX/safetensors models), a loaded copy is measured from `/api/ps`
   as (size − weights) ÷ (context × configured slots). llama.cpp: the GGUF file
   named by `/props?model=` (shards summed). LM Studio: `/api/v1/models` for
