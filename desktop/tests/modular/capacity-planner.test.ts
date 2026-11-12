@@ -30,6 +30,7 @@ vi.mock('@/electron/service-bridge/modular-state', () => ({
 import {
     applyPlan,
     getPlanner,
+    launchDefaults,
     llamaCppLaunchText,
     lmStudioMessage,
     ollamaLaunchText,
@@ -296,6 +297,50 @@ describe('capacity planner bridge', () => {
         expect(parsePlanner({ autoReload: false }).autoReload).toBe(false)
     })
 
+    it('splits llama.cpp across GPUs only when the plan does', () => {
+        const split = { ...plan, tensorSplit: '32,32' }
+        expect(llamaCppLaunchText('-sm row -ts 3,1 --temp 0.7', split)).toBe(
+            '--temp 0.7 --ctx-size 131072 --parallel 4 --split-mode layer --tensor-split 32,32'
+        )
+        // Without a split the user's own GPU options stay.
+        expect(llamaCppLaunchText('-ts 3,1', plan)).toBe('-ts 3,1 --ctx-size 131072 --parallel 4')
+    })
+
+    it('tells Ollama to spread across GPUs once, and never removes it', () => {
+        expect(ollamaLaunchText('', { ...plan, spreadGpus: true })).toBe(
+            'OLLAMA_CONTEXT_LENGTH=32768 OLLAMA_NUM_PARALLEL=4 OLLAMA_SCHED_SPREAD=1'
+        )
+        expect(ollamaLaunchText('OLLAMA_SCHED_SPREAD=1', { ...plan, spreadGpus: true })).toBe(
+            'OLLAMA_SCHED_SPREAD=1 OLLAMA_CONTEXT_LENGTH=32768 OLLAMA_NUM_PARALLEL=4'
+        )
+        expect(ollamaLaunchText('OLLAMA_SCHED_SPREAD=1', plan)).toContain('OLLAMA_SCHED_SPREAD=1')
+    })
+
+    it('writes the GPU split the node needs now when applying', async () => {
+        const gpu = { name: 'NVIDIA RTX 5090', totalBytes: 32 * 1024 ** 3, share: 0.5, layers: 32 }
+        callProxy.mockImplementation(async (_engine: string, method: string) => {
+            if (method === 'capacity/planner') return plannerState()
+            if (method === 'capacity/plan')
+                return { spec: { notes: [] }, gpus: [gpu, gpu], tensorSplit: '32,32' }
+            return {}
+        })
+        callProcess.mockImplementation(async (_target: string, method: string) => {
+            if (method === 'engine:get-settings')
+                return settingsSnapshot('--temp 0.7', { appliedRevision: 8 })
+            if (method === 'engine:apply-settings') return { revision: 8, phase: 'succeeded' }
+            return null
+        })
+        const result = await applyPlan({ engine: 'llamacpp', model: 'm' })
+        expect(result.message).toContain('--tensor-split 32,32')
+        const sized = callProxy.mock.calls.find(c => c[1] === 'capacity/plan')
+        expect(sized?.[2]).toMatchObject({ engine: 'llamacpp', model: 'm', windowTokens: 32768 })
+        expect(sized?.[2].gpus).toHaveLength(2)
+        const apply = callProcess.mock.calls.find(c => c[1] === 'engine:apply-settings')
+        expect(apply?.[2].settings.launchText).toBe(
+            '--temp 0.7 --ctx-size 131072 --parallel 4 --split-mode layer --tensor-split 32,32'
+        )
+    })
+
     it('applies a plan by rewriting launch settings and recording it', async () => {
         callProxy.mockImplementation(async (_engine: string, method: string) =>
             method === 'capacity/planner' ? plannerState() : {}
@@ -473,5 +518,94 @@ describe('capacity planner bridge', () => {
         await runAutoReloadCheckForTest()
         await runAutoReloadCheckForTest()
         expect(callProcess).not.toHaveBeenCalled()
+    })
+})
+
+describe('starting values from launch settings', () => {
+    it.each([
+        {
+            name: 'Ollama environment',
+            engine: 'ollama',
+            text: 'OLLAMA_CONTEXT_LENGTH=40960 OLLAMA_FLASH_ATTENTION=1 OLLAMA_NUM_PARALLEL="4"',
+            want: { windowTokens: 40960, sessions: 4 }
+        },
+        {
+            name: 'Ollama without the variables',
+            engine: 'ollama',
+            text: 'OLLAMA_KEEP_ALIVE=5m',
+            want: { windowTokens: 0, sessions: 0 }
+        },
+        {
+            name: 'llama.cpp size split across slots',
+            engine: 'llamacpp',
+            text: '--temp 0.7 -c 65536 --parallel=4',
+            want: { windowTokens: 16384, sessions: 4 }
+        },
+        {
+            name: 'llama.cpp size without a slot count',
+            engine: 'llamacpp',
+            text: '--ctx-size 65536',
+            want: { windowTokens: 0, sessions: 0 }
+        }
+    ])('reads $name', ({ engine, text, want }) => {
+        expect(launchDefaults(engine, text)).toEqual(want)
+    })
+
+    it('fills only what the engine and the model did not report', async () => {
+        callProxy.mockResolvedValueOnce({
+            spec: {
+                notes: [],
+                defaults: {
+                    window: { value: 8192, source: 'model' },
+                    reply: { value: 0, source: 'model' }
+                }
+            },
+            sessions: 3,
+            windowTokens: 8192
+        })
+        callProcess.mockImplementation(async (_target: string, method: string) =>
+            method === 'engine:get-settings'
+                ? settingsSnapshot('OLLAMA_CONTEXT_LENGTH=40960 OLLAMA_NUM_PARALLEL=6')
+                : null
+        )
+        const result = await planCapacity({
+            engine: 'ollama',
+            model: 'm',
+            withLaunchDefaults: true
+        })
+        expect(result.spec.defaults).toEqual({
+            window: { value: 8192, source: 'model' },
+            sessions: { value: 6, source: 'launch' }
+        })
+        expect(callProcess).toHaveBeenCalledWith('broker', 'engine:get-settings', {
+            nodeId: 'node-1',
+            engine: 'ollama'
+        })
+    })
+
+    it('ignores launch settings of an engine PAIR does not manage', async () => {
+        callProxy.mockResolvedValueOnce({ spec: { notes: [] }, sessions: 3, windowTokens: 8192 })
+        callProcess.mockImplementation(async (_target: string, method: string) =>
+            method === 'engine:get-settings'
+                ? settingsSnapshot('OLLAMA_NUM_PARALLEL=77', { editable: false, adopted: true })
+                : null
+        )
+        const result = await planCapacity({
+            engine: 'ollama',
+            model: 'm',
+            withLaunchDefaults: true
+        })
+        expect(result.spec.defaults).toEqual({})
+    })
+
+    it('reads launch settings only when asked', async () => {
+        callProxy.mockResolvedValueOnce({ spec: { notes: [] }, sessions: 3, windowTokens: 8192 })
+        const result = await planCapacity({ engine: 'ollama', model: 'm' })
+        expect(result.spec.defaults).toEqual({})
+        expect(callProcess).not.toHaveBeenCalledWith(
+            'broker',
+            'engine:get-settings',
+            expect.anything()
+        )
     })
 })

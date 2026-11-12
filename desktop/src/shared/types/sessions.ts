@@ -121,7 +121,33 @@ export interface ModelSpec {
     /** Every weight in the tensor table, and those one token runs (0 when unknown). */
     totalParams: number
     activeParams: number
+    /** The model's layer count; 0 when unknown. */
+    layers: number
+    /** Starting values the engine, its launch settings or the model report. */
+    defaults: ModelDefaults
     notes: string[]
+}
+
+/**
+ * Where a starting value came from: what the running engine uses for this
+ * model now ('engine'), the engine's launch settings ('launch'), or the
+ * model's own default parameter ('model').
+ */
+export type StartSource = 'engine' | 'launch' | 'model'
+
+export interface StartValue {
+    value: number
+    source: StartSource
+}
+
+/** A value nothing reports is left out. */
+export interface ModelDefaults {
+    /** Each session's context window. */
+    window?: StartValue
+    /** Requests the engine runs at once (its slots). */
+    sessions?: StartValue
+    /** The model's default reply length. */
+    reply?: StartValue
 }
 
 export type KvCacheType = 'f16' | 'q8_0' | 'q4_0'
@@ -151,6 +177,25 @@ export interface CapacityPlanRequest {
     otherModelsBytes?: number
     weightsBytes?: number
     kvBytesPerToken?: number
+    /** Also read the engine's launch settings into spec.defaults. */
+    withLaunchDefaults?: boolean
+}
+
+/** One GPU's part of a plan on a node with several GPUs. */
+export interface CapacityPlanGpu {
+    name: string
+    totalBytes: number
+    reserveBytes: number
+    /** The model's layers on this GPU; 0 when the layer count is unknown. */
+    layers: number
+    /** This GPU's fraction of the model and of each session's context. */
+    share: number
+    weightsBytes: number
+    otherModelsBytes: number
+    /** This GPU's part of one session's context. */
+    bytesPerSession: number
+    /** Sessions this GPU's part has room for. */
+    sessions: number
 }
 
 export interface CapacityPlan {
@@ -191,6 +236,16 @@ export interface CapacityPlan {
     ramReserveBytes: number
     ramUsedBytes: number
     ramFits: boolean
+    /** Each GPU's part: the model's layers split by memory after the reserve. */
+    gpus: CapacityPlanGpu[]
+    /** llama.cpp --tensor-split for the split; empty with one GPU. */
+    tensorSplit: string
+    /**
+     * Ollama loads a model on one GPU when it fits there: this many sessions
+     * fit on GPU oneGpuIndex alone (0 when the model needs more than one).
+     */
+    oneGpuIndex: number
+    oneGpuSessions: number
     warnings: string[]
     /** The planner's refusal, when it could not size the model. */
     error: string

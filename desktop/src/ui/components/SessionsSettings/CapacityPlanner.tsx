@@ -2,14 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useEffect, useMemo, useState } from 'react'
-import {
-    Button,
-    Flex,
-    Slider,
-    Stack,
-    Text,
-    TextInput
-} from '@nvidia/foundations-react-core'
+import { Button, Flex, Slider, Stack, Text, TextInput } from '@nvidia/foundations-react-core'
 import type {
     CapacityPlan,
     KvCacheType,
@@ -17,10 +10,12 @@ import type {
     SavedCapacityPlan
 } from '@/shared/types/sessions'
 import getErrorString from '@/shared/utils/get-error-string'
+import { multiGpuLaunch, multiGpuLaunchText } from '@/shared/utils/capacity-gpus'
 import {
     cpuExpertBytes,
     expertLayersOnCpu,
     expertSplitStops,
+    gpuBars,
     kvStops,
     labelledStops,
     MAX_SESSIONS,
@@ -42,6 +37,12 @@ import {
 } from './capacity-sliders'
 import { kvFact, kvUsed, loadedFact, sizeFacts, weightsUsed } from './model-size'
 import TextFitDetails from './TextFitDetails'
+import {
+    STARTING_LABEL,
+    startingValues,
+    type StartingValues,
+    withStartStop
+} from './starting-values'
 
 const GB = 1024 ** 3
 
@@ -63,6 +64,22 @@ const CACHE_TYPES: { id: KvCacheType; label: string }[] = [
 const FALLBACK_WINDOW = 32768
 
 const DANGER_TEXT = { color: 'var(--text-color-feedback-danger)' }
+
+/** Where a slider's starting value came from, while it still sits there. */
+function StartMark({
+    start,
+    now
+}: {
+    start: { value: number; source: keyof typeof STARTING_LABEL } | undefined
+    now: number
+}) {
+    if (!start || start.value !== now) return null
+    return (
+        <Text kind="body/regular/sm" className="text-subtle-color">
+            {STARTING_LABEL[start.source]}
+        </Text>
+    )
+}
 
 function Choice<T extends string>({
     options,
@@ -270,6 +287,29 @@ function moeSummary(plan: CapacityPlan): string {
     return `${counts}A mixture-of-experts model: each token runs ${used} experts per layer, but every expert must stay loaded, in GPU or system memory, because any token may pick any of them.`
 }
 
+/** How the model and its context are split across the GPUs, in words. */
+function splitText(engine: string, bars: ReturnType<typeof gpuBars>): string {
+    const alone = bars.findIndex(b => !b.idle && b.share === 1)
+    if (alone >= 0 && bars.some(b => b.idle)) {
+        return `Ollama keeps this model and its context on GPU ${alone} alone, since they fit there; more sessions than that spread it across all ${bars.length} GPUs.`
+    }
+    const parts = bars
+        .map((b, i) =>
+            b.layers > 0
+                ? `${b.layers} layers on GPU ${i}`
+                : `${Math.round(b.share * 100)}% on GPU ${i}`
+        )
+        .join(', ')
+    const even = bars.every(b => Math.abs(b.share - bars[0].share) < 0.02)
+    return `The model is split by layers: ${parts}${
+        even ? '' : ', in proportion to each GPU’s memory'
+    }. Each layer’s part of every session’s context stays on its GPU, so a session fits only when its part fits on each GPU.${
+        engine === 'lmstudio'
+            ? ' Set LM Studio to offload every layer and split across all GPUs.'
+            : ''
+    }`
+}
+
 export default function CapacityPlanner({
     nodeId,
     engine,
@@ -302,6 +342,9 @@ export default function CapacityPlanner({
     const [kvOverride, setKvOverride] = useState<number | null>(null)
     const [plan, setPlan] = useState<CapacityPlan | null>(null)
     const [busy, setBusy] = useState(false)
+    // A model with no saved plan starts from what its engine and the model
+    // report; null until the first answer says what that is.
+    const [starts, setStarts] = useState<StartingValues | null>(saved ? {} : null)
 
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -315,9 +358,24 @@ export default function CapacityPlanner({
                     windowTokens: windowTokens ?? undefined,
                     cpuExpertLayers: cpuLayers || undefined,
                     weightsBytes: weightsOverride ?? undefined,
-                    kvBytesPerToken: kvOverride ?? undefined
+                    kvBytesPerToken: kvOverride ?? undefined,
+                    withLaunchDefaults: starts === null || undefined
                 })
                 .then(result => {
+                    if (starts === null) {
+                        const found = startingValues(result.spec)
+                        setStarts(found)
+                        if (found.sessions) {
+                            setSessions(found.sessions.value)
+                            setSessionsTouched(true)
+                        }
+                        if (found.reply) setReply(found.reply.value)
+                        if (found.window && found.window.value !== result.windowTokens) {
+                            // Size the model again for its starting window.
+                            setWindowTokens(found.window.value)
+                            return
+                        }
+                    }
                     // A model that does not report its maximum needs a window
                     // to be sized at all.
                     if (windowTokens === null && /maximum context is unknown/.test(result.error)) {
@@ -344,16 +402,20 @@ export default function CapacityPlanner({
         weightsOverride,
         kvOverride,
         sessionsTouched,
+        starts,
         onError
     ])
 
     const stops = useMemo(
-        () => windowStops(plan?.spec.maxContextTokens ?? 0),
-        [plan?.spec.maxContextTokens]
+        () => withStartStop(windowStops(plan?.spec.maxContextTokens ?? 0), starts?.window?.value),
+        [plan?.spec.maxContextTokens, starts?.window?.value]
     )
     const windowIndex = nearestStop(stops, windowTokens ?? stops[stops.length - 1])
     const windowNow = stops[windowIndex]
-    const replyOptions = useMemo(() => replyStops(windowNow), [windowNow])
+    const replyOptions = useMemo(
+        () => withStartStop(replyStops(windowNow), starts?.reply?.value),
+        [windowNow, starts?.reply?.value]
+    )
     const replyIndex = nearestStop(replyOptions, replyBudget(windowNow, reply))
     const replyNow = replyOptions[replyIndex]
     const messageTokens = windowNow - replyNow
@@ -373,7 +435,10 @@ export default function CapacityPlanner({
     const cpuLayersNow = expertStops[layersOnCpu]
     const use = plan && !plan.error ? memoryUse(plan, chosen, cpuLayersNow) : null
     const expertsInRam = cpuExpertBytes(plan?.spec.expertLayerBytes ?? [], cpuLayersNow)
-    const over = use ? use.gpuOver || use.ramOver : false
+    const bars = plan && !plan.error ? gpuBars(plan, chosen, engine) : []
+    // One GPU can run out while the total still has room.
+    const over = use ? use.gpuOver || use.ramOver || bars.some(b => b.over) : false
+    const gpuLaunch = plan ? multiGpuLaunchText(multiGpuLaunch(engine, plan, chosen)) : ''
     // Settings past the hardware can still be saved; the sliders and bars
     // turn red to say so.
     const usable =
@@ -416,7 +481,11 @@ export default function CapacityPlanner({
             .finally(() => setBusy(false))
     }
 
-    const gpuLabel = use?.shared ? 'Memory (shared by GPU and system)' : 'GPU memory'
+    const gpuLabel = use?.shared
+        ? 'Memory (shared by GPU and system)'
+        : bars.length > 0
+          ? `GPU memory · all ${bars.length} GPUs`
+          : 'GPU memory'
 
     return (
         <Stack gap="3" className="pair-paper p-3">
@@ -428,7 +497,10 @@ export default function CapacityPlanner({
             <Stack gap="1">
                 <Flex justify="between" gap="3">
                     <Text kind="body/semibold/sm">Context window per session</Text>
-                    <Text kind="body/semibold/sm">{tokens(stops[windowIndex])} tokens</Text>
+                    <Flex gap="2" align="center">
+                        <StartMark start={starts?.window} now={windowNow} />
+                        <Text kind="body/semibold/sm">{tokens(stops[windowIndex])} tokens</Text>
+                    </Flex>
                 </Flex>
                 <SliderTone over={over}>
                     <Slider
@@ -447,7 +519,10 @@ export default function CapacityPlanner({
             <Stack gap="1">
                 <Flex justify="between" gap="3">
                     <Text kind="body/semibold/sm">Room for the reply</Text>
-                    <Text kind="body/semibold/sm">{tokens(replyNow)} tokens</Text>
+                    <Flex gap="2" align="center">
+                        <StartMark start={starts?.reply} now={replyNow} />
+                        <Text kind="body/semibold/sm">{tokens(replyNow)} tokens</Text>
+                    </Flex>
                 </Flex>
                 <Slider
                     min={0}
@@ -472,12 +547,15 @@ export default function CapacityPlanner({
                 <Flex justify="between" gap="3">
                     <Text kind="body/semibold/sm">Sessions at once</Text>
                     {known !== null && (
-                        <Text
-                            kind="body/semibold/sm"
-                            style={chosen > known ? DANGER_TEXT : undefined}
-                        >
-                            {chosen} ({known} fit)
-                        </Text>
+                        <Flex gap="2" align="center">
+                            <StartMark start={starts?.sessions} now={chosen} />
+                            <Text
+                                kind="body/semibold/sm"
+                                style={chosen > known ? DANGER_TEXT : undefined}
+                            >
+                                {chosen} ({known} fit)
+                            </Text>
+                        </Flex>
                     )}
                 </Flex>
                 {known === null ? (
@@ -665,6 +743,36 @@ export default function CapacityPlanner({
                             .filter(Boolean)
                             .join(' · ')}
                     />
+                    {bars.length > 0 && (
+                        <Text kind="body/regular/sm" className="text-subtle-color">
+                            {splitText(engine, bars)}
+                        </Text>
+                    )}
+                    {bars.map(bar => (
+                        <MemoryBar
+                            key={bar.label}
+                            label={bar.label}
+                            needed={bar.needed}
+                            total={bar.total}
+                            over={bar.over}
+                            detail={
+                                bar.idle
+                                    ? `not used by this model · kept free ${gb(bar.reserveBytes)}`
+                                    : [
+                                          bar.layers > 0
+                                              ? `${bar.layers} layers, model ${gb(bar.weightsBytes)}`
+                                              : `model ${gb(bar.weightsBytes)}`,
+                                          bar.otherModelsBytes > 0
+                                              ? `other models ${gb(bar.otherModelsBytes)}`
+                                              : '',
+                                          `context ${gb(bar.contextBytes)}`,
+                                          `kept free ${gb(bar.reserveBytes)}`
+                                      ]
+                                          .filter(Boolean)
+                                          .join(' · ')
+                            }
+                        />
+                    ))}
                     {!use.shared && use.ramTotal > 0 && (
                         <MemoryBar
                             label="System memory"
@@ -716,6 +824,7 @@ export default function CapacityPlanner({
                     Applying restarts{' '}
                     {engine === 'ollama' ? 'Ollama (every model it runs)' : 'llama.cpp'} with these
                     settings; requests in progress on it are interrupted.
+                    {gpuLaunch ? ` For the GPUs it also sets ${gpuLaunch}.` : ''}
                 </Text>
             )}
         </Stack>

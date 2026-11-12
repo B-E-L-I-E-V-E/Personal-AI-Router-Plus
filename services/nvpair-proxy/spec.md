@@ -795,6 +795,25 @@ reading the model:
   ceiling 256). The cap never shrinks the window. With the engine not running,
   `spec.notes` says so. A model that does not fit still reports its
   per-session cost, so the desktop's calculator can show what it would need.
+- **Several GPUs**: the model is split by whole layers (`spec.layers`) in
+  proportion to each GPU's memory after its own reserve (largest remainder),
+  and each layer's share of every session's cache sits with it. `gpus[]`
+  reports each GPU's `layers`, `share`, `weightsBytes`, `otherModelsBytes`
+  (other models spread by the same ratio), `bytesPerSession` and `sessions`;
+  the plan's `sessions` is the smallest of them, never more than the pooled
+  budget allows. With an unknown layer count the split is by the same ratio
+  without rounding. A mixture-of-experts model with per-layer expert sizes
+  is split in layer order by each layer's GPU bytes (its share of the
+  non-expert weights, plus its experts unless `cpuExpertLayers` keeps them
+  in system memory) and its part of the sessions the pooled budget holds, so
+  GPU 0, which holds the first layers whose experts leave first, takes more
+  layers. With two or more GPUs, `tensorSplit` is the matching
+  llama.cpp `--tensor-split` (layers per GPU, or GiB after the reserve), and
+  for Ollama `oneGpuIndex`/`oneGpuSessions` give the GPU with the most room
+  for the whole model and how many sessions fit there alone (0: it needs more
+  than one). The desktop writes `--split-mode layer --tensor-split` for
+  llama.cpp, and `OLLAMA_SCHED_SPREAD=1` for Ollama when the planned sessions
+  exceed `oneGpuSessions`.
 - **Expert offload**: for a mixture-of-experts model (`expert_count` > 1),
   `spec.expertLayerBytes[i]` is the exact size of layer `i`'s routed-expert
   tensors (`blk.i.ffn_{up,down,gate,gate_up}_exps`, shared experts excluded;
@@ -831,6 +850,19 @@ reading the model:
   `windowTokens`, `replyTokens`, `conversationLimitTokens` and
   `postRoomTokens`; `capacity/plan` takes `replyTokens` and returns
   `replyTokens` and `postTokens`.
+- **Starting values** (`spec.defaults`): what the engine runs the model with
+  now, or the model's own defaults, for the desktop to start a model with no
+  saved plan from. Each of `window`, `sessions` and `reply` is
+  `{"value","source"}` with `source` `engine` (in force now) or `model` (the
+  model's parameter), and is left out when nothing reports it. Ollama: the
+  loaded copy's `/api/ps` `context_length`, else `num_ctx` from `/api/show`
+  `parameters`; `num_predict` (when positive) for the reply. llama.cpp:
+  `/props` `default_generation_settings.n_ctx` (per slot; top-level `n_ctx` on
+  older servers), `total_slots`, and a positive `n_predict`. LM Studio: the
+  first loaded instance's `config.context_length` and `config.parallel` from
+  `/api/v1/models`. The desktop fills what is still missing from the engine's
+  launch settings (`OLLAMA_CONTEXT_LENGTH`, `OLLAMA_NUM_PARALLEL`; llama.cpp
+  `--ctx-size` ÷ `--parallel`) with `source` `launch`.
 - A model that cannot be sized returns a result with `error` and whatever
   `spec` was learned, not a JSON-RPC error.
 

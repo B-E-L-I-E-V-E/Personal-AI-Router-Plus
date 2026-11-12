@@ -130,12 +130,23 @@ type planResult struct {
 	// ReplyTokens is the part of each session's window kept for replies, and
 	// PostTokens what a session's posts and history may use: the window less
 	// the reply budget.
-	ReplyTokens int64    `json:"replyTokens"`
-	PostTokens  int64    `json:"postTokens"`
-	PoolTokens  int64    `json:"poolTokens"`
-	UsedBytes   int64    `json:"usedBytes"`
-	Fits        bool     `json:"fits"`
-	Warnings    []string `json:"warnings,omitempty"`
+	ReplyTokens int64 `json:"replyTokens"`
+	PostTokens  int64 `json:"postTokens"`
+	PoolTokens  int64 `json:"poolTokens"`
+	UsedBytes   int64 `json:"usedBytes"`
+	Fits        bool  `json:"fits"`
+
+	// GPUs is each GPU's part of the plan: the model's layers split across
+	// them in proportion to their memory after the reserve. With more than
+	// one GPU, TensorSplit is the matching llama.cpp --tensor-split, and for
+	// Ollama, which loads a model on one GPU when it fits there, OneGPUIndex
+	// is that GPU and OneGPUSessions how many sessions it holds alone.
+	GPUs           []planGPUUse `json:"gpus,omitempty"`
+	TensorSplit    string       `json:"tensorSplit,omitempty"`
+	OneGPUIndex    int          `json:"oneGpuIndex"`
+	OneGPUSessions int          `json:"oneGpuSessions"`
+
+	Warnings []string `json:"warnings,omitempty"`
 	// Error is why the model could not be sized; Spec still says what is
 	// known, so the caller can ask for the missing values.
 	Error string `json:"error,omitempty"`
@@ -193,6 +204,9 @@ func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 		return res, errors.New("no GPU memory reported for this node")
 	}
 
+	// Each GPU keeps its own reserve; see plan_gpus.go for the split.
+	var gpus []planGPU
+	var reserves []int64
 	for _, g := range req.GPUs {
 		if g.VramBytes <= 0 {
 			continue
@@ -203,6 +217,8 @@ func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 			r = minReservePerGPU
 		}
 		res.ReserveBytes += r
+		gpus = append(gpus, g)
+		reserves = append(reserves, r)
 	}
 	if res.TotalBytes == 0 {
 		return res, errors.New("no GPU memory reported for this node")
@@ -210,6 +226,9 @@ func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 	if req.Unified {
 		if floor := int64(float64(res.TotalBytes) * (1 - unifiedMemoryGPUShare)); res.ReserveBytes < floor {
 			res.ReserveBytes = floor
+			for i, g := range gpus {
+				reserves[i] = int64(float64(floor) * float64(g.VramBytes) / float64(res.TotalBytes))
+			}
 		}
 	}
 
@@ -301,13 +320,18 @@ func computePlan(req planRequest, spec modelSpec) (planResult, error) {
 		return res, fmt.Errorf("replyTokens must be less than the window (%d)", window)
 	}
 	res.PostTokens = window - res.ReplyTokens
-	n := res.ContextBytes / sessionBytes(spec, perToken, factor, window)
+	perSession := sessionBytes(spec, perToken, factor, window)
+	n := res.ContextBytes / perSession
 	limit := int64(maxPlannedSessions)
 	if req.MaxSessions > 0 {
 		limit = int64(req.MaxSessions)
 	}
 	if n > limit {
 		n = limit
+	}
+	// Several GPUs: a session fits only when its part fits on each of them.
+	if fit := res.applyGPUSplit(req, gpus, reserves, perSession, limit); len(gpus) > 1 {
+		n = min(n, fit)
 	}
 	res.Sessions = int(n)
 	if n == 0 && res.ContextBytes > 0 {
