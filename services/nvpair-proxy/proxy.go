@@ -3254,6 +3254,11 @@ func (p *Proxy) handleMessage(msg *Message) {
 		// network, so it is answered off the control loop (peer_capacity.go).
 		p.answerPeerCapacity(msg)
 
+	case "capacity/peer-call":
+		// Any capacity method, on this node or another cluster member's
+		// (peer_capacity_call.go). Answered off the control loop.
+		p.answerPeerCapacityCall(msg)
+
 	case "capacity/set":
 		ctx, cancel := context.WithTimeout(context.Background(), detectionTimeout+time.Second)
 		defer cancel()

@@ -642,7 +642,8 @@ app and the local proxy, or between cluster members over mutual TLS:
 - **About this model…** (the engine's description, tags, capabilities, licence
   and links) and **Look up on the web** for facts the engine doesn't report.
 - The **Context & sessions…** planner, which sizes sessions from the node's
-  memory and restarts the engine to match.
+  memory and restarts the engine to match, for this node or another cluster
+  member. `PUT /pair/v1/capacity` only changes the node you call.
 - Pausing or stopping **another** node. It goes over the cluster link, so
   `PUT /pair/v1/node/state` only changes the node you call.
 - The summary line on each model row, which reads `GET /pair/v1/capacity` from

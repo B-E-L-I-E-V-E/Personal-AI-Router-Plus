@@ -17,6 +17,7 @@ import getErrorString from '@/shared/utils/get-error-string'
 import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
 import CapacityPlanner from '@/ui/components/SessionsSettings/CapacityPlanner'
 import { planStatus } from '@/ui/components/SessionsSettings/plan-status'
+import { useConnectionStore } from '@/ui/stores/connection.store'
 import {
     findPlan,
     removePlanAndLimit,
@@ -24,24 +25,42 @@ import {
 } from '@/ui/stores/capacity-planner.store'
 
 /**
- * One model's context window and session count, sized from this node's
- * memory: the capacity planner in a dialog, opened from the model's menu.
+ * One model's context window and session count, sized from its node's
+ * memory: the capacity planner in a dialog, opened from the model's menu. A
+ * model on another node is planned, saved and applied on that node.
  */
 export function CapacityPlannerDialog({
+    nodeId,
+    nodeName,
     engine,
     model,
     displayName,
     onClose
 }: {
+    /** The node the model runs on. */
+    nodeId: string
+    /** That node's name, shown when it is not this node. */
+    nodeName: string
     /** The proxy's engine name (ollama, llamacpp, lmstudio). */
     engine: string
     model: string
     displayName: string
     onClose: () => void
 }) {
-    const planner = useCapacityPlannerStore(s => s.planner)
-    const setPlanner = useCapacityPlannerStore(s => s.setPlanner)
-    const refresh = useCapacityPlannerStore(s => s.refresh)
+    const selfId = useConnectionStore(s => s.selfId)
+    // Another node's model goes to that node; this node's needs no ID.
+    const remote = nodeId !== selfId ? nodeId : undefined
+    const where = remote ? nodeName || 'that node' : 'this node'
+    const ownPlanner = useCapacityPlannerStore(s => s.planner)
+    const peerPlanner = useCapacityPlannerStore(s => (remote ? s.peerPlanner[remote] : undefined))
+    const planner = remote ? (peerPlanner ?? null) : ownPlanner
+    const setOwnPlanner = useCapacityPlannerStore(s => s.setPlanner)
+    const setPeerPlanner = useCapacityPlannerStore(s => s.setPeerPlanner)
+    const refreshOwn = useCapacityPlannerStore(s => s.refresh)
+    const refreshPeer = useCapacityPlannerStore(s => s.refreshPeer)
+    const setPlanner = (state: Parameters<typeof setOwnPlanner>[0]) =>
+        remote ? setPeerPlanner(remote, state) : setOwnPlanner(state)
+    const refresh = () => (remote ? refreshPeer(remote) : refreshOwn())
     const saved = findPlan(planner, engine, model)
     const [error, setError] = useState<string | null>(null)
     const [result, setResult] = useState<string | null>(null)
@@ -56,20 +75,21 @@ export function CapacityPlannerDialog({
     }
     const applyNow = () =>
         run(async () => {
-            const applied = await window.pairApi.sessions.applyPlan(engine, model)
-            setPlanner(await window.pairApi.sessions.getPlanner())
+            const applied = await window.pairApi.sessions.applyPlan(engine, model, remote)
+            setPlanner(await window.pairApi.sessions.getPlanner(remote))
             setResult(applied.message)
         }, 'Could not apply the plan')
     // Removing a plan also lifts the limit it set, so the model goes back to
     // what its engine reports.
     const removePlan = () =>
         run(async () => {
-            setPlanner(await removePlanAndLimit(engine, model))
+            setPlanner(await removePlanAndLimit(engine, model, remote))
+            void refresh()
             onClose()
         }, 'Could not remove the plan')
     const setAutoReload = (on: boolean) =>
         run(async () => {
-            setPlanner(await window.pairApi.sessions.setPlanner({ autoReload: on }))
+            setPlanner(await window.pairApi.sessions.setPlanner({ nodeId: remote, autoReload: on }))
         }, 'Could not change the setting')
 
     return (
@@ -79,8 +99,18 @@ export function CapacityPlannerDialog({
                     className="no-drag-elements"
                     style={{ width: 'min(880px, 94vw)', maxHeight: '88vh', overflowY: 'auto' }}
                 >
-                    <ModalHeading>Context &amp; sessions · {displayName}</ModalHeading>
+                    <ModalHeading>
+                        Context &amp; sessions · {displayName}
+                        {remote ? ` on ${where}` : ''}
+                    </ModalHeading>
                     <Stack gap="3" className="-mt-2">
+                        {remote && !result && (
+                            <Text kind="body/regular/sm" className="text-subtle-color">
+                                Planned for {where}’s GPUs and memory, and saved on {where}.
+                                Applying restarts the engine on {where}. Reloading when idle is done
+                                by PAIR on {where}, so it needs PAIR running there.
+                            </Text>
+                        )}
                         {error && (
                             <InlineErrorBanner message={error} onClose={() => setError(null)} />
                         )}
@@ -124,9 +154,9 @@ export function CapacityPlannerDialog({
                                         Reload automatically when idle
                                     </Text>
                                     <Text kind="body/regular/sm" className="text-subtle-color">
-                                        For every model on this node: apply a saved plan once the
-                                        node has no sessions and no requests. When off, plans apply
-                                        only with Save and apply now, or Apply now.
+                                        For every model on {where}: apply a saved plan once the node
+                                        has no sessions and no requests. When off, plans apply only
+                                        with Save and apply now, or Apply now.
                                         {planner && !planner.activity.idle
                                             ? ` Busy now: ${planner.activity.sessions} sessions, ${planner.activity.activeRequests} requests.`
                                             : ''}
@@ -137,7 +167,7 @@ export function CapacityPlannerDialog({
                         {engine === 'ollama' && !result && (
                             <Text kind="body/regular/sm" className="text-subtle-color">
                                 Ollama uses one window and session count for every model it runs, so
-                                this plan applies to all Ollama models on this node.
+                                this plan applies to all Ollama models on {where}.
                             </Text>
                         )}
                         {result ? (
@@ -156,6 +186,7 @@ export function CapacityPlannerDialog({
                             </Stack>
                         ) : (
                             <CapacityPlanner
+                                nodeId={remote}
                                 engine={engine}
                                 model={model}
                                 saved={saved}

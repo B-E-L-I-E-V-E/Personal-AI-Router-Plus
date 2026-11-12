@@ -191,10 +191,13 @@ local engine's own report fills in what it can. For streamed OpenAI-compatible
 session requests the proxy adds `stream_options.include_usage` so the engine
 reports counts. See `spec.md` §5.12.
 
-A cluster member can read, but not change, this node's capacity: the mTLS
-ingress answers `GET /pair/v1/peer/capacity` with the same report and refuses
-every other method there. The JSON-RPC request `capacity/peer-report`
-`{"nodeId"}` fetches a pinned peer's report this way. See `spec.md` §5.14.
+A cluster member reads this node's capacity from the mTLS ingress's
+`GET /pair/v1/peer/capacity`, and plans or changes it through
+`POST /pair/v1/peer/capacity/call` (`capacity/plan`, `capacity/planner`,
+`capacity/planner-set`, `capacity/set`, `capacity/report`), run here as for
+this node's own desktop. The JSON-RPC requests `capacity/peer-report`
+`{"nodeId"}` and `capacity/peer-call` `{"nodeId","method","params"}` reach a
+pinned peer this way. See `spec.md` §5.14.
 
 **Performance.** PAIR measures every generation request this node routes:
 tokens in and out, reading and writing speed in tokens per second, time to

@@ -37,12 +37,19 @@ const getPeerCapacity = vi.fn()
 
 beforeEach(() => {
     getPlanner.mockReset()
+    // A peer's planner, unless a test says otherwise, is not answered.
+    getPlanner.mockRejectedValue(new Error('not reachable'))
     setPlanner.mockReset()
     setCapacity.mockReset()
     getCapacity.mockReset()
     getCapacity.mockResolvedValue([])
     getPeerCapacity.mockReset()
-    useCapacityPlannerStore.setState({ planner: null, capacity: null, peerCapacity: {} })
+    useCapacityPlannerStore.setState({
+        planner: null,
+        capacity: null,
+        peerCapacity: {},
+        peerPlanner: {}
+    })
     vi.stubGlobal('window', {
         pairApi: {
             sessions: { getPlanner, setPlanner, setCapacity, getCapacity, getPeerCapacity }
@@ -135,6 +142,44 @@ describe('capacity planner store', () => {
         getPeerCapacity.mockRejectedValueOnce(new Error('node is not a reachable cluster peer'))
         await useCapacityPlannerStore.getState().refreshPeer('node-b')
         expect(useCapacityPlannerStore.getState().peerCapacity).toEqual({ 'node-c': [] })
+    })
+
+    it('keeps a peer’s planner when the peer answers it, so its models can be planned from here', async () => {
+        getPeerCapacity.mockResolvedValue([])
+        getPlanner.mockResolvedValueOnce(state)
+        await useCapacityPlannerStore.getState().refreshPeer('node-b')
+        expect(getPlanner).toHaveBeenCalledWith('node-b')
+        expect(useCapacityPlannerStore.getState().peerPlanner).toEqual({ 'node-b': state })
+        // This node's own planner is not touched by a peer's.
+        expect(useCapacityPlannerStore.getState().planner).toBeNull()
+
+        // An older or unreachable peer can no longer be planned from here.
+        getPlanner.mockRejectedValueOnce(
+            new Error('node node-b runs a PAIR Plus without remote Context & sessions')
+        )
+        await useCapacityPlannerStore.getState().refreshPeer('node-b')
+        expect(useCapacityPlannerStore.getState().peerPlanner).toEqual({})
+        expect(useCapacityPlannerStore.getState().peerCapacity).toEqual({ 'node-b': [] })
+
+        useCapacityPlannerStore.getState().setPeerPlanner('node-c', state)
+        expect(useCapacityPlannerStore.getState().peerPlanner).toEqual({ 'node-c': state })
+    })
+
+    it('removing a peer’s plan lifts the limit on that peer', async () => {
+        const after = { ...state, plans: [] }
+        setPlanner.mockResolvedValueOnce(after)
+        setCapacity.mockResolvedValueOnce(null)
+        await expect(removePlanAndLimit('ollama', 'qwen3:0.6b', 'node-b')).resolves.toBe(after)
+        expect(setPlanner).toHaveBeenCalledWith({
+            nodeId: 'node-b',
+            remove: { engine: 'ollama', model: 'qwen3:0.6b' }
+        })
+        expect(setCapacity).toHaveBeenCalledWith({
+            nodeId: 'node-b',
+            engine: 'ollama',
+            model: 'qwen3:0.6b',
+            clear: true
+        })
     })
 
     it('removing a plan also lifts the limit it set', async () => {

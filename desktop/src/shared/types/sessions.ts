@@ -61,6 +61,8 @@ export interface ModelCapacity {
 
 /** A change to one model's capacity setting. */
 export interface CapacityChange {
+    /** The node to change; omitted means this one. */
+    nodeId?: string
     engine: string
     model: string
     contextTokens?: number
@@ -104,6 +106,8 @@ export type KvCacheType = 'f16' | 'q8_0' | 'q4_0'
  * counts how many such sessions fit.
  */
 export interface CapacityPlanRequest {
+    /** The node the model runs on; omitted means this one. */
+    nodeId?: string
     engine: string
     model: string
     /** Each session's window; omitted means the model's maximum. */
@@ -182,6 +186,8 @@ export interface PlannerState {
 }
 
 export interface PlannerChange {
+    /** The node whose planner to change; omitted means this one. */
+    nodeId?: string
     autoReload?: boolean
     save?: Omit<SavedCapacityPlan, 'applied' | 'appliedAt' | 'savedAt'>
     remove?: { engine: string; model: string }

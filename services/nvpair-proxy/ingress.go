@@ -127,6 +127,11 @@ func (f *facade) handleClusterIngress(w http.ResponseWriter, r *http.Request) {
 	if f.servePeerRelease(w, r, peer) || f.servePeerCapacity(w, r) {
 		return
 	}
+	// A calling node sizing, saving, applying or clearing this node's
+	// capacity: any cluster member may manage any node (peer_capacity_call.go).
+	if f.servePeerCapacityCall(w, r, peer) {
+		return
+	}
 	// A calling node asking this node to describe one of its models
 	// (modeldetails.go).
 	if f.servePeerModelDetails(w, r) {

@@ -16,12 +16,20 @@ vi.mock('@/electron/service-bridge/modular-state', () => ({
         getSelfGpus: () => [
             { name: 'NVIDIA RTX 5090', vramBytes: 32 * 1024 ** 3 },
             { name: 'NVIDIA RTX 5090', vramBytes: 32 * 1024 ** 3 }
-        ]
+        ],
+        getNodeHardware: (nodeId: string) =>
+            nodeId === 'node-2'
+                ? {
+                      gpus: [{ name: 'NVIDIA GeForce RTX 4090', vramBytes: 24 * 1024 ** 3 }],
+                      ramBytes: 64 * 1024 ** 3
+                  }
+                : { gpus: [], ramBytes: 0 }
     })
 }))
 
 import {
     applyPlan,
+    getPlanner,
     llamaCppLaunchText,
     ollamaLaunchText,
     parsePlanner,
@@ -291,6 +299,79 @@ describe('capacity planner bridge', () => {
                 sessions: 4,
                 cacheType: 'f16',
                 offloadExperts: false
+            }
+        })
+    })
+
+    it('plans another node’s model on that node, for its GPUs and memory', async () => {
+        callProxy.mockResolvedValueOnce({ spec: { notes: [] }, sessions: 3, windowTokens: 8192 })
+        const result = await planCapacity({
+            nodeId: 'node-2',
+            engine: 'ollama',
+            model: 'm',
+            windowTokens: 8192
+        })
+        expect(result.sessions).toBe(3)
+        const [, method, params] = callProxy.mock.calls[0]
+        expect(method).toBe('capacity/peer-call')
+        expect(params).toEqual({
+            nodeId: 'node-2',
+            method: 'capacity/plan',
+            params: {
+                engine: 'ollama',
+                model: 'm',
+                gpus: [{ name: 'NVIDIA GeForce RTX 4090', vramBytes: 24 * 1024 ** 3 }],
+                unified: false,
+                systemRamBytes: 64 * 1024 ** 3,
+                windowTokens: 8192
+            }
+        })
+    })
+
+    it('reads this node’s planner directly and another node’s through the cluster', async () => {
+        callProxy.mockResolvedValue(plannerState())
+        await getPlanner()
+        await getPlanner('node-1')
+        await getPlanner('node-2')
+        expect(callProxy.mock.calls.map(c => [c[1], c[2]])).toEqual([
+            ['capacity/planner', {}],
+            ['capacity/planner', {}],
+            ['capacity/peer-call', { nodeId: 'node-2', method: 'capacity/planner', params: {} }]
+        ])
+    })
+
+    it('applies another node’s plan to that node’s engine and records it there', async () => {
+        callProxy.mockImplementation(
+            async (_engine: string, method: string, params: Record<string, unknown>) =>
+                method === 'capacity/peer-call' && params.method === 'capacity/planner'
+                    ? plannerState()
+                    : {}
+        )
+        callProcess.mockImplementation(async (_target: string, method: string) => {
+            if (method === 'engine:get-settings')
+                return settingsSnapshot('--temp 0.7', { nodeId: 'node-2', appliedRevision: 8 })
+            if (method === 'engine:apply-settings') return { revision: 8, phase: 'succeeded' }
+            return null
+        })
+        const result = await applyPlan({ engine: 'llamacpp', model: 'm', nodeId: 'node-2' })
+        expect(result.applied).toBe(true)
+        const settings = callProcess.mock.calls.filter(c => String(c[1]).startsWith('engine:'))
+        expect(settings.every(c => c[2].nodeId === 'node-2')).toBe(true)
+        // Nothing went to this node's own planner.
+        expect(callProxy.mock.calls.every(c => c[1] === 'capacity/peer-call')).toBe(true)
+        const applied = callProxy.mock.calls.find(c => c[2].method === 'capacity/planner-set')
+        expect(applied?.[2]).toEqual({
+            nodeId: 'node-2',
+            method: 'capacity/planner-set',
+            params: {
+                applied: {
+                    engine: 'llamacpp',
+                    model: 'm',
+                    windowTokens: 32768,
+                    sessions: 4,
+                    cacheType: 'f16',
+                    offloadExperts: false
+                }
             }
         })
     })

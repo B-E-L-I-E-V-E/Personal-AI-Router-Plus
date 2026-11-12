@@ -160,6 +160,21 @@ describe('sessions bridge', () => {
         ])
     })
 
+    it('sends another node’s capacity change to that node', async () => {
+        callProxy.mockResolvedValue({})
+        await setCapacity({ nodeId: 'node-2', engine: 'ollama', model: 'm', clear: true })
+        expect(callProxy.mock.calls.map(c => [c[1], c[2]])).toEqual([
+            [
+                'capacity/peer-call',
+                {
+                    nodeId: 'node-2',
+                    method: 'capacity/set',
+                    params: { engine: 'ollama', model: 'm', clear: true }
+                }
+            ]
+        ])
+    })
+
     it('carries the reply budget both ways', async () => {
         callProxy.mockResolvedValueOnce({
             models: [
