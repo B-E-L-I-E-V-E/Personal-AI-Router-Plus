@@ -532,3 +532,84 @@ func (f *facade) fetchRouterModelList(r *http.Request, src routerListSource) ([]
 	}
 	return *envelope.Data, true
 }
+
+// servedNodeHeader and servedEngineHeader name, on a router reply, the node
+// and engine that produced it. They are set on every reply an engine produced,
+// and on a transport failure after the last attempt, so a failed request can
+// be traced as well as a successful one. A reply the router wrote itself, such
+// as model_not_found, carries neither.
+const (
+	servedNodeHeader   = "X-PAIR-Node-ID"
+	servedEngineHeader = "X-PAIR-Engine"
+)
+
+func setServedByHeaders(h http.Header, nodeID, engine string) {
+	h.Set(servedNodeHeader, nodeID)
+	h.Set(servedEngineHeader, engine)
+}
+
+// routingPath is the router's read-only view of how it is choosing nodes.
+const routingPath = "/pair/v1/routing"
+
+// routingNode is one node's place in the router's choice: the scheduler's
+// rank, pending work and GPU pressure, the reservations this process holds on
+// it, and their sum, which is what reserveCandidate compares.
+type routingNode struct {
+	ID           string `json:"id"`
+	Rank         int    `json:"rank"`
+	Pending      int    `json:"pending"`
+	GPUPressure  int    `json:"gpuPressure"`
+	Reservations int    `json:"reservations"`
+	Load         int    `json:"load"`
+}
+
+// routingReport answers GET /pair/v1/routing.
+type routingReport struct {
+	// Generation is the scheduler snapshot the figures belong to. A request
+	// dispatched under one generation is counted by the next.
+	Generation uint64        `json:"generation"`
+	Nodes      []routingNode `json:"nodes"`
+}
+
+// routingSnapshot reads the scheduler baseline and this process's reservations
+// in priority order, under the same lock reserveCandidate takes.
+func (p *Proxy) routingSnapshot() routingReport {
+	p.priorityMu.RLock()
+	defer p.priorityMu.RUnlock()
+	report := routingReport{Generation: p.appliedPriorityGeneration, Nodes: make([]routingNode, 0, len(p.priority))}
+	for rank, id := range p.priority {
+		n := routingNode{
+			ID:           id,
+			Rank:         rank,
+			Pending:      p.priorityPending[id],
+			GPUPressure:  p.priorityGPUPressure[id],
+			Reservations: p.priorityReservations[id],
+		}
+		n.Load = n.Pending + n.GPUPressure + n.Reservations
+		report.Nodes = append(report.Nodes, n)
+	}
+	return report
+}
+
+// serveRoutingAPI answers GET /pair/v1/routing on the router, reporting
+// whether it handled the request.
+func (f *facade) serveRoutingAPI(w http.ResponseWriter, r *http.Request) bool {
+	if r.URL.Path != routingPath {
+		return false
+	}
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeIngressError(w, http.StatusMethodNotAllowed, "method_not_allowed", "use GET")
+		return true
+	}
+	body, err := json.Marshal(f.host.routingSnapshot())
+	if err != nil {
+		writeIngressError(w, http.StatusInternalServerError, "encode_failed", "failed to encode the routing report")
+		return true
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+	return true
+}

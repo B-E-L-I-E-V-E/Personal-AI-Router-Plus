@@ -1159,8 +1159,16 @@ A loopback facade that fronts no engine (`router.go`), enabled with
   always routes), and returns one list de-duplicated by `id`, first record wins,
   with `pair.engines` and `pair.nodes`. Partial when sources fail;
   `503` when none answers. No CORS merge: a browser origin gets no grant.
-- **Surface.** Anything other than the model list, the inference paths and
-  `/pair/v1/*` is `404`. The mTLS personality answers `404`: peers reach this
+- **Where it ran.** A reply an engine produced, success or failure, carries
+  `X-PAIR-Node-ID` and `X-PAIR-Engine` for the attempt that produced it, set
+  in `ModifyResponse` and on the final transport-error reply. A reply the
+  router wrote itself carries neither. Engine ports do not set them.
+- **Routing report.** `GET /pair/v1/routing` returns the applied snapshot
+  generation and, per ranked node, `rank`, `pending`, `gpuPressure`,
+  `reservations` and their sum `load`, read under the lock reserveCandidate
+  takes.
+- **Surface.** Anything other than the model list, the inference paths,
+  `/pair/v1/routing` and `/pair/v1/*` is `404`. The mTLS personality answers `404`: peers reach this
   node's engines on their own ports.
 
 ## 6. Reservations

@@ -558,3 +558,134 @@ func TestRouter_EnableListensAndRestoresAPortMovedBySetPort(t *testing.T) {
 		t.Errorf("router came back on %d, want the persisted %d", restored.Port, moved)
 	}
 }
+
+func TestRouter_RepliesNameTheNodeAndEngineThatProducedThem(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+	}{
+		{name: "success", status: http.StatusOK},
+		// An engine's own refusal is passed through, and still traceable.
+		{name: "engine refused", status: http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, _ := routerProxy(t,
+				fakeEngineSpec{engine: "lmstudio", nodeID: "node-b", models: []string{"qwen"}, status: tc.status},
+			)
+
+			rec := routerRequest(t, p, http.MethodPost, "/v1/chat/completions", chatBody("qwen"))
+
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.status)
+			}
+			if got := rec.Header().Get(servedNodeHeader); got != "node-b" {
+				t.Errorf("%s = %q, want node-b", servedNodeHeader, got)
+			}
+			if got := rec.Header().Get(servedEngineHeader); got != "lmstudio" {
+				t.Errorf("%s = %q, want lmstudio", servedEngineHeader, got)
+			}
+		})
+	}
+}
+
+func TestRouter_RefusalWrittenByTheRouterNamesNoNode(t *testing.T) {
+	p, _ := routerProxy(t)
+
+	rec := routerRequest(t, p, http.MethodPost, "/v1/chat/completions", chatBody("nobody-has-this"))
+
+	if rec.Header().Get(servedNodeHeader) != "" || rec.Header().Get(servedEngineHeader) != "" {
+		t.Errorf("a reply no engine produced names one: %v", rec.Header())
+	}
+}
+
+func TestEnginePort_RepliesKeepTheEnginesHeadersOnly(t *testing.T) {
+	p, _ := routerProxy(t,
+		fakeEngineSpec{engine: "lmstudio", nodeID: "node-b", models: []string{"qwen"}},
+	)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatBody("qwen")))
+	req.RemoteAddr = "127.0.0.1:50000"
+	rec := httptest.NewRecorder()
+
+	p.facadeFor("lmstudio").handlePlain(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if rec.Header().Get(servedNodeHeader) != "" {
+		t.Errorf("the engine port added %s; its replies must not change", servedNodeHeader)
+	}
+}
+
+func TestRouter_RoutingReportShowsEachNodesLoadInPriorityOrder(t *testing.T) {
+	p, _ := routerProxy(t,
+		fakeEngineSpec{engine: "lmstudio", nodeID: "node-a", models: []string{"shared-model"}, stream: []string{"x"}},
+		fakeEngineSpec{engine: "lmstudio", nodeID: "node-b", models: []string{"shared-model"}},
+	)
+	loadSnapshot(p, map[string]int{"node-a": 2, "node-b": 0}, "node-a", "node-b")
+	p.priorityMu.Lock()
+	p.priorityGPUPressure["node-a"] = 1
+	p.priorityReservations["node-b"] = 3
+	p.priorityMu.Unlock()
+
+	rec := routerRequest(t, p, http.MethodGet, "/pair/v1/routing", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	var got routingReport
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := []routingNode{
+		{ID: "node-a", Rank: 0, Pending: 2, GPUPressure: 1, Reservations: 0, Load: 3},
+		{ID: "node-b", Rank: 1, Pending: 0, GPUPressure: 0, Reservations: 3, Load: 3},
+	}
+	if got.Generation == 0 || fmt.Sprint(got.Nodes) != fmt.Sprint(want) {
+		t.Errorf("report = %+v, want generation > 0 and nodes %v", got, want)
+	}
+}
+
+// The live burst test predicts the split by reimplementing reserveCandidate's
+// rule; this keeps that prediction honest against the real thing.
+func TestPredictBurstSplit_MatchesReserveCandidate(t *testing.T) {
+	cases := []struct {
+		name     string
+		pending  map[string]int
+		pressure map[string]int
+		burst    int
+	}{
+		{name: "equal load", pending: map[string]int{}, pressure: map[string]int{}, burst: 8},
+		{name: "second node busier", pending: map[string]int{"node-b": 3}, pressure: map[string]int{"node-b": 3}, burst: 8},
+		{name: "first node busier", pending: map[string]int{"node-a": 2}, pressure: map[string]int{"node-a": 1}, burst: 5},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, _ := routerProxy(t,
+				fakeEngineSpec{engine: "lmstudio", nodeID: "node-a", models: []string{"m"}},
+				fakeEngineSpec{engine: "lmstudio", nodeID: "node-b", models: []string{"m"}},
+			)
+			loadSnapshot(p, tc.pending, "node-a", "node-b")
+			p.priorityMu.Lock()
+			for id, v := range tc.pressure {
+				p.priorityGPUPressure[id] = v
+			}
+			p.priorityMu.Unlock()
+			owners := []routerNode{{ID: "node-a"}, {ID: "node-b"}}
+
+			predicted, ok := predictBurstSplit(p.routingSnapshot(), owners, tc.burst)
+			if !ok {
+				t.Fatal("no prediction for ranked owners")
+			}
+			actual := map[string]int{}
+			for range tc.burst {
+				cands, _ := p.resolveRouterCandidates("/v1/chat/completions", "m")
+				ordered, _ := p.reserveCandidate(p.routerFacade(), cands)
+				actual[ordered[0].id]++
+			}
+			if fmt.Sprint(actual) != fmt.Sprint(predicted) {
+				t.Errorf("reserveCandidate split %v, prediction %v", actual, predicted)
+			}
+		})
+	}
+}

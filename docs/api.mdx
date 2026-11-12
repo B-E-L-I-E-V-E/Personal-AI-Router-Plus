@@ -76,6 +76,7 @@ machine.
 | `GET /v1/models` | Every model the router can route, on every node and engine, as one OpenAI model list. |
 | `POST /v1/chat/completions`, `/v1/completions`, `/v1/embeddings` | OpenAI-format inference, routed by `model`. |
 | `POST /v1/messages` | Anthropic-format inference, routed by `model`. llama.cpp is not considered, because it has no such route. |
+| `GET /pair/v1/routing` | How the router is choosing right now: each node's queued work, GPU pressure and in-flight reservations, in the scheduler's order. |
 | `/pair/v1/…` | PAIR's own API, as on every endpoint. |
 
 Any other path answers `404`: engine-specific routes such as `/api/chat` are on
@@ -91,6 +92,28 @@ then LM Studio, then llama.cpp. If the chosen engine fails before it answers,
 PAIR tries the next one, which may be another engine. The request body is sent
 unchanged, and streaming, sessions and `X-Request-ID` work as on the engine
 endpoints.
+
+**Where a request ran.** Every reply an engine produced, failures included,
+carries `X-PAIR-Node-ID` (the node) and `X-PAIR-Engine` (`ollama`, `lmstudio` or
+`llamacpp`). A reply the router wrote itself, such as `model_not_found`, has
+neither. The engine endpoints do not add these headers.
+
+**Checking the choice.** `GET /pair/v1/routing` shows the load the router
+compares:
+
+```json
+{
+  "generation": 223,
+  "nodes": [
+    { "id": "b4e0…", "rank": 1, "pending": 0, "gpuPressure": 0, "reservations": 0, "load": 0 },
+    { "id": "c952…", "rank": 2, "pending": 0, "gpuPressure": 0, "reservations": 0, "load": 0 }
+  ]
+}
+```
+
+A request goes to the eligible node with the lowest `load`, ties going to the
+lower `rank`, and adds one to that node's `reservations` until it ends.
+`generation` changes with every new figure from the scheduler.
 
 **The model list** has one entry per model ID, from the first engine and node
 that listed it, with a `pair` member saying where else it is:

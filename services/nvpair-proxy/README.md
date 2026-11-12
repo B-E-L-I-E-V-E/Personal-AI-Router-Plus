@@ -139,14 +139,16 @@ unaddressed, on bring-up and after a move.
 |---|---|
 | `GET /v1/models` | Every engine's OpenAI model list from every routable node, kept to the models that node's inventory advertises (so every listed model routes), de-duplicated by `id`, each record given `"pair": {"engines": [...], "nodes": [{"id","name","engine"}]}`. Unanswering sources are left out; `503` `inventory_unavailable` when none answers. |
 | `POST /v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/v1/messages` | Candidates are every enabled engine that has the route (llama.cpp has no `/v1/messages`) and advertises the model under its own naming rule, unioned and ordered by scheduler priority, node ID, then engine table order; reservations then put the least loaded node first. The body is forwarded unchanged through that engine's own path, and failover may cross engines. |
+| `GET /pair/v1/routing` | Router only: the scheduler baseline and this process's reservations per node, in priority order — `{"generation","nodes":[{"id","rank","pending","gpuPressure","reservations","load"}]}`. |
 | `/pair/v1/*` | As on an engine port, answered through the first enabled engine facade. |
 | anything else | `404` `not_found`. |
 
 With no eligible candidate the router answers `502`
 `{"error":"no available node advertises the requested model","code":"model_not_found"}`
 without contacting an engine, and a request with no `model` gets `400`
-`model_required`. The router has no cluster ingress: an mTLS connection to it
-gets `404`. Routed workloads and request events are filed under the serving
+`model_required`. Every router reply an engine produced, failures included, carries
+`X-PAIR-Node-ID` and `X-PAIR-Engine`; the engine ports do not add them. The
+router has no cluster ingress: an mTLS connection to it gets `404`. Routed workloads and request events are filed under the serving
 engine, with IDs prefixed `router-`.
 
 ### HTTP Reverse Proxy

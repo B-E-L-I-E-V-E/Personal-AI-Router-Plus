@@ -95,6 +95,9 @@ func (f *facade) handlePlain(w http.ResponseWriter, r *http.Request) {
 	}
 	// PAIR's own session API is answered here and never forwarded. Being on
 	// the plaintext personality makes it loopback-only, like inference.
+	if f.router && f.serveRoutingAPI(w, r) {
+		return
+	}
 	api := f.pairAPIFacade()
 	if api.serveSessionsAPI(w, r) || api.serveCapacityAPI(w, r) || api.serveNodeStateAPI(w, r) || api.servePerformanceAPI(w, r) {
 		return

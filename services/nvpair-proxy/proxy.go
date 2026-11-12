@@ -2087,6 +2087,12 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				// the client response, so an upstream that echoes X-Request-ID
 				// back would otherwise produce a second value.
 				resp.Header.Del(requestIDHeader)
+				// The router names the node and engine that produced the reply,
+				// success or not, so a client can see where its request went.
+				// Engine ports keep their responses as the engine sent them.
+				if f.router {
+					setServedByHeaders(resp.Header, cand.id, cf.profile.Name)
+				}
 				// A peer that refused because it is paused or stopped is left
 				// out of later rounds and requests until it says otherwise.
 				if cand.peerUUID != "" {
@@ -2300,6 +2306,9 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				status := http.StatusBadGateway
 				if stderrors.Is(err, errFirstBodyTimeout) {
 					status = http.StatusGatewayTimeout
+				}
+				if f.router {
+					setServedByHeaders(ew.Header(), cand.id, cf.profile.Name)
 				}
 				ew.Header().Set("Content-Type", "application/json")
 				ew.Header().Set("X-Content-Type-Options", "nosniff")

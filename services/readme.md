@@ -251,6 +251,17 @@ PAIR_LIVE_URL=http://127.0.0.1:11400 PAIR_LIVE_MODEL=glm-4.7-flash \
   go test -run TestLivePAIRProxies -v .
 ```
 
+To check that a concurrent burst is split by load, the second live test reads
+`/pair/v1/routing` before the burst, predicts the split with the router's rule,
+and compares it with each reply's `X-PAIR-Node-ID`. Use a model every listed
+node can run:
+
+```bash
+PAIR_LIVE_URL=http://127.0.0.1:11400 PAIR_LIVE_MODEL=text-embedding-nomic-embed-text-v1.5 \
+  PAIR_LIVE_PATH=/v1/embeddings PAIR_LIVE_CONCURRENCY=8 \
+  go test -run TestLivePAIRBalances -v .
+```
+
 `PAIR_LIVE_NODE` takes a node name, looked up in the PAIR router's model list,
 or a node ID; with an engine port as `PAIR_LIVE_URL`, give the ID or set
 `PAIR_LIVE_ROUTER_URL`. The test file lists every variable.
