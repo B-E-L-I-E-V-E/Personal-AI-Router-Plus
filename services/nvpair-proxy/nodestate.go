@@ -126,6 +126,16 @@ type nodeStateFile struct {
 	Since string `json:"since,omitempty"`
 }
 
+// peerSupport is whether a peer has node state, and until when that answer holds.
+type peerSupport struct {
+	ok    bool
+	until time.Time
+}
+
+// peerSupportTTL is how long an answer about a peer's support holds. A peer
+// updated to a build with node state is found within this long.
+var peerSupportTTL = 5 * time.Minute
+
 type peerStateMark struct {
 	state nodeState
 	until time.Time
@@ -142,7 +152,12 @@ type nodeStateStore struct {
 	// peers is keyed by the peer's cluster UUID, the identity its certificate
 	// proves and its discovery record carries.
 	peers map[string]peerStateMark
-	now   func() time.Time
+	// support is, per peer cluster UUID, whether that node's build has node
+	// state at all; nodes on an older build cannot be paused. probing marks a
+	// peer whose answer is on its way.
+	support map[string]peerSupport
+	probing map[string]bool
+	now     func() time.Time
 	// path saves the state; empty keeps it in memory only (tests).
 	path string
 }
@@ -152,6 +167,8 @@ func newNodeStateStore() *nodeStateStore {
 		state:   nodeRunning,
 		serving: make(map[uint64]func()),
 		peers:   make(map[string]peerStateMark),
+		support: make(map[string]peerSupport),
+		probing: make(map[string]bool),
 		now:     time.Now,
 	}
 }
@@ -270,12 +287,14 @@ func saveNodeState(path string, f nodeStateFile) error {
 }
 
 // markPeer records a peer's announced or observed state. Running clears it.
+// A peer that reports a state has node state, so this also records support.
 func (s *nodeStateStore) markPeer(clusterUUID string, st nodeState) {
 	if clusterUUID == "" {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.support[clusterUUID] = peerSupport{ok: true, until: s.now().Add(peerSupportTTL)}
 	if st == nodeRunning {
 		delete(s.peers, clusterUUID)
 		return
@@ -299,6 +318,30 @@ func (s *nodeStateStore) peerState(clusterUUID string) nodeState {
 		return nodeRunning
 	}
 	return m.state
+}
+
+// peerSupported reports what is known of a peer's support, and whether it
+// should be asked: the answer is unknown or has expired and no one is asking.
+// Asking marks the peer as being asked; the caller must call setPeerSupport.
+func (s *nodeStateStore) peerSupported(clusterUUID string) (supported, ask bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sup, known := s.support[clusterUUID]
+	if known && s.now().Before(sup.until) {
+		return sup.ok, false
+	}
+	if s.probing[clusterUUID] {
+		return sup.ok, false
+	}
+	s.probing[clusterUUID] = true
+	return sup.ok, true
+}
+
+func (s *nodeStateStore) setPeerSupport(clusterUUID string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.probing, clusterUUID)
+	s.support[clusterUUID] = peerSupport{ok: ok, until: s.now().Add(peerSupportTTL)}
 }
 
 // setLocalNodeState applies a state to this node, with everything that goes with
@@ -501,7 +544,9 @@ func (p *Proxy) nodeStateCall(ctx context.Context, params nodeStateParams) (node
 	return p.setLocalNodeState(st)
 }
 
-// nodeStatesResult is this node's state and every other node's known one.
+// nodeStatesResult is this node's state and that of every other cluster
+// member known to have node state. A member not listed cannot be paused from
+// here: it runs an older build, is outside the cluster, or has not answered.
 type nodeStatesResult struct {
 	Self  nodeStateJSON   `json:"self"`
 	Peers []nodeStateJSON `json:"peers"`
@@ -511,11 +556,32 @@ func (p *Proxy) nodeStates() nodeStatesResult {
 	res := nodeStatesResult{Self: p.node.view(), Peers: []nodeStateJSON{}}
 	peers, _ := p.clusterPeers("")
 	for _, t := range peers {
-		if st := p.node.peerState(t.clusterUUID); st != nodeRunning {
-			res.Peers = append(res.Peers, nodeStateJSON{NodeID: t.nodeID, State: string(st)})
+		supported, ask := p.node.peerSupported(t.clusterUUID)
+		if ask {
+			go p.probePeerSupport(t)
+		}
+		if supported {
+			res.Peers = append(res.Peers, nodeStateJSON{NodeID: t.nodeID, State: string(p.node.peerState(t.clusterUUID))})
 		}
 	}
 	return res
+}
+
+// probePeerSupport asks a peer for its node state. A node on an older build
+// passes the unknown path to its engine, which does not answer with a state.
+func (p *Proxy) probePeerSupport(t peerTarget) {
+	ctx, cancel := context.WithTimeout(p.lifetime(), peerNodeCallTimeout)
+	defer cancel()
+	var out nodeStateJSON
+	err := p.peerCall(ctx, t, http.MethodGet, peerNodeStatePath, nil, &out)
+	st, perr := parseNodeState(out.State)
+	if err != nil || perr != nil {
+		slog.Debug("peer has no node state", "node_id", t.nodeID, "err", err)
+		p.node.setPeerSupport(t.clusterUUID, false)
+		return
+	}
+	p.node.markPeer(t.clusterUUID, st)
+	p.node.setPeerSupport(t.clusterUUID, true)
 }
 
 // serveNodeStateAPI answers this node's state on the loopback personality.

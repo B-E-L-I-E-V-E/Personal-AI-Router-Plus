@@ -7,7 +7,11 @@ import { DismissibleTooltip } from '@/ui/components/DismissibleTooltip/Dismissib
 import { ConfirmModal } from '@/ui/components/ConfirmModal'
 import { Pause, Play, Square } from '@/ui/components/icons'
 import type { NodeServingState } from '@/shared/types/node-state'
-import { nodeServingState, useNodeStateStore } from '@/ui/stores/node-state.store'
+import {
+    nodeServingState,
+    nodeSupportsState,
+    useNodeStateStore
+} from '@/ui/stores/node-state.store'
 import { servingActions } from '@/ui/utils/node-serving-actions'
 
 const STATE_LABEL: Record<NodeServingState, string> = {
@@ -81,9 +85,13 @@ export function NodeServingControls({
     const state = useServingState(nodeId, isSelf)
     const busy = useNodeStateStore(s => s.pending[isSelf ? 'self' : nodeId] === true)
     const change = useNodeStateStore(s => s.change)
+    const supported = useNodeStateStore(s => nodeSupportsState(s, nodeId, isSelf))
     const [confirmStop, setConfirmStop] = useState(false)
     // change() records its own failure in the store, shown under the card's name.
     const run = (next: NodeServingState) => void change(nodeId, isSelf, next)
+
+    // A node on an older build cannot be paused, so it gets no controls.
+    if (!supported) return null
 
     return (
         <>

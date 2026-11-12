@@ -834,7 +834,10 @@ what the node's own engine serves, not what the node routes.
 - **Remote control.** `GET`/`PUT /pair/v1/peer/node/state` on the mTLS ingress
   read and set the node's state for any pinned peer. `node/state` with a
   `nodeId` reaches a peer that way and runs off the read loop; `node/states`
-  reports this node and the peers held as paused or stopped.
+  reports this node and every pinned peer known to have node state. A peer's
+  support is learned from its notices, or by asking `GET` on that route in the
+  background (an older build passes the path to its engine, which answers
+  404), and is held for 5 minutes.
 - **Persistence.** The state is saved to `node-state.json` beside the other
   proxy files and restored at startup.
 - **Loopback API.** `GET`/`PUT /pair/v1/node/state` on the plaintext

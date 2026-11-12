@@ -22,8 +22,13 @@ Every PAIR Plus node is in one of three states:
 
 Each node card has **Pause**, **Resume** and **Stop** buttons beside its
 performance and engine-settings buttons. A paused or stopped node shows a
-**Paused** or **Stopped** badge under its name. Stop asks you to confirm,
-because it cancels work.
+**Paused** or **Stopped** badge under its name. A stopped node offers only
+**Resume**. Stop asks you to confirm, because it cancels work.
+
+A node running a build without node state (PAIR 1.0, or PAIR Plus 1.2.0 and
+earlier) shows no buttons, since it cannot be paused. Each node asks the
+others whether they support it and checks again every five minutes, so a node
+shows its buttons within a few minutes of being updated.
 
 Any member of a cluster can pause, stop or resume any other member, the same
 way any member manages any node's engines. The call travels over the
@@ -77,8 +82,8 @@ curl -X PUT http://127.0.0.1:<port>/pair/v1/node/state \
 The answer is the node's state, when it entered it, how many requests its
 engine is serving now and, after a stop, how many it cancelled. The desktop
 uses the proxy's JSON-RPC methods `node/state` (with an optional `nodeId` for
-another cluster member) and `node/states` (this node plus every member known
-to be paused or stopped). The OpenAPI reference lists the shapes.
+another cluster member) and `node/states` (this node plus every member that
+supports node state, with its state). The OpenAPI reference lists the shapes.
 
 PAIR 1.0 nodes have no node state. They keep routing to a paused PAIR Plus
 node, are refused with `503`, and try their next node.

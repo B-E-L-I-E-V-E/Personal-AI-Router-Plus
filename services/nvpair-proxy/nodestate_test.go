@@ -391,3 +391,47 @@ func TestNodeState_ReportedInNodeActivity(t *testing.T) {
 		t.Fatalf("activity state = %q, want paused", got)
 	}
 }
+
+func TestNodeStates_ListsAPeerOnceItIsKnownToHaveNodeState(t *testing.T) {
+	forEachEngine(t, func(t *testing.T, tc engineCase) {
+		fx := newPeerFixture(t, tc)
+		// The first read asks B in the background; B is listed once it answers.
+		fx.a.host.nodeStates()
+		waitUntil(t, "B is listed as having node state", func() bool {
+			got := fx.a.host.nodeStates().Peers
+			return len(got) == 1 && got[0].NodeID == "node-b" && got[0].State == "running"
+		})
+	})
+}
+
+func TestNodeStates_LeavesOutAPeerOnAnOlderBuild(t *testing.T) {
+	forEachEngine(t, func(t *testing.T, tc engineCase) {
+		fx := newPeerFixture(t, tc)
+		// An older node's ingress passes the unknown path to its engine,
+		// which answers 404.
+		old := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := fx.b.host.mesh.VerifyClientPin(r); !ok {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		old.TLS = fx.b.host.mesh.ServerTLSConfig()
+		old.StartTLS()
+		t.Cleanup(old.Close)
+		n := nodeForModel(t, "node-old", old.URL, tc.advertisedModel)
+		n.ClusterUUID = "b"
+		fx.a.discovery.SetSubscribed([]Node{n})
+
+		fx.a.host.nodeStates()
+		waitUntil(t, "the older node has answered", func() bool {
+			fx.a.host.node.mu.Lock()
+			defer fx.a.host.node.mu.Unlock()
+			_, known := fx.a.host.node.support["b"]
+			return known
+		})
+		if got := fx.a.host.nodeStates().Peers; len(got) != 0 {
+			t.Fatalf("node states = %+v, want the older node left out", got)
+		}
+	})
+}

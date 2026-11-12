@@ -15,7 +15,11 @@ import {
     parseNodeStates,
     setNodeState
 } from '@/electron/service-bridge/node-state-bridge'
-import { nodeServingState, useNodeStateStore } from '@/ui/stores/node-state.store'
+import {
+    nodeServingState,
+    nodeSupportsState,
+    useNodeStateStore
+} from '@/ui/stores/node-state.store'
 import { servingActions } from '@/ui/utils/node-serving-actions'
 
 const getAll = vi.fn()
@@ -25,7 +29,14 @@ beforeEach(() => {
     callProxy.mockReset()
     getAll.mockReset()
     set.mockReset()
-    useNodeStateStore.setState({ self: 'running', peers: {}, pending: {}, errors: {} })
+    useNodeStateStore.setState({
+        self: 'running',
+        peers: {},
+        selfSupported: false,
+        supported: {},
+        pending: {},
+        errors: {}
+    })
     vi.stubGlobal('window', { pairApi: { nodeState: { getAll, set } } })
 })
 
@@ -104,6 +115,30 @@ describe('node state store', () => {
         getAll.mockRejectedValueOnce(new Error('no engine proxy is running'))
         await useNodeStateStore.getState().refresh()
         expect(useNodeStateStore.getState().self).toBe('paused')
+    })
+})
+
+describe('which nodes offer controls', () => {
+    it('only this node once its router answers, and peers that report node state', async () => {
+        const store = () => useNodeStateStore.getState()
+        expect(nodeSupportsState(store(), 'self-uuid', true)).toBe(false)
+
+        getAll.mockResolvedValueOnce({
+            self: { nodeId: null, state: 'running', since: null, serving: 0, cancelled: 0 },
+            peers: [{ nodeId: 'jarvis', state: 'running', since: null, serving: 0, cancelled: 0 }]
+        })
+        await store().refresh()
+        expect(nodeSupportsState(store(), 'self-uuid', true)).toBe(true)
+        expect(nodeSupportsState(store(), 'jarvis', false)).toBe(true)
+        expect(nodeServingState(store(), 'jarvis', false)).toBe('running')
+        // Ultron is on an older build: the router does not list it.
+        expect(nodeSupportsState(store(), 'ultron', false)).toBe(false)
+    })
+
+    it('none on a router that predates node state', async () => {
+        getAll.mockRejectedValueOnce(new Error('method not found: node/states'))
+        await useNodeStateStore.getState().refresh()
+        expect(nodeSupportsState(useNodeStateStore.getState(), 'self-uuid', true)).toBe(false)
     })
 })
 
