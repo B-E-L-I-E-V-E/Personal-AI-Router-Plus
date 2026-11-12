@@ -104,8 +104,9 @@ in tokens per second, time to first token and, for thinking models, the time
 spent reasoning before the answer. The stopwatch on each node card shows every
 request on that node in real time: model, session and agent, phase, tokens in
 and out as they stream, time to first token, writing speed and thinking so
-far. **Run benchmark** is a per-model test: four fixed prompts through PAIR, so
-models compare like for like. PAIR keeps only
+far. **Run benchmark** is a per-model test on the node you choose, this one or any
+other in the cluster: four fixed prompts, so models and nodes compare like for
+like. PAIR keeps only
 the counts and timings, never the text.
 
 ![The Performance tab: each node with what it is running and each model's requests, tokens in and out, reading and writing speed, time to first token, thinking per request and writing trend.](docs/assets/onboarding/performance/01-performance.png)

@@ -462,15 +462,15 @@ func TestBenchmarkReport_IsAboutAThousandTokens(t *testing.T) {
 
 func TestPerfStore_OneBenchmarkAtATime(t *testing.T) {
 	s := newPerfStore()
-	run, err := s.beginRun("ollama", "m")
+	run, err := s.beginRun("ollama", "m", "")
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	if _, err := s.beginRun("ollama", "m"); err != errBenchmarkRunning {
+	if _, err := s.beginRun("ollama", "m", ""); err != errBenchmarkRunning {
 		t.Fatalf("second run err = %v, want errBenchmarkRunning", err)
 	}
 	s.endRun(run, benchDone, "")
-	if _, err := s.beginRun("ollama", "m"); err != nil {
+	if _, err := s.beginRun("ollama", "m", ""); err != nil {
 		t.Fatalf("run after the first finished: %v", err)
 	}
 	runs := s.benchmarkSnapshot()
@@ -497,7 +497,7 @@ func TestRunBenchmark_RunsEveryStepThroughTheFacade(t *testing.T) {
 		t.Cleanup(srv.Close)
 		port := srv.Listener.Addr().(*net.TCPAddr).Port
 
-		run, err := fx.proxy.perf.beginRun(tc.profile.Name, tc.requestedModel)
+		run, err := fx.proxy.perf.beginRun(tc.profile.Name, tc.requestedModel, "")
 		if err != nil {
 			t.Fatalf("begin: %v", err)
 		}

@@ -71,6 +71,7 @@ describe('performance formatting', () => {
             id: 'b',
             engine: 'ollama',
             model: 'm',
+            nodeId: '',
             state: 'done',
             startedAt: 0,
             finishedAt: 1,
