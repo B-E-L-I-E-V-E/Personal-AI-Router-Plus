@@ -22,6 +22,7 @@ import {
 } from '@/ui/stores/capacity-planner.store'
 import { capacitySummary, findCapacity, modelConfigLines } from './model-config-summary'
 import { CapacityPlannerDialog } from './CapacityPlannerDialog'
+import { ModelDetailsDialog } from './ModelDetailsDialog'
 
 import ModelRow from './ModelRow'
 import { IncomingSyncPullRow } from './IncomingSyncPullRow'
@@ -33,6 +34,7 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
     const [openModelHubModal, setOpenModelHubModal] = useState(false)
     const [modelPendingDelete, setModelPendingDelete] = useState<string | null>(null)
     const [planningModel, setPlanningModel] = useState<string | null>(null)
+    const [aboutModel, setAboutModel] = useState<string | null>(null)
     // The planner measures this node's memory, so only its own models offer it.
     const isSelf = useConnectionStore(s => s.selfId) === nodeId
     const planner = useCapacityPlannerStore(s => s.planner)
@@ -152,6 +154,9 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
                     break
                 case 'capacity':
                     setPlanningModel(modelName)
+                    break
+                case 'details':
+                    setAboutModel(modelName)
                     break
                 case 'delete':
                     if (confirmBeforeDelete) {
@@ -293,6 +298,16 @@ export function ModelManager({ backend, nodeId }: { backend: BackendInfo; nodeId
                         </Stack>
                     )}
                 </>
+            )}
+
+            {aboutModel && (
+                <ModelDetailsDialog
+                    engineType={backendType}
+                    nodeId={nodeId}
+                    model={aboutModel}
+                    displayName={displayName(aboutModel)}
+                    onClose={() => setAboutModel(null)}
+                />
             )}
 
             {planningModel && (

@@ -13,6 +13,17 @@ release workflow, with macOS builds signed and notarized; the app updates from
 those releases. A build made locally from source is unsigned unless built with
 `PAIR_MAC_SIGN=1`, and updates only once a release exists.
 
+## 1.2.2 — Model settings on the Overview (#6)
+
+- Each of this node's model rows shows what is in force for the model: sessions at once (and how many are in use), the context window per session, the response context and the post context. A pending plan is shown apart from what is applied.
+
+## 1.2.1 — Performance per model and a benchmark (#9)
+
+- A new Performance tab, with a stopwatch icon next to Settings, shows each model's speed per node: tokens in and out, reading and writing speed in tokens per second, time to first token and, for thinking models, the time spent reasoning.
+- Run benchmark sends four fixed prompts through PAIR, one at a time and only when the node is idle, so models and nodes compare like for like.
+- Each figure says whether the engine reported it or PAIR measured it. Only counts and timings are kept, never prompt or reply text.
+- New APIs: GET and DELETE /pair/v1/performance and POST /pair/v1/performance/benchmark.
+
 ## 1.2.0 — Context & sessions per model (#3)
 
 - Each model's menu has Context & sessions…: choose the context window, the room kept for the reply, and how many sessions run at once, sized from this node's GPU and system memory. Every session gets the whole window.

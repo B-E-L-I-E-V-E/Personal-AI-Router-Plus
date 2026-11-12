@@ -11,6 +11,7 @@ import WorkloadNodeConnections from '@/ui/components/Workloads/WorkloadNodeConne
 import ContentBar from './ContentBar'
 import NodeList from '@/ui/components/NodeList/NodeList'
 import Settings from '@/ui/components/Settings'
+import Performance from '@/ui/components/Performance/Performance'
 import { useJobsFilterState } from '@/ui/hooks/useJobsFilterState'
 import { useOverviewUiStore } from '@/ui/stores/overview-ui.store'
 
@@ -42,6 +43,8 @@ export default function ClusterContent({
             />
             {activeTab === 'settings' ? (
                 <Settings />
+            ) : activeTab === 'performance' ? (
+                <Performance />
             ) : (
                 <Flex className={ContentBaseClass}>
                     <WorkloadListView filter={filter} setFilter={handleSetFilter} />

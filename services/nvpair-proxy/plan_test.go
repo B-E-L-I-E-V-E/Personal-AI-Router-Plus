@@ -175,6 +175,9 @@ func ggufFile(t *testing.T, kv []any) []byte {
 		case float32:
 			w(uint32(6))
 			w(v)
+		case uint64:
+			w(uint32(10))
+			w(v)
 		}
 	}
 	return b.Bytes()

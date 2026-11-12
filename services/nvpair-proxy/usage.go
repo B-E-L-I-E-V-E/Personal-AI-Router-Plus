@@ -44,6 +44,9 @@ type usageReader struct {
 	src  io.ReadCloser
 	mode usageMode
 	done func(tokenUsage)
+	// perf, when set, measures the reply's speeds and thinking from the same
+	// frames (perf.go).
+	perf *perfTracker
 
 	mu       sync.Mutex
 	frame    []byte // current streamed line, or the whole JSON body
@@ -82,11 +85,21 @@ var usageModes = map[string]usageMode{
 }
 
 func newUsageReader(src io.ReadCloser, contentType string, done func(tokenUsage)) io.ReadCloser {
+	return newObservedBody(src, contentType, done, nil)
+}
+
+// newObservedBody wraps a response body for either or both observers: done
+// receives the session's token usage, perf the request's performance. With
+// neither, or a content type that carries no JSON, the body is returned as is.
+func newObservedBody(src io.ReadCloser, contentType string, done func(tokenUsage), perf *perfTracker) io.ReadCloser {
 	mode := usageModeFor(contentType)
-	if mode == usageNone || done == nil {
+	if mode == usageNone || (done == nil && perf == nil) {
 		return src
 	}
-	return &usageReader{src: src, mode: mode, done: done}
+	if perf != nil {
+		perf.streamed = mode != usageJSON
+	}
+	return &usageReader{src: src, mode: mode, done: done, perf: perf}
 }
 
 func (u *usageReader) Read(p []byte) (int, error) {
@@ -155,6 +168,9 @@ func (u *usageReader) endLine() {
 		}
 		line = bytes.TrimSpace(line)
 	}
+	if u.perf != nil {
+		u.perf.observe(line)
+	}
 	// Cheap pre-check so content frames are never decoded.
 	if !bytes.Contains(line, []byte(`"usage"`)) && !bytes.Contains(line, []byte(`"eval_count"`)) &&
 		!bytes.Contains(line, []byte(`"prompt_eval_count"`)) {
@@ -173,15 +189,22 @@ func (u *usageReader) finish() {
 	if u.mode == usageJSON {
 		if !u.overflow && len(u.frame) > 0 {
 			u.merge(u.frame)
+			if u.perf != nil {
+				u.perf.observe(u.frame)
+			}
 		}
 	} else if len(u.frame) > 0 {
 		u.endLine() // a final line without a trailing newline
 	}
 	u.frame = nil
 	usage, found := u.usage, u.found
+	perf := u.perf
 	u.mu.Unlock()
-	if found {
+	if found && u.done != nil {
 		u.done(usage)
+	}
+	if perf != nil {
+		perf.finish()
 	}
 }
 

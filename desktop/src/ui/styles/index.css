@@ -576,3 +576,101 @@ body .os-scrollbar {
 .pair-slider-over .nv-slider-input::-webkit-slider-thumb {
     border-color: var(--text-color-feedback-danger);
 }
+
+/* Performance page (components/Performance) */
+.perf-page {
+    max-width: 1100px;
+}
+
+.perf-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 16px;
+}
+
+.perf-metric {
+    min-width: 0;
+}
+
+.perf-sparkline {
+    color: var(--color-brand, #76b900);
+    flex-shrink: 0;
+}
+
+.perf-prompt-list {
+    margin: 0;
+    padding-left: 18px;
+    list-style: disc;
+}
+
+.perf-table-wrap {
+    overflow-x: auto;
+}
+
+.perf-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+}
+
+.perf-table th {
+    text-align: left;
+    font-weight: 500;
+    color: var(--color-translucent-white-600);
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--color-translucent-white-200);
+    white-space: nowrap;
+}
+
+.perf-table td {
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--color-translucent-white-100, rgba(255, 255, 255, 0.06));
+    white-space: nowrap;
+}
+
+.perf-model-table td {
+    vertical-align: top;
+}
+
+.perf-figure {
+    display: block;
+    color: var(--color-white);
+}
+
+.perf-figure-detail {
+    display: block;
+    font-size: 11px;
+    color: var(--color-translucent-white-600);
+}
+
+.perf-live-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--color-translucent-white-200);
+    font-size: 13px;
+}
+
+.perf-live-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--color-brand, #76b900);
+    flex-shrink: 0;
+    animation: perf-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes perf-pulse {
+    50% {
+        opacity: 0.35;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .perf-live-dot {
+        animation: none;
+    }
+}

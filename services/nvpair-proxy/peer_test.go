@@ -38,28 +38,7 @@ func newPeerFixture(t *testing.T, tc engineCase) *peerFixture {
 	fx := &peerFixture{t: t, tc: tc}
 	fx.prompt.Store(100)
 
-	aDir, bDir := t.TempDir(), t.TempDir()
-	clustertrusttest.Join(t, aDir, "cluster", "a")
-	clustertrusttest.Join(t, bDir, "cluster", "b")
-	pin := func(dst, src, id string) {
-		t.Helper()
-		pem, err := os.ReadFile(filepath.Join(src, "node.crt"))
-		if err != nil {
-			t.Fatalf("read cert: %v", err)
-		}
-		body, err := json.Marshal(map[string]string{"nodeUuid": id, "certPem": string(pem)})
-		if err != nil {
-			t.Fatalf("encode pin: %v", err)
-		}
-		if err := os.MkdirAll(filepath.Join(dst, "trusted"), 0o700); err != nil {
-			t.Fatalf("mkdir: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(dst, "trusted", id+".json"), body, 0o600); err != nil {
-			t.Fatalf("write pin: %v", err)
-		}
-	}
-	pin(aDir, bDir, "b")
-	pin(bDir, aDir, "a")
+	aDir, bDir := pairedClusterDirs(t)
 
 	engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -89,6 +68,35 @@ func newPeerFixture(t *testing.T, tc engineCase) *peerFixture {
 	n.ClusterUUID = "b"
 	fx.a.discovery.SetSubscribed([]Node{n})
 	return fx
+}
+
+// pairedClusterDirs makes two cluster identities, "a" and "b", that trust
+// each other, and returns their state directories.
+func pairedClusterDirs(t *testing.T) (aDir, bDir string) {
+	t.Helper()
+	aDir, bDir = t.TempDir(), t.TempDir()
+	clustertrusttest.Join(t, aDir, "cluster", "a")
+	clustertrusttest.Join(t, bDir, "cluster", "b")
+	pin := func(dst, src, id string) {
+		t.Helper()
+		pem, err := os.ReadFile(filepath.Join(src, "node.crt"))
+		if err != nil {
+			t.Fatalf("read cert: %v", err)
+		}
+		body, err := json.Marshal(map[string]string{"nodeUuid": id, "certPem": string(pem)})
+		if err != nil {
+			t.Fatalf("encode pin: %v", err)
+		}
+		if err := os.MkdirAll(filepath.Join(dst, "trusted"), 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dst, "trusted", id+".json"), body, 0o600); err != nil {
+			t.Fatalf("write pin: %v", err)
+		}
+	}
+	pin(aDir, bDir, "b")
+	pin(bDir, aDir, "a")
+	return aDir, bDir
 }
 
 // limitB sets B's capacity for the model and how long B queues.
