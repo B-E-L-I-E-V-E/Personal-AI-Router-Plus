@@ -801,6 +801,89 @@ not install (`editable: false`) is not restarted. With `autoReload` on, the
 desktop applies a pending plan after two consecutive idle checks 30 s apart,
 and retries a failed one after 10 minutes.
 
+### 5.16 Performance telemetry and benchmark
+
+Every generation request this node routes (`/api/generate`, `/api/chat`,
+`/v1/chat/completions`, `/v1/completions`, `/v1/messages`; embeddings are
+inference but generate nothing) is measured as its reply passes through,
+whichever node serves it. The measurement rides the session usage reader
+(§5.12): the same bounded frames, each decoded for numbers and text lengths
+and then dropped. No prompt or reply text is stored, logged or emitted.
+
+Per request (`perfRecord`): prompt and completion tokens, whether the reply
+had a reasoning part and how many tokens and milliseconds it took, reading
+speed (prompt tokens/s), writing speed (generated tokens/s), time to first
+token, model load time, and total time. Each figure names its source:
+
+| Figure | `engine` | `proxy` | `estimated` |
+|---|---|---|---|
+| Tokens | Usage counts; llama.cpp `timings.prompt_n`/`predicted_n` | — | Streamed chunks counted, one per token |
+| Reading | Ollama `prompt_eval_duration`; llama.cpp `timings.prompt_ms` with its own `prompt_n` (cached prefix excluded) | Dispatch to first token (includes queueing, load and network, so a lower bound) | — |
+| Writing | Ollama `eval_duration`; llama.cpp `timings.predicted_ms` | First to last streamed token, first token excluded | — |
+| Time to first token | Single body: Ollama `load_duration` + `prompt_eval_duration`, or llama.cpp `prompt_ms` | Stream: dispatch of the attempt that served to the first frame with thinking or answer text | — |
+| Thinking | — | Stream: first thinking frame to first visible answer frame; tokens = completion × thinking chunks ÷ all chunks | Single body: tokens and generation time apportioned by the thinking share of the text |
+
+Thinking is recognized in Ollama `thinking` (generate) and `message.thinking`
+(chat), OpenAI-compatible `reasoning_content` and `reasoning` (on `delta` or
+`message`), Anthropic `thinking` blocks and `thinking_delta`s, and
+`<think>…</think>` inside answer text (state carried across frames; the tags
+count as thinking, and whitespace after `</think>` does not start the answer).
+The clock starts when the attempt that commits is dispatched, so admission
+queueing and failed-over attempts are excluded. Streams outside a session are
+still forwarded as sent, so an OpenAI-compatible stream without
+`include_usage` is counted from its chunks (`estimated`).
+
+The store (`perf_store.go`) is in memory only and resets with the process: the
+last 100 requests per (engine, model, serving node) for the averages, p50/p95,
+minimum and maximum of each figure, a 30-point trend, and the last 200
+requests across all models (50 reported). `performance/report` and
+`GET /pair/v1/performance` return it with `scope: "routed-by-this-node"`;
+`performance/clear` and `DELETE /pair/v1/performance` empty it. Requests other
+nodes route are measured by their own proxies; a request this node serves for
+a peer (cluster ingress) is not measured here.
+
+**Live view** (`perf_live.go`). Each generation request is listed from the
+moment `handleHTTP` receives it until its reply ends, with its session and
+agent IDs, origin (`routed`) and phase: `waiting` (admission, queueing,
+choosing a node), `reading` (dispatched; the node is reading the prompt),
+`thinking` and `answering` (as frames arrive). Each dispatch sets the serving
+node and restarts the counts, so a failed-over request shows its current
+attempt. Frames advance tokens out and thinking tokens (one per chunk), time
+to first token, thinking time so far and the writing speed so far; tokens in
+is the body size at four bytes a token until the engine's count arrives with
+the finished record. A request another node sends to this node's engine over
+the cluster ingress is listed and measured too (origin `peer`), attributed to
+this node's ID as learned from routing; such records join this node's
+figures. `performance/live` and `GET /pair/v1/performance/live` return the
+requests in progress, oldest first, and the latest 50 finished records; they
+are cheap enough to poll several times a second. Finished records carry
+`sessionId`, `agentId` and `origin`.
+
+**Benchmark** (`benchmark.go`). `performance/benchmark {engine, model}` or
+`POST /pair/v1/performance/benchmark {model}` starts one run in the background
+(a second while one runs is refused, `409` over HTTP). The run posts four fixed
+prompts, one at a time, to this facade's own loopback port, so each is routed,
+admitted and measured like real traffic:
+
+| Step | Prompt | Thinking | Reply cap |
+|---|---|---|---|
+| `short` | One-sentence question | off | 64 |
+| `long-input` | About 1,000 tokens of fixed report, summarize in two sentences | off | 128 |
+| `long-output` | Request for a 300-word story | off | 400 |
+| `thinking` | A short reasoning puzzle | on | 1024 |
+
+Every prompt starts with the run ID, so no prompt cache from an earlier run
+answers it. Requests stream, at temperature 0 with a fixed seed. Ollama uses
+`/api/chat` with `think` on or off; llama.cpp uses `/v1/chat/completions` with
+`chat_template_kwargs.enable_thinking`; LM Studio has no switch, so its steps
+run with the model's default (`thinking: "default"`). An "off" step the engine
+refuses with a 4xx is retried without the switch; an "on" step refused is
+`skipped` as unsupported. Before each step the run waits up to two minutes for
+no other request to be in progress on this node, and skips the step if the node
+stays busy. Benchmark requests carry `X-PAIR-Benchmark: 1` (stripped before
+forwarding) and a run-scoped `X-Request-ID`; their records go to the run, never
+into the live figures. The last 20 runs are kept, in memory.
+
 ## 6. Reservations
 
 A reservation is one in-flight dispatch this process has made since the last
