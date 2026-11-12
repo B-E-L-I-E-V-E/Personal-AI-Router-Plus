@@ -14,7 +14,7 @@ card per node: what the node is running right now, which models it has loaded,
 and how fast each of its models has read prompts, written replies and thought.
 A fixed per-model benchmark lets you compare models like for like.
 
-![The Performance tab: a node with its model figures, and a finished benchmark run](assets/onboarding/performance/01-performance.png)
+![The Performance tab: each node with what it is running and each model's requests, tokens, reading and writing speed, time to first token, thinking per request and writing trend](assets/onboarding/performance/01-performance.png)
 
 ## Each node, live
 
@@ -32,7 +32,7 @@ Every node card on the **Overview** has a stopwatch button between the
 performance bars and the settings gear. It opens **Requests in real time** for
 that node, refreshed twice a second:
 
-![Requests in real time on a node card: a thinking request with its session and agent, tokens in and out as they stream, time to first token, writing speed and thinking so far](assets/onboarding/performance/03-live-requests.png)
+![Requests in real time on a node card: a thinking request and an answering one, each with its session and agent, tokens in and out as they stream, time to first token, writing speed and thinking so far](assets/onboarding/performance/03-live-requests.png)
 
 - **Running now**, one row per request: the model and engine, its session and
   agent IDs when the client sent them, whether it came from this machine or
@@ -121,7 +121,7 @@ if the node stays busy for two minutes. Only one benchmark runs at a time.
 On LM Studio PAIR cannot switch thinking on or off, so every step runs with the
 model's default. A model that cannot think shows the thinking step as skipped.
 
-![Model benchmark: the four steps and two runs of qwen3:0.6b, with reading, writing, time to first token and thinking per step](assets/onboarding/performance/02-benchmark.png)
+![Model benchmark: the four prompts and a finished run of qwen3:0.6b, with tokens, time to first token, reading, writing and time spent thinking per step](assets/onboarding/performance/02-benchmark.png)
 
 A step fails when the engine ends the reply with an error (Ollama's
 "prediction aborted", for example), since a cut-off reply is not a fair

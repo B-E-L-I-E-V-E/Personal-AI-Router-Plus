@@ -225,6 +225,10 @@ older PAIR, or one that is not a trusted member of your cluster, says so
 instead. llama.cpp names a model's file only while the model is loaded, so
 load it first to see what its file says.
 
+![A model's menu: Load, Eject, About this model…, Context & sessions… and Delete.](assets/onboarding/models/01-model-menu.png)
+
+![About qwen3:0.6b: a link to its Ollama library page, its capabilities, family, architecture, parameters, quantization, format, trained context, size, licence and default generation settings.](assets/onboarding/models/02-about-this-model.png)
+
 When the engine leaves something out (a description, the context window, the
 download size, or whether the model is a mixture of experts), and the model
 has a page, **About this model…** offers **Look up on the web**. PAIR reads the
@@ -237,6 +241,8 @@ engine reports always wins. The reader model has to be downloaded in Ollama
 first; PAIR says so instead of using another one. A context window found this
 way also feeds **Context & sessions…**, but only for a model whose engine and
 file report none, with a note saying where the number came from.
+
+![From the model's page: the name, description, version and whether it is a mixture of experts, read from ollama.com by qwen3.5:4b, labelled with when and from where.](assets/onboarding/models/03-look-up-on-the-web.png)
 
 ![An engine's model list with a downloaded model's menu open: Load, Eject, Context & sessions…, and Delete.](assets/onboarding/engine-lifecycle/04-model-actions.png)
 
