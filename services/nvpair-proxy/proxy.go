@@ -3135,7 +3135,7 @@ func (p *Proxy) handleMessage(msg *Message) {
 		}
 
 	case "model/details":
-		ctx, cancel := context.WithTimeout(context.Background(), modelDetailsTimeout+2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), modelDetailsTimeout)
 		defer cancel()
 		res, err := p.modelDetails(ctx, msg.Params)
 		if err != nil {

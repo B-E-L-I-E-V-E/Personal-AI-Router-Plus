@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -32,7 +33,14 @@ const (
 	// GET /pair/v1/peer/models/details?model=<name>. The engine is the one
 	// whose ingress answers.
 	peerModelDetailsPath = "/pair/v1/peer/models/details"
-	modelDetailsTimeout  = 10 * time.Second
+	// The broker gives a relayed call 5 seconds (proxyCallTimeout), so the
+	// whole answer, a peer's included, has to fit inside that.
+	modelDetailsTimeout = 4500 * time.Millisecond
+	// peerDetailsTimeout bounds the question to another node, and
+	// peerEngineTimeout that node's own engine and file reads, so a slow peer
+	// still answers inside the caller's wait.
+	peerDetailsTimeout = 3500 * time.Millisecond
+	peerEngineTimeout  = 3 * time.Second
 	// maxLicenseText keeps a full licence text (Ollama sends the whole file)
 	// to a readable excerpt.
 	maxLicenseText = 16 << 10
@@ -522,10 +530,16 @@ func (f *facade) remoteModelDetails(ctx context.Context, nodeID, model string) (
 	if err != nil {
 		return nil, err
 	}
-	resp, err := (&http.Client{Transport: p.peerHTTPTransport(node.ClusterUUID), Timeout: modelDetailsTimeout}).Do(req)
+	resp, err := (&http.Client{Transport: p.peerHTTPTransport(node.ClusterUUID), Timeout: peerDetailsTimeout}).Do(req)
 	if err != nil {
 		slog.Debug("peer model details failed", "node_id", nodeID, "engine", f.profile.Name, "model", model, "err", err)
-		d.Notes = append(d.Notes, "could not reach that node: "+err.Error())
+		// The error names the node's address; the note stays in plain words.
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			d.Notes = append(d.Notes, "that node did not answer in time; it may be offline or unreachable from here")
+		} else {
+			d.Notes = append(d.Notes, "could not reach that node; it may be offline or unreachable from here")
+		}
 		return &d, nil
 	}
 	defer resp.Body.Close()
@@ -560,7 +574,7 @@ func (f *facade) servePeerModelDetails(w http.ResponseWriter, r *http.Request) b
 		writeIngressError(w, http.StatusBadRequest, "model-details", "expected GET "+peerModelDetailsPath+"?model={name}")
 		return true
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), modelDetailsTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), peerEngineTimeout)
 	defer cancel()
 	d := f.localModelDetails(ctx, model)
 	w.Header().Set(peerModelDetailsHeader, "1")

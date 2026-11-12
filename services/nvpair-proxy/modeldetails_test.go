@@ -301,3 +301,22 @@ func TestRemoteModelDetails_RejectsAnUnknownNode(t *testing.T) {
 		t.Fatal("want an error for a node discovery does not know")
 	}
 }
+
+func TestRemoteModelDetails_ExplainsAnUnreachableNode(t *testing.T) {
+	a := detailsPair(t, func(b *facade) http.Handler { return http.HandlerFunc(b.handleClusterIngress) })
+	nodes := a.discovery.Nodes()
+	// A listener that is closed at once: nothing answers on that port.
+	gone := httptest.NewServer(http.NotFoundHandler())
+	gone.Close()
+	u, err := url.Parse(gone.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := nodeFor(t, nodes[0].ID, "http://"+u.Host)
+	moved.ClusterUUID = nodes[0].ClusterUUID
+	a.discovery.SetSubscribed([]Node{moved})
+	d := askNodeB(t, a)
+	if len(d.Notes) != 1 || !strings.Contains(d.Notes[0], "unreachable from here") || strings.Contains(d.Notes[0], u.Host) {
+		t.Fatalf("notes = %v, want one plain note without the node's address", d.Notes)
+	}
+}
