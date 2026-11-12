@@ -122,8 +122,9 @@ func (f *facade) handleClusterIngress(w http.ResponseWriter, r *http.Request) {
 			"client certificate is not a pinned member of this node's cluster")
 		return
 	}
-	// A calling node releasing a session's slot here (peer.go).
-	if f.servePeerRelease(w, r, peer) {
+	// A calling node releasing a session's slot here (peer.go), or reading
+	// this node's capacity (peer_capacity.go).
+	if f.servePeerRelease(w, r, peer) || f.servePeerCapacity(w, r) {
 		return
 	}
 	// A calling node asking this node to describe one of its models

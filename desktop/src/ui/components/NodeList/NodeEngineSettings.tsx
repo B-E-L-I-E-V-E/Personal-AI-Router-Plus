@@ -1,13 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { Stack } from '@nvidia/foundations-react-core'
 import { useNodesStore } from '@/ui/stores/nodes.store'
 import { useEngineModelsStore } from '@/ui/stores/engine-models.store'
 import { useEngineStatusStore } from '@/ui/stores/engine-status.store'
 import { useEngineUpdateAvailableStore } from '@/ui/stores/engine-update-available.store'
 import { useConnectionStore } from '@/ui/stores/connection.store'
+import { CAPACITY_REFRESH_MS, useCapacityPlannerStore } from '@/ui/stores/capacity-planner.store'
 import type { BackendInfo } from '@/ui/types/engine-info'
 import {
     EnabledEngineTypes,
@@ -23,9 +24,17 @@ import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
  * used to live in the standalone Edit Node window — minus the window chrome
  * (AppBar / WindowDropDown / ErrorModal / background shell).
  */
-export default function NodeEngineSettings({ nodeId }: { nodeId: string }) {
+export default function NodeEngineSettings({
+    nodeId,
+    expanded
+}: {
+    nodeId: string
+    /** Whether the section is open; a peer's capacity is read only while it is. */
+    expanded: boolean
+}) {
     const node = useNodesStore(state => state.nodes.get(nodeId))
     const selfId = useConnectionStore(state => state.selfId)
+    const refreshPeerCapacity = useCapacityPlannerStore(state => state.refreshPeer)
 
     // The fingerprints below subscribe to the engine stores so this component
     // re-renders when the underlying status/models/update data changes. The
@@ -71,6 +80,15 @@ export default function NodeEngineSettings({ nodeId }: { nodeId: string }) {
     const isDisconnected = useMemo(() => {
         return isRemote && node?.status === 'offline'
     }, [node, isRemote])
+
+    // A peer's model rows show the capacity that peer enforces, which its own
+    // proxy reports; this node's rows refresh their own (ModelManager).
+    useEffect(() => {
+        if (!isRemote || !expanded) return
+        void refreshPeerCapacity(nodeId)
+        const timer = setInterval(() => void refreshPeerCapacity(nodeId), CAPACITY_REFRESH_MS)
+        return () => clearInterval(timer)
+    }, [isRemote, expanded, nodeId, refreshPeerCapacity])
 
     void engineFingerprint
     void modelsFingerprint

@@ -134,6 +134,7 @@ export interface WsInvokeChannelMap {
     'sessions:list': { request: void; response: SessionSummary[] }
     'sessions:end': { request: { sessionId: string; agentId: string | null }; response: null }
     'capacity:get-report': { request: void; response: ModelCapacity[] }
+    'capacity:get-peer-report': { request: string; response: ModelCapacity[] }
     'capacity:set': { request: CapacityChange; response: null }
     'capacity:plan': { request: CapacityPlanRequest; response: CapacityPlan }
     'capacity:get-planner': { request: void; response: PlannerState }

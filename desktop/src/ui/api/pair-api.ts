@@ -123,6 +123,8 @@ export interface ISessionsApi {
     end(sessionId: string, agentId: string | null): Promise<null>
     /** Context capacity per model on this node. */
     getCapacity(): Promise<ModelCapacity[]>
+    /** Another node's context capacity, as that node enforces it (read-only). */
+    getPeerCapacity(nodeId: string): Promise<ModelCapacity[]>
     /** Set or clear one model's context capacity. */
     setCapacity(change: CapacityChange): Promise<null>
     /** Size a model's sessions from this node's GPU memory. */
@@ -247,6 +249,7 @@ export function createPairApi(transport: ServiceTransport): IPairApi {
             list: () => transport.invoke('sessions:list'),
             end: (sessionId, agentId) => transport.invoke('sessions:end', { sessionId, agentId }),
             getCapacity: () => transport.invoke('capacity:get-report'),
+            getPeerCapacity: nodeId => transport.invoke('capacity:get-peer-report', nodeId),
             setCapacity: change => transport.invoke('capacity:set', change),
             plan: request => transport.invoke('capacity:plan', request),
             getPlanner: () => transport.invoke('capacity:get-planner'),

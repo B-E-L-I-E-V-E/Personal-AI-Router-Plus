@@ -210,6 +210,7 @@
 | `proxy/request` | notification (we consume) | ✅ yes |
 | `proxy/request-started` | notification (we consume) | ➖ ignored |
 | `ready` | notification (we consume) | ✅ yes |
+| `capacity/peer-report` | request (we call) | ✅ yes |
 | `capacity/plan` | request (we call) | ✅ yes |
 | `capacity/planner` | request (we call) | ✅ yes |
 | `capacity/planner-set` | request (we call) | ✅ yes |
