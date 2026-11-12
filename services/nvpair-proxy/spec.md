@@ -840,6 +840,64 @@ is omitted, never filled in.
 Failures to read the engine or the file are notes in the result, not JSON-RPC
 errors.
 
+### 5.17 Model facts from the web
+
+When the engine leaves fields of §5.16 empty, the user can ask the proxy to
+read the model's own pages and fill them. Nothing runs unless the user asks.
+
+- `model/web-facts-start` `{"engine","model","nodeId"?,"readerModel"?}` starts
+  a lookup and answers at once; `model/web-facts` `{"engine","model","nodeId"?}`
+  reports `{readerModel, job?, result?}`. Reading takes longer than the
+  broker's 5 s relay deadline, so the desktop polls. One lookup runs at a
+  time; starting the one already running returns it, and starting another is
+  refused. A job is bounded at 4 minutes.
+- **Pages**: only the http(s) links `model/details` returned for that model
+  (on its node, §5.16), without the licence link, at most 3. Each page is
+  fetched with GET, at most 10 s and 2 MiB, at most 5 redirects, each to
+  http(s), and only `text/html`, `application/xhtml+xml` or `text/plain`. A
+  link comes from a model file, so an address on this machine or the local
+  network (loopback, private, link-local, unspecified) is refused at connect
+  time, redirects included.
+- **Cleaning and chunks**: scripts, styles, navigation, forms and footers are
+  dropped; the title, description meta tags, headings, lists, table cells and
+  paragraphs are kept, at most 48,000 characters a page. Text is split at its
+  headings into chunks of at most 12,000 characters (about 3,000 tokens),
+  longer sections at line and then word boundaries, at most 8 chunks a lookup.
+- **Reader**: each chunk goes to `readerModel` (a setting saved in
+  `model-web-facts.json`, default `qwen3.5:4b`) on **this** node's Ollama
+  through its local backend target: `POST /api/chat` with the field schema as
+  `format`, `think: false`, `temperature: 0`, `num_ctx: 16384`, 90 s per chunk.
+  The prompt names the model asked about, so a page covering several sizes is
+  read for that one. If the reader model is not in `/api/tags` the job fails
+  and says so; no other model is used.
+- **Schema** (`name`, `description`, `version`, `parameterSize`, `dataSize`,
+  `context`, `vision`, `tools`, `thinking`, `moe`, `url`): no field is
+  required, so a chunk answers only what it supports. Each value is validated
+  against its field's type and bounds (`context` a whole number of 512 to 2^24
+  tokens; `url` an http(s) address the page itself gives); an invalid value is
+  dropped and counted in a note.
+- **Merging** is ordinary code: an empty field takes the first supported
+  value; agreeing values (text equal ignoring case and spacing, numbers within
+  2.5%, keeping the multiple of 1024) are kept; disagreeing values leave the
+  field empty and are reported in `conflicts` with each page. `false` is a
+  value; `null` and omitted are not. `description` is prose, so differently
+  worded values are not a conflict and the first is kept.
+- **Result**: `facts[]` `{field, value, source, fills}`, where `source` is the
+  page and `fills` names the `model/details` field the value fills because the
+  engine left it empty (`""` when the engine reported it, whose value wins;
+  `version` and `moe` have no engine field and always fill). `reader` names the
+  model that read the pages. The last result per engine, node and model is
+  kept in `model-web-facts.json` (at most 64).
+- **Capacity planner** (§5.15): for a model on this node, `capacity/plan`
+  fills `spec.maxContextTokens` from a web `context` only when the engine and
+  the GGUF reported none, marked `spec.contextSource: "web"` with
+  `contextPage` and `contextReader` and a note. A web `moe: true` for a model
+  whose engine reports no experts sets `spec.webMoe` and a note; no expert
+  size or per-token cache cost is ever derived from a page.
+
+Page bodies and prompts are never logged (§9); the log names the engine,
+model, reader model and counts.
+
 ## 6. Reservations
 
 A reservation is one in-flight dispatch this process has made since the last

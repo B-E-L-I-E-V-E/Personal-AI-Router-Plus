@@ -217,6 +217,8 @@
 | `capacity/set` | request (we call) | ✅ yes |
 | `facade/enable` | request (we call) | ⚠️ not called |
 | `model/details` | request (we call) | ✅ yes |
+| `model/web-facts` | request (we call) | ✅ yes |
+| `model/web-facts-start` | request (we call) | ✅ yes |
 | `node/add-manual` | request (we call) | ✅ yes |
 | `node/remove-manual` | request (we call) | ✅ yes |
 | `node/select` | request (we call) | ✅ yes |

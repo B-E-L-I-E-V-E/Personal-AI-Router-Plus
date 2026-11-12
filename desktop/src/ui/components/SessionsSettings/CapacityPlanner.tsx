@@ -476,7 +476,11 @@ export default function CapacityPlanner({
                     <Text kind="body/regular/sm" className="text-subtle-color">
                         {SOURCE_TEXT[plan.spec.source] ?? ''}
                         {plan.spec.maxContextTokens > 0
-                            ? ` The model supports up to ${tokens(plan.spec.maxContextTokens)} tokens.`
+                            ? ` The model supports up to ${tokens(plan.spec.maxContextTokens)} tokens${
+                                  plan.spec.contextSource === 'web'
+                                      ? `, according to its page (read by ${plan.spec.contextReader})`
+                                      : ''
+                              }.`
                             : ''}
                     </Text>
                     {[...plan.spec.notes, ...plan.warnings].map(w => (

@@ -1,7 +1,19 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ModelDetails, ModelDetailsRequest, ModelLink } from '@/shared/types/model-details'
+import type {
+    ModelDetails,
+    ModelDetailsRequest,
+    ModelLink,
+    WebFact,
+    WebFactConflict,
+    WebFacts,
+    WebFactsJob,
+    WebFactsPage,
+    WebFactsRequest,
+    WebFactsStatus,
+    WebFactValue
+} from '@/shared/types/model-details'
 import getErrorString from '@/shared/utils/get-error-string'
 import { engineManagerName } from '@/shared/utils/engines'
 import type { JsonObject, JsonValue } from './json-rpc-subprocess'
@@ -100,4 +112,125 @@ export async function getModelDetails(request?: ModelDetailsRequest): Promise<Mo
         )
         return parseModelDetails(undefined, asked, `Could not read the model's details: ${reason}`)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Web facts: what a small local model read from the model's own pages, where
+// the engine reported nothing. The proxy runs the lookup as a job, since it
+// takes longer than one relayed call may; the dialog starts it and polls.
+
+/** The reader model's name when the proxy does not report one. */
+const DEFAULT_READER_MODEL = 'qwen3.5:4b'
+
+function factValue(value: JsonValue | undefined): WebFactValue | null {
+    if (typeof value === 'string' || typeof value === 'boolean') return value
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+    return null
+}
+
+/** A web value is kept only with a value, a field and an http(s) source. */
+function parseWebFact(value: JsonValue): WebFact | null {
+    const obj = objectValue(value)
+    const v = factValue(obj?.value)
+    const field = stringValue(obj?.field)
+    const source = stringValue(obj?.source)
+    if (v === null || !field || !/^https?:\/\//i.test(source)) return null
+    return { field, value: v, source, fills: stringValue(obj?.fills) }
+}
+
+function parseConflict(value: JsonValue): WebFactConflict | null {
+    const obj = objectValue(value)
+    const field = stringValue(obj?.field)
+    const values = (Array.isArray(obj?.values) ? obj.values : []).flatMap(item => {
+        const c = objectValue(item)
+        const v = factValue(c?.value)
+        return v === null ? [] : [{ value: v, source: stringValue(c?.source) }]
+    })
+    return field && values.length > 1 ? { field, values } : null
+}
+
+function parsePage(value: JsonValue): WebFactsPage | null {
+    const obj = objectValue(value)
+    const url = stringValue(obj?.url)
+    if (!/^https?:\/\//i.test(url)) return null
+    return { url, chunks: numberValue(obj?.chunks), note: stringValue(obj?.note) }
+}
+
+function nonNull<T>(v: T | null): v is T {
+    return v !== null
+}
+
+function parseWebFacts(value: JsonValue | undefined): WebFacts | null {
+    const obj = objectValue(value)
+    if (!obj) return null
+    return {
+        reader: stringValue(obj.reader),
+        readAt: numberValue(obj.readAt),
+        pages: (Array.isArray(obj.pages) ? obj.pages : []).map(parsePage).filter(nonNull),
+        facts: (Array.isArray(obj.facts) ? obj.facts : []).map(parseWebFact).filter(nonNull),
+        conflicts: (Array.isArray(obj.conflicts) ? obj.conflicts : [])
+            .map(parseConflict)
+            .filter(nonNull),
+        notes: stringList(obj.notes)
+    }
+}
+
+function parseJob(value: JsonValue | undefined): WebFactsJob | null {
+    const obj = objectValue(value)
+    const state = obj?.state
+    if (state !== 'running' && state !== 'done' && state !== 'failed') return null
+    return {
+        state,
+        phase: stringValue(obj?.phase),
+        reader: stringValue(obj?.reader),
+        chunksTotal: numberValue(obj?.chunksTotal),
+        chunksRead: numberValue(obj?.chunksRead),
+        error: stringValue(obj?.error)
+    }
+}
+
+function parseWebFactsStatus(value: JsonValue | undefined, error = ''): WebFactsStatus {
+    const obj = objectValue(value)
+    return {
+        readerModel: stringValue(obj?.readerModel) || DEFAULT_READER_MODEL,
+        job: parseJob(obj?.job),
+        result: parseWebFacts(obj?.result),
+        error
+    }
+}
+
+async function callWebFacts(
+    method: 'model/web-facts' | 'model/web-facts-start',
+    request?: WebFactsRequest
+): Promise<WebFactsStatus> {
+    if (!request) return parseWebFactsStatus(undefined, 'no request')
+    const { engineType, nodeId, model, readerModel } = request
+    if (!isProxyEngine(engineType)) {
+        return parseWebFactsStatus(undefined, 'PAIR cannot look up models of this engine')
+    }
+    const params: JsonObject = { engine: engineManagerName(engineType), model }
+    const selfId = getModularBridgeState().getSelfId()
+    if (nodeId && nodeId !== selfId) params.nodeId = nodeId
+    if (method === 'model/web-facts-start' && readerModel?.trim()) {
+        params.readerModel = readerModel.trim()
+    }
+    try {
+        return parseWebFactsStatus(
+            await getModularSupervisor().callProxy(engineType, method, params)
+        )
+    } catch (err) {
+        const reason = (getErrorString(err) ?? 'the request failed').replace(
+            /^invalid params: /,
+            ''
+        )
+        return parseWebFactsStatus(undefined, reason)
+    }
+}
+
+export function getModelWebFacts(request?: WebFactsRequest): Promise<WebFactsStatus> {
+    return callWebFacts('model/web-facts', request)
+}
+
+export function startModelWebFacts(request?: WebFactsRequest): Promise<WebFactsStatus> {
+    return callWebFacts('model/web-facts-start', request)
 }

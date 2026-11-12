@@ -79,6 +79,16 @@ export interface ModelSpec {
     format: string
     weightsBytes: number
     maxContextTokens: number
+    /**
+     * 'web' when maxContextTokens was read from the model's page because the
+     * engine and the model file reported none; '' otherwise.
+     */
+    contextSource: string
+    /** The page the web context came from, and the model that read it. */
+    contextPage: string
+    contextReader: string
+    /** The model's page calls it a mixture of experts the engine did not describe. */
+    webMoe: boolean
     kvBytesPerToken: number
     /** Routed experts in a mixture-of-experts model (0 for a dense model). */
     expertCount: number

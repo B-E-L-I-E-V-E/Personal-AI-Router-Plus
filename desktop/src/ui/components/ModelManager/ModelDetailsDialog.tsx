@@ -17,6 +17,7 @@ import { OpenInNew } from '@/ui/components/icons'
 import type { EngineType } from '@/shared/types/engines'
 import type { ModelDetails } from '@/shared/types/model-details'
 import { detailRows } from '@/ui/utils/model-details'
+import { ModelWebFacts } from './ModelWebFacts'
 
 function Chips({ items }: { items: string[] }) {
     return (
@@ -174,6 +175,14 @@ export function ModelDetailsDialog({
                             <Text kind="body/regular/sm" className="text-subtle-color">
                                 The engine reported nothing more about this model.
                             </Text>
+                        )}
+                        {details && (
+                            <ModelWebFacts
+                                engineType={engineType}
+                                nodeId={nodeId}
+                                model={model}
+                                details={details}
+                            />
                         )}
                         {details &&
                             details.notes.map(note => (
