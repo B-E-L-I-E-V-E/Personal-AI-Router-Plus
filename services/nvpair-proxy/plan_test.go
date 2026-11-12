@@ -120,7 +120,7 @@ func TestPlanSlidingWindowCountsWindowOnly(t *testing.T) {
 
 func TestPlanManualValuesAndErrors(t *testing.T) {
 	res, err := computePlan(planRequest{GPUs: twoCards(), WindowTokens: 8192, WeightsBytes: gib, KVBytesPerToken: 100 << 10}, modelSpec{})
-	if err != nil || res.Spec.Source != "manual" || res.Sessions == 0 {
+	if err != nil || res.KVSource != "manual" || res.WeightsSource != "manual" || res.Sessions == 0 {
 		t.Fatalf("manual plan: %v %+v", err, res)
 	}
 	for _, req := range []planRequest{
