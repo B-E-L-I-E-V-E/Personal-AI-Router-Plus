@@ -6,6 +6,7 @@ import { totalmem } from 'node:os'
 import type {
     ApplyPlanResult,
     CapacityPlan,
+    CapacityPlanGpu,
     CapacityPlanRequest,
     KvCacheType,
     ModelSpec,
@@ -16,6 +17,7 @@ import type {
 import type { EngineManagerName } from '@/shared/types/engines'
 import type { EngineSettingsReceipt, EngineSettingsSnapshot } from '@/shared/types/engine-settings'
 import { MODULAR_ENGINE_LIFECYCLE_CALL_TIMEOUT_MS } from '@/shared/constants/modular-runtime'
+import { multiGpuLaunch, multiGpuLaunchText } from '@/shared/utils/capacity-gpus'
 import getErrorString from '@/shared/utils/get-error-string'
 import { createStructuredLogger } from '@/shared/utils/log'
 import type { JsonObject, JsonValue } from './json-rpc-subprocess'
@@ -83,7 +85,23 @@ function parseSpec(value: JsonValue | undefined): ModelSpec {
         kvBytesPerToken: numberValue(obj?.kvBytesPerToken),
         expertCount: numberValue(obj?.expertCount),
         expertBytes: numberValue(obj?.expertBytes),
+        layers: numberValue(obj?.layers),
         notes: stringList(obj?.notes)
+    }
+}
+
+function parseGpu(value: JsonValue): CapacityPlanGpu {
+    const obj = objectValue(value)
+    return {
+        name: stringValue(obj?.name),
+        totalBytes: numberValue(obj?.totalBytes),
+        reserveBytes: numberValue(obj?.reserveBytes),
+        layers: numberValue(obj?.layers),
+        share: numberValue(obj?.share),
+        weightsBytes: numberValue(obj?.weightsBytes),
+        otherModelsBytes: numberValue(obj?.otherModelsBytes),
+        bytesPerSession: numberValue(obj?.bytesPerSession),
+        sessions: numberValue(obj?.sessions)
     }
 }
 
@@ -116,6 +134,10 @@ function parsePlan(value: JsonValue | undefined, error = ''): CapacityPlan {
         ramReserveBytes: numberValue(obj?.ramReserveBytes),
         ramUsedBytes: numberValue(obj?.ramUsedBytes),
         ramFits: obj?.ramFits !== false,
+        gpus: arrayValue(obj?.gpus).map(parseGpu),
+        tensorSplit: stringValue(obj?.tensorSplit),
+        oneGpuIndex: numberValue(obj?.oneGpuIndex),
+        oneGpuSessions: numberValue(obj?.oneGpuSessions),
         warnings: stringList(obj?.warnings),
         error: error || stringValue(obj?.error)
     }
@@ -281,6 +303,10 @@ interface PlanNumbers {
     cacheType: KvCacheType
     /** Keep expert weights in system memory (llama.cpp only). */
     offloadExperts?: boolean
+    /** llama.cpp: split layers across GPUs by this --tensor-split. */
+    tensorSplit?: string
+    /** Ollama: spread the model across every GPU. */
+    spreadGpus?: boolean
 }
 
 /**
@@ -306,6 +332,11 @@ export function ollamaLaunchText(text: string, plan: PlanNumbers): string {
             added.push('OLLAMA_FLASH_ATTENTION=1')
         }
     }
+    // Only ever added: spreading is harmless to a plan that fits on one GPU,
+    // and the user may have set it for other models.
+    if (plan.spreadGpus && !kept.some(token => envName(token) === 'OLLAMA_SCHED_SPREAD')) {
+        added.push('OLLAMA_SCHED_SPREAD=1')
+    }
     return [...kept, ...added, ...args].join(' ')
 }
 
@@ -319,6 +350,8 @@ const LLAMA_VALUE_OPTIONS = [
 ]
 // Owned flags without a value: where the expert weights live.
 const LLAMA_FLAG_OPTIONS = ['-cmoe', '--cpu-moe']
+// Owned only when a plan splits the model across GPUs.
+const LLAMA_SPLIT_OPTIONS = ['-sm', '--split-mode', '-ts', '--tensor-split']
 
 /**
  * llama.cpp splits --ctx-size evenly across --parallel slots, so the total is
@@ -326,7 +359,7 @@ const LLAMA_FLAG_OPTIONS = ['-cmoe', '--cpu-moe']
  */
 export function llamaCppLaunchText(text: string, plan: PlanNumbers): string {
     const { env, args } = splitEnv(splitLaunchTokens(text))
-    const owned = LLAMA_VALUE_OPTIONS.flat()
+    const owned = [...LLAMA_VALUE_OPTIONS.flat(), ...(plan.tensorSplit ? LLAMA_SPLIT_OPTIONS : [])]
     const kept: string[] = []
     for (let i = 0; i < args.length; i++) {
         const token = args[i]
@@ -352,6 +385,8 @@ export function llamaCppLaunchText(text: string, plan: PlanNumbers): string {
     }
     // Experts on the CPU; attention and the context cache stay on the GPU.
     if (plan.offloadExperts) added.push('--cpu-moe')
+    // Whole layers per GPU, each with its part of the context cache.
+    if (plan.tensorSplit) added.push('--split-mode', 'layer', '--tensor-split', plan.tensorSplit)
     return [...env, ...kept, ...added].join(' ')
 }
 
@@ -418,11 +453,24 @@ async function applyPlanNow(
     const state = await getPlanner(remote)
     const plan = state.plans.find(p => p.engine === engine && p.model === model)
     if (!plan) return { applied: false, message: 'save a plan for this model first' }
+    // The GPU split depends on the node's GPUs now, so size the saved plan
+    // again rather than trusting a split from when it was saved.
+    const layout = await planCapacity({
+        nodeId: remote,
+        engine,
+        model,
+        windowTokens: plan.windowTokens,
+        cacheType: plan.cacheType,
+        reservePercent: plan.reservePercent || undefined,
+        offloadExperts: plan.offloadExperts || undefined
+    })
+    const gpus = multiGpuLaunch(engine, layout, plan.sessions)
     const numbers = {
         windowTokens: plan.windowTokens,
         sessions: plan.sessions,
         cacheType: plan.cacheType,
-        offloadExperts: plan.offloadExperts
+        offloadExperts: plan.offloadExperts,
+        ...gpus
     }
     const markApplied = async () => {
         await callNodeProxy(
@@ -457,7 +505,7 @@ async function applyPlanNow(
         )
         return {
             applied: false,
-            message: `PAIR now limits ${model} to ${plan.sessions} sessions of ${plan.windowTokens} tokens. LM Studio sets context when it loads a model: load it with a ${plan.windowTokens}-token context and ${plan.sessions} parallel slots${plan.offloadExperts ? ', and turn on keeping expert weights on the CPU,' : ''} to match.`
+            message: `PAIR now limits ${model} to ${plan.sessions} sessions of ${plan.windowTokens} tokens. LM Studio sets context when it loads a model: load it with a ${plan.windowTokens}-token context and ${plan.sessions} parallel slots${plan.offloadExperts ? ', and turn on keeping expert weights on the CPU,' : ''}${layout.gpus.length > 1 && !layout.error ? `, with every layer on the GPUs split across all ${layout.gpus.length} of them,` : ''} to match.`
         }
     }
     if (engine !== 'ollama' && engine !== 'llamacpp')
@@ -508,12 +556,14 @@ async function applyPlanNow(
             windowTokens: plan.windowTokens,
             sessions: plan.sessions,
             cacheType: plan.cacheType,
-            offloadExperts: plan.offloadExperts
+            offloadExperts: plan.offloadExperts,
+            tensorSplit: gpus.tensorSplit,
+            spreadGpus: gpus.spreadGpus
         }
     })
     return {
         applied: true,
-        message: `${engine} restarted with ${plan.sessions} sessions of ${plan.windowTokens} tokens${plan.offloadExperts ? ', expert weights in system memory' : ''}`
+        message: `${engine} restarted with ${plan.sessions} sessions of ${plan.windowTokens} tokens${plan.offloadExperts ? ', expert weights in system memory' : ''}${multiGpuLaunchText(gpus) ? `, ${multiGpuLaunchText(gpus)}` : ''}`
     }
 }
 

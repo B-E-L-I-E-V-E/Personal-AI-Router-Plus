@@ -780,6 +780,20 @@ reading the model:
   ceiling 256). The cap never shrinks the window. With the engine not running,
   `spec.notes` says so. A model that does not fit still reports its
   per-session cost, so the desktop's calculator can show what it would need.
+- **Several GPUs**: the model is split by whole layers (`spec.layers`) in
+  proportion to each GPU's memory after its own reserve (largest remainder),
+  and each layer's share of every session's cache sits with it. `gpus[]`
+  reports each GPU's `layers`, `share`, `weightsBytes`, `otherModelsBytes`
+  (other models spread by the same ratio), `bytesPerSession` and `sessions`;
+  the plan's `sessions` is the smallest of them, never more than the pooled
+  budget allows. With an unknown layer count the split is by the same ratio
+  without rounding. With two or more GPUs, `tensorSplit` is the matching
+  llama.cpp `--tensor-split` (layers per GPU, or GiB after the reserve), and
+  for Ollama `oneGpuIndex`/`oneGpuSessions` give the GPU with the most room
+  for the whole model and how many sessions fit there alone (0: it needs more
+  than one). The desktop writes `--split-mode layer --tensor-split` for
+  llama.cpp, and `OLLAMA_SCHED_SPREAD=1` for Ollama when the planned sessions
+  exceed `oneGpuSessions`.
 - **Expert offload**: for a mixture-of-experts model (`expert_count` > 1),
   `spec.expertBytes` is the exact size of the routed-expert tensors
   (`blk.N.ffn_{up,down,gate,gate_up}_exps`, shared experts excluded), summed

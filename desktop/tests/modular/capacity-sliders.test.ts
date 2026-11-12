@@ -2,13 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, expect, it } from 'vitest'
-import type { CapacityPlan } from '@/shared/types/sessions'
+import type { CapacityPlan, CapacityPlanGpu } from '@/shared/types/sessions'
+import { multiGpuLaunch, multiGpuLaunchText, oneGpuIndex } from '@/shared/utils/capacity-gpus'
 import {
+    gpuBars,
     memoryUse,
     nearestStop,
     replyBudget,
     replyStops,
     sessionsSliderMax,
+    shortGpuName,
     shortTokens,
     textKindFits,
     windowStops
@@ -33,6 +36,7 @@ function plan(overrides: Partial<CapacityPlan> = {}): CapacityPlan {
             kvBytesPerToken: 0,
             expertCount: 0,
             expertBytes: 0,
+            layers: 48,
             notes: []
         },
         totalBytes: 24 * GiB,
@@ -60,6 +64,10 @@ function plan(overrides: Partial<CapacityPlan> = {}): CapacityPlan {
         ramReserveBytes: 16 * GiB,
         ramUsedBytes: 0,
         ramFits: true,
+        gpus: [],
+        tensorSplit: '',
+        oneGpuIndex: 0,
+        oneGpuSessions: 0,
         warnings: [],
         error: '',
         ...overrides
@@ -149,5 +157,93 @@ describe('reply budget', () => {
         expect(replyBudget(40960)).toBe(8192)
         expect(replyBudget(40960, 4096)).toBe(4096)
         expect(replyBudget(8192)).toBe(4096)
+    })
+})
+
+/** Two 24 GB GPUs holding half the 18 GiB model and half of each session. */
+function twoGpus(overrides: Partial<CapacityPlan> = {}): CapacityPlan {
+    const half: CapacityPlanGpu = {
+        name: 'NVIDIA GeForce RTX 4090',
+        totalBytes: 24 * GiB,
+        reserveBytes: 2 * GiB,
+        layers: 24,
+        share: 0.5,
+        weightsBytes: 9 * GiB,
+        otherModelsBytes: 0,
+        bytesPerSession: 0.5 * GiB,
+        sessions: 26
+    }
+    return plan({
+        totalBytes: 48 * GiB,
+        reserveBytes: 4 * GiB,
+        gpus: [half, { ...half }],
+        tensorSplit: '24,24',
+        ...overrides
+    })
+}
+
+describe('GPU bars', () => {
+    it('shows nothing extra for one GPU', () => {
+        expect(gpuBars(plan(), 4, 'llamacpp')).toEqual([])
+    })
+
+    it('splits the model and each session across two GPUs', () => {
+        const bars = gpuBars(twoGpus(), 10, 'llamacpp')
+        expect(bars.map(b => b.label)).toEqual(['GPU 0 · RTX 4090', 'GPU 1 · RTX 4090'])
+        // 9 GiB of weights + 10 × 0.5 GiB of context + 2 GiB kept free.
+        expect(bars[0]).toMatchObject({
+            needed: 16 * GiB,
+            total: 24 * GiB,
+            over: false,
+            layers: 24
+        })
+    })
+
+    it('turns only the GPU that runs out red', () => {
+        const p = twoGpus()
+        p.gpus[1] = { ...p.gpus[1], totalBytes: 12 * GiB }
+        const bars = gpuBars(p, 10, 'llamacpp')
+        expect(bars.map(b => b.over)).toEqual([false, true])
+    })
+
+    it('puts the whole model on one GPU when Ollama keeps it there', () => {
+        const p = twoGpus({ oneGpuIndex: 1, oneGpuSessions: 3, gpuWeightsBytes: 4 * GiB })
+        const bars = gpuBars(p, 3, 'ollama')
+        expect(bars[0]).toMatchObject({ idle: true, needed: 2 * GiB, layers: 0 })
+        // 4 GiB of weights + 3 × 1 GiB of context + 2 GiB kept free.
+        expect(bars[1]).toMatchObject({ idle: false, needed: 9 * GiB, layers: 48, share: 1 })
+        // More sessions than one GPU holds: Ollama spreads the model.
+        expect(gpuBars(p, 4, 'ollama').every(b => !b.idle)).toBe(true)
+    })
+
+    it('shortens GPU names to the model', () => {
+        expect(shortGpuName('NVIDIA GeForce RTX 4090')).toBe('RTX 4090')
+        expect(shortGpuName('Apple M5 Max')).toBe('Apple M5 Max')
+    })
+})
+
+describe('multi-GPU launch settings', () => {
+    it('gives llama.cpp the layer split', () => {
+        const launch = multiGpuLaunch('llamacpp', twoGpus(), 4)
+        expect(launch).toEqual({ tensorSplit: '24,24', spreadGpus: false })
+        expect(multiGpuLaunchText(launch)).toBe('--split-mode layer --tensor-split 24,24')
+    })
+
+    it('tells Ollama to spread only when one GPU is not enough', () => {
+        const p = twoGpus({ oneGpuIndex: 0, oneGpuSessions: 3 })
+        expect(oneGpuIndex('ollama', p, 3)).toBe(0)
+        expect(multiGpuLaunch('ollama', p, 3).spreadGpus).toBe(false)
+        expect(multiGpuLaunch('ollama', p, 4).spreadGpus).toBe(true)
+        expect(multiGpuLaunchText(multiGpuLaunch('ollama', p, 4))).toBe('OLLAMA_SCHED_SPREAD=1')
+    })
+
+    it('sets nothing for one GPU, LM Studio, or a plan that failed', () => {
+        expect(multiGpuLaunch('llamacpp', plan(), 4)).toEqual({
+            tensorSplit: '',
+            spreadGpus: false
+        })
+        expect(multiGpuLaunch('lmstudio', twoGpus(), 4).tensorSplit).toBe('')
+        expect(multiGpuLaunch('llamacpp', twoGpus({ error: 'x' }), 4).tensorSplit).toBe('')
+        expect(multiGpuLaunchText({ tensorSplit: '', spreadGpus: false })).toBe('')
     })
 })
