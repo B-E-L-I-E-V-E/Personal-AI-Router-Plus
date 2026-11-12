@@ -13,6 +13,13 @@ release workflow, with macOS builds signed and notarized; the app updates from
 those releases. A build made locally from source is unsigned unless built with
 `PAIR_MAC_SIGN=1`, and updates only once a release exists.
 
+## 1.3.5 — Context & sessions starts from the model's and engine's own defaults (#16)
+
+- A model with no saved plan opens **Context & sessions…** on what is in force for it: the window, session count and reply length its engine runs it with now (the loaded model or the engine's launch settings), or the model's own defaults, instead of generic values.
+- A small marker beside each slider says where its value came from (*engine now*, *engine settings*, *model default*, *model maximum*) while the slider still sits there. Nothing reported keeps the old starting point.
+- Works for another node's model too: that node reads its own engine.
+- `capacity/plan` returns the new `spec.defaults` (`window`, `sessions`, `reply`, each `{value, source}`).
+
 ## 1.3.4 — Sliders for the planner's model size and context cost, with exact size labels (#19)
 
 - **Context & sessions…** has two new sliders, **Model weights in memory** and **Context cache per token**. They snap to round values, have an exact field beside them, and are always shown. Both start at what the model reports, and moving one overrides it for the plan. **Use the model's** resets it. They replace the two text fields that only appeared when a value was unknown.
