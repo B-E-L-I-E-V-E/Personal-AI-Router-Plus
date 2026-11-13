@@ -682,10 +682,11 @@ components:
           type: object
           description: >
             One entry per capability and limit field: `engine` when every
-            placement's engine reported it, `estimated` when PAIR inferred it.
+            placement's engine reported it, `configured` when the user's PAIR
+            capacity setting decided it, `estimated` when PAIR inferred it.
           additionalProperties:
             type: string
-            enum: [engine, estimated]
+            enum: [engine, configured, estimated]
     ModelCapabilities:
       type: object
       required: [chat, structuredOutput, tools, vision, embedding, reasoning]
@@ -720,7 +721,15 @@ components:
           description: An engine's own cap on a reply, or null when none sets one.
         recommendedOutputTokens:
           type: integer
-          description: A max_tokens with room for the answer and, for a reasoning model, its thinking.
+          description: >
+            A max_tokens with room for the answer and, for a reasoning model, its
+            thinking. The room for the reply set in PAIR's planner, when set.
+        maxInputTokens:
+          type: integer
+          description: >
+            The most a request's messages and history may hold: contextWindow
+            less recommendedOutputTokens. PAIR refuses a session conversation
+            that outgrows the part its capacity setting gives it.
     CapabilityPlacement:
       type: object
       required: [node, engine, loaded, contextWindow, maxContextWindow, detailsAvailable]
@@ -745,6 +754,22 @@ components:
         detailsAvailable:
           type: boolean
           description: False when the placement could not be asked; its values are estimates.
+        configured:
+          type: object
+          nullable: true
+          description: The node's PAIR capacity setting for the model, from the planner.
+          required: [contextWindow, replyTokens, maxInputTokens, sessions]
+          properties:
+            contextWindow:
+              type: integer
+              description: Each session's window.
+            replyTokens:
+              type: integer
+              description: The part of the window kept for the reply; 0 keeps none.
+            maxInputTokens:
+              type: integer
+            sessions:
+              type: integer
     CreateSessionRequest:
       type: object
       additionalProperties: false

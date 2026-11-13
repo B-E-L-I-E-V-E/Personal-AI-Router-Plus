@@ -81,6 +81,7 @@ func allEngine(keys ...string) map[string]string {
 		"chat": sourceEngine, "structuredOutput": sourceEstimated, "tools": sourceEngine, "vision": sourceEngine,
 		"embedding": sourceEngine, "reasoning": sourceEngine, "contextWindow": sourceEngine,
 		"maxContextWindow": sourceEngine, "maxOutputTokens": sourceEstimated, "recommendedOutputTokens": sourceEstimated,
+		"maxInputTokens": sourceEstimated,
 	}
 	for _, k := range keys {
 		out[k] = sourceEstimated
@@ -102,7 +103,7 @@ func TestModelCapabilities_LMStudioMapping(t *testing.T) {
 			name:        "loaded reasoning model",
 			model:       "glm-4.7-flash",
 			wantCaps:    modelCapabilities{Chat: true, StructuredOutput: true, Tools: true, Reasoning: true},
-			wantLimits:  modelLimits{ContextWindow: 8192, MaxContextWindow: 202752, RecommendedOutputTokens: 4096},
+			wantLimits:  modelLimits{ContextWindow: 8192, MaxContextWindow: 202752, RecommendedOutputTokens: 4096, MaxInputTokens: 4096},
 			wantLoaded:  true,
 			wantSources: allEngine(),
 		},
@@ -111,14 +112,14 @@ func TestModelCapabilities_LMStudioMapping(t *testing.T) {
 			name:        "unloaded vision model",
 			model:       "mistralai/devstral-small-2-2512",
 			wantCaps:    modelCapabilities{Chat: true, StructuredOutput: true, Tools: true, Vision: true},
-			wantLimits:  modelLimits{ContextWindow: 4096, MaxContextWindow: 393216, RecommendedOutputTokens: 1024},
+			wantLimits:  modelLimits{ContextWindow: 4096, MaxContextWindow: 393216, RecommendedOutputTokens: 1024, MaxInputTokens: 3072},
 			wantSources: allEngine("contextWindow"),
 		},
 		{
 			name:        "embedding model",
 			model:       "text-embedding-nomic-embed-text-v1.5",
 			wantCaps:    modelCapabilities{Embedding: true},
-			wantLimits:  modelLimits{ContextWindow: 2048, MaxContextWindow: 2048, RecommendedOutputTokens: 1024},
+			wantLimits:  modelLimits{ContextWindow: 2048, MaxContextWindow: 2048, RecommendedOutputTokens: 1024, MaxInputTokens: 1024},
 			wantSources: allEngine("contextWindow"),
 		},
 	}
@@ -158,7 +159,7 @@ func TestModelCapabilities_OllamaMapping(t *testing.T) {
 			show:        ollamaShowQwen3,
 			ps:          `{"models":[{"name":"qwen3:0.6b","model":"qwen3:0.6b","context_length":16384}]}`,
 			wantCaps:    modelCapabilities{Chat: true, StructuredOutput: true, Tools: true, Reasoning: true},
-			wantLimits:  modelLimits{ContextWindow: 16384, MaxContextWindow: 40960, RecommendedOutputTokens: 4096},
+			wantLimits:  modelLimits{ContextWindow: 16384, MaxContextWindow: 40960, RecommendedOutputTokens: 4096, MaxInputTokens: 12288},
 			wantSources: allEngine(),
 		},
 		{
@@ -170,8 +171,8 @@ func TestModelCapabilities_OllamaMapping(t *testing.T) {
 				"model_info":{"general.architecture":"qwen2","qwen2.context_length":131072},"capabilities":["completion"]}`,
 			ps:          `{"models":[]}`,
 			wantCaps:    modelCapabilities{Chat: true, StructuredOutput: true, Reasoning: true},
-			wantLimits:  modelLimits{ContextWindow: 32768, MaxContextWindow: 131072, MaxOutputTokens: int64p(2048), RecommendedOutputTokens: 2048},
-			wantSources: map[string]string{"chat": sourceEngine, "structuredOutput": sourceEstimated, "tools": sourceEngine, "vision": sourceEngine, "embedding": sourceEngine, "reasoning": sourceEstimated, "contextWindow": sourceEngine, "maxContextWindow": sourceEngine, "maxOutputTokens": sourceEngine, "recommendedOutputTokens": sourceEstimated},
+			wantLimits:  modelLimits{ContextWindow: 32768, MaxContextWindow: 131072, MaxOutputTokens: int64p(2048), RecommendedOutputTokens: 2048, MaxInputTokens: 30720},
+			wantSources: map[string]string{"chat": sourceEngine, "structuredOutput": sourceEstimated, "tools": sourceEngine, "vision": sourceEngine, "embedding": sourceEngine, "reasoning": sourceEstimated, "contextWindow": sourceEngine, "maxContextWindow": sourceEngine, "maxOutputTokens": sourceEngine, "recommendedOutputTokens": sourceEstimated, "maxInputTokens": sourceEstimated},
 		},
 		{
 			name:        "embedding model",
@@ -179,7 +180,7 @@ func TestModelCapabilities_OllamaMapping(t *testing.T) {
 			show:        `{"model_info":{"general.architecture":"nomic-bert","nomic-bert.context_length":2048},"capabilities":["embedding"]}`,
 			ps:          `{"models":[]}`,
 			wantCaps:    modelCapabilities{Embedding: true},
-			wantLimits:  modelLimits{ContextWindow: 2048, MaxContextWindow: 2048, RecommendedOutputTokens: 1024},
+			wantLimits:  modelLimits{ContextWindow: 2048, MaxContextWindow: 2048, RecommendedOutputTokens: 1024, MaxInputTokens: 1024},
 			wantSources: allEngine("contextWindow"),
 		},
 	}
@@ -214,7 +215,7 @@ func TestModelCapabilities_LlamaCPPMapping(t *testing.T) {
 	}
 	// llama.cpp reports the loaded window but not the trained one, and only
 	// the template says the model thinks.
-	wantLimits := modelLimits{ContextWindow: 65536, MaxContextWindow: 65536, RecommendedOutputTokens: 16384}
+	wantLimits := modelLimits{ContextWindow: 65536, MaxContextWindow: 65536, RecommendedOutputTokens: 16384, MaxInputTokens: 49152}
 	if !reflect.DeepEqual(got.Limits, wantLimits) {
 		t.Errorf("limits = %+v, want %+v", got.Limits, wantLimits)
 	}
@@ -239,7 +240,7 @@ func TestAggregateCapabilities_HoldsWhereverTheRequestLands(t *testing.T) {
 	if got.Capabilities != wantCaps {
 		t.Errorf("capabilities = %+v, want %+v", got.Capabilities, wantCaps)
 	}
-	wantLimits := modelLimits{ContextWindow: 8192, MaxContextWindow: 131072, RecommendedOutputTokens: 4096}
+	wantLimits := modelLimits{ContextWindow: 8192, MaxContextWindow: 131072, RecommendedOutputTokens: 4096, MaxInputTokens: 4096}
 	if !reflect.DeepEqual(got.Limits, wantLimits) {
 		t.Errorf("limits = %+v, want %+v", got.Limits, wantLimits)
 	}
@@ -403,14 +404,14 @@ type countingFetch struct {
 	fail  bool
 }
 
-func (c *countingFetch) fetch(context.Context, placementRef) (modelDetails, error) {
+func (c *countingFetch) fetch(context.Context, placementRef) (placementInfo, error) {
 	c.calls.Add(1)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.fail {
-		return modelDetails{}, errors.New("unreachable")
+		return placementInfo{}, errors.New("unreachable")
 	}
-	return c.d, nil
+	return placementInfo{details: c.d}, nil
 }
 
 // waitCalls waits for the background refresh to have asked n times.
@@ -510,12 +511,12 @@ func TestCapabilityCache_RetriesAFailureAndKeepsAGoodAnswer(t *testing.T) {
 func TestCapabilityCache_DoesNotWaitPastItsBound(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
-	c := newCapabilityCache(func(ctx context.Context, _ placementRef) (modelDetails, error) {
+	c := newCapabilityCache(func(ctx context.Context, _ placementRef) (placementInfo, error) {
 		select {
 		case <-release:
 		case <-ctx.Done():
 		}
-		return modelDetails{}, ctx.Err()
+		return placementInfo{}, ctx.Err()
 	})
 
 	start := time.Now()
@@ -602,7 +603,7 @@ func TestRouterModelCapabilities_ReportsTheModel(t *testing.T) {
 			if got.Limits.ContextWindow != tc.wantWindow {
 				t.Errorf("contextWindow = %d, want %d", got.Limits.ContextWindow, tc.wantWindow)
 			}
-			if len(got.Sources) != 10 {
+			if len(got.Sources) != 11 {
 				t.Errorf("sources = %v, want one per capability and limit", got.Sources)
 			}
 			if rec.Header().Get(requestIDHeader) == "" {
@@ -664,8 +665,138 @@ func TestRouterModelList_CarriesCapabilitiesAndLimits(t *testing.T) {
 	}
 	info := list.Data[0].Pair
 	wantCaps := modelCapabilities{Chat: true, StructuredOutput: true, Tools: true, Reasoning: true}
-	wantLimits := modelLimits{ContextWindow: 8192, MaxContextWindow: 202752, RecommendedOutputTokens: 4096}
+	wantLimits := modelLimits{ContextWindow: 8192, MaxContextWindow: 202752, RecommendedOutputTokens: 4096, MaxInputTokens: 4096}
 	if info.Capabilities != wantCaps || !reflect.DeepEqual(info.Limits, wantLimits) || info.Sources["reasoning"] != sourceEngine {
 		t.Fatalf("pair = %+v, want %+v and %+v with reasoning from the engine", info, wantCaps, wantLimits)
+	}
+}
+
+// plannedOnUltron is the setting from the planner: a 65,536-token window per
+// session, 16,384 of it kept for the reply, 8 sessions at once.
+var plannedOnUltron = &capabilityConfigured{ContextWindow: 65536, ReplyTokens: 16384, MaxInputTokens: 49152, Sessions: 8}
+
+func TestAggregateCapabilities_UsesThePlannedWindowAndReplyRoom(t *testing.T) {
+	glm := func(loaded int64) modelDetails {
+		return modelDetails{Type: "llm", Capabilities: []string{"tools", "reasoning"}, CapabilitiesComplete: true,
+			ContextLength: 202752, LoadedContext: loaded}
+	}
+	cases := []struct {
+		name        string
+		details     modelDetails
+		set         *capabilityConfigured
+		wantLimits  modelLimits
+		wantSources map[string]string
+	}{
+		{
+			// The plan is saved but the engine still runs the old load, and
+			// it truncates there. The reply room does not fit in it.
+			name:        "plan saved, engine not reloaded yet",
+			details:     glm(8192),
+			set:         plannedOnUltron,
+			wantLimits:  modelLimits{ContextWindow: 8192, MaxContextWindow: 202752, RecommendedOutputTokens: 4096, MaxInputTokens: 4096},
+			wantSources: map[string]string{"contextWindow": sourceEngine, "recommendedOutputTokens": sourceEstimated, "maxInputTokens": sourceEstimated},
+		},
+		{
+			name:        "plan applied",
+			details:     glm(65536),
+			set:         plannedOnUltron,
+			wantLimits:  modelLimits{ContextWindow: 65536, MaxContextWindow: 202752, RecommendedOutputTokens: 16384, MaxInputTokens: 49152},
+			wantSources: map[string]string{"contextWindow": sourceEngine, "recommendedOutputTokens": sourceConfigured, "maxInputTokens": sourceConfigured},
+		},
+		{
+			// LM Studio loads it with the planned window on first use.
+			name:        "planned model not loaded",
+			details:     glm(0),
+			set:         plannedOnUltron,
+			wantLimits:  modelLimits{ContextWindow: 65536, MaxContextWindow: 202752, RecommendedOutputTokens: 16384, MaxInputTokens: 49152},
+			wantSources: map[string]string{"contextWindow": sourceConfigured, "recommendedOutputTokens": sourceConfigured, "maxInputTokens": sourceConfigured},
+		},
+		{
+			// PAIR refuses a session beyond its setting even though the
+			// engine loaded more.
+			name:        "setting smaller than the load",
+			details:     glm(131072),
+			set:         &capabilityConfigured{ContextWindow: 32768, MaxInputTokens: 32768, Sessions: 4},
+			wantLimits:  modelLimits{ContextWindow: 32768, MaxContextWindow: 202752, RecommendedOutputTokens: 8192, MaxInputTokens: 24576},
+			wantSources: map[string]string{"contextWindow": sourceConfigured, "recommendedOutputTokens": sourceEstimated, "maxInputTokens": sourceEstimated},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := aggregateCapabilities("glm-4.7-flash", []placementDetails{
+				{ref: testPlacement("lmstudio", "ultron", "glm-4.7-flash"), details: tc.details, ok: true, set: tc.set},
+			})
+			if !reflect.DeepEqual(got.Limits, tc.wantLimits) {
+				t.Errorf("limits = %+v, want %+v", got.Limits, tc.wantLimits)
+			}
+			for k, want := range tc.wantSources {
+				if got.Sources[k] != want {
+					t.Errorf("sources[%s] = %s, want %s", k, got.Sources[k], want)
+				}
+			}
+			if got.Placements[0].Configured != tc.set {
+				t.Errorf("placement configured = %+v, want %+v", got.Placements[0].Configured, tc.set)
+			}
+		})
+	}
+}
+
+func TestAggregateCapabilities_SmallestReplyRoomAcrossPlacements(t *testing.T) {
+	loaded := modelDetails{Type: "llm", CapabilitiesComplete: true, ContextLength: 131072, LoadedContext: 65536}
+
+	got := aggregateCapabilities("shared", []placementDetails{
+		{ref: testPlacement("lmstudio", "node-a", "shared"), details: loaded, ok: true, set: plannedOnUltron},
+		{ref: testPlacement("lmstudio", "node-b", "shared"), details: loaded, ok: true,
+			set: &capabilityConfigured{ContextWindow: 65536, ReplyTokens: 8192, MaxInputTokens: 57344, Sessions: 8}},
+	})
+
+	if got.Limits.RecommendedOutputTokens != 8192 || got.Limits.MaxInputTokens != 57344 {
+		t.Fatalf("limits = %+v, want the smaller reply room, 8192, and 57344 for the messages", got.Limits)
+	}
+}
+
+func TestSettingFor_ReadsTheNodesCapacityReport(t *testing.T) {
+	p := NewProxy(NewCodec(rwNop{}))
+	// The planner's save: a pool for 8 sessions of 65,536 tokens, with
+	// 16,384 of each kept for the reply.
+	if err := p.capacity.set(capacityKey{Engine: "lmstudio", Model: "glm-4.7-flash"},
+		capacitySetting{ContextTokens: 8 * 65536, MaxSessions: 8, ReplyTokens: 16384}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.capacity.set(capacityKey{Engine: "ollama", Model: "deepseek-r1:latest"},
+		capacitySetting{ContextTokens: 32768, MaxSessions: 2}, false); err != nil {
+		t.Fatal(err)
+	}
+	rows := p.capacityReport(context.Background())
+
+	cases := []struct {
+		name string
+		ref  placementRef
+		want *capabilityConfigured
+	}{
+		{"planned LM Studio model", testPlacement("lmstudio", "ultron", "glm-4.7-flash"), plannedOnUltron},
+		{"Ollama name without its tag", testPlacement("ollama", "ultron", "deepseek-r1"),
+			&capabilityConfigured{ContextWindow: 16384, MaxInputTokens: 16384, Sessions: 2}},
+		{"same model on another engine", testPlacement("ollama", "ultron", "glm-4.7-flash"), nil},
+		{"model without a setting", testPlacement("lmstudio", "ultron", "qwen3.8-27b"), nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := settingFor(rows, tc.ref); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("setting = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCapabilityCache_KeepsTheSettingWhenTheEngineCannotBeAsked(t *testing.T) {
+	c := newCapabilityCache(func(context.Context, placementRef) (placementInfo, error) {
+		return placementInfo{set: plannedOnUltron}, errors.New("engine unreachable")
+	})
+
+	got := c.lookup(context.Background(), []placementRef{testPlacement("lmstudio", "ultron", "glm-4.7-flash")}, time.Second)
+
+	if got[0].ok || got[0].set != plannedOnUltron {
+		t.Fatalf("lookup = %+v, want no details but the planned setting", got[0])
 	}
 }

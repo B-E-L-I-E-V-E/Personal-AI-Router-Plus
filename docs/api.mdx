@@ -169,14 +169,16 @@ GET /pair/v1/models/glm-4.7-flash
 {
   "id": "glm-4.7-flash",
   "capabilities": { "chat": true, "structuredOutput": true, "tools": true, "vision": false, "embedding": false, "reasoning": true },
-  "limits": { "contextWindow": 8192, "maxContextWindow": 202752, "maxOutputTokens": null, "recommendedOutputTokens": 4096 },
+  "limits": { "contextWindow": 65536, "maxContextWindow": 202752, "maxOutputTokens": null,
+              "recommendedOutputTokens": 16384, "maxInputTokens": 49152 },
   "placements": [
     { "node": { "id": "b4e0…", "name": "Ultron" }, "engine": "lmstudio", "loaded": true,
-      "contextWindow": 8192, "maxContextWindow": 202752, "detailsAvailable": true }
+      "contextWindow": 65536, "maxContextWindow": 202752, "detailsAvailable": true,
+      "configured": { "contextWindow": 65536, "replyTokens": 16384, "maxInputTokens": 49152, "sessions": 8 } }
   ],
   "sources": { "chat": "engine", "structuredOutput": "estimated", "tools": "engine", "vision": "engine", "embedding": "engine",
                "reasoning": "engine", "contextWindow": "engine", "maxContextWindow": "engine",
-               "maxOutputTokens": "estimated", "recommendedOutputTokens": "estimated" }
+               "maxOutputTokens": "estimated", "recommendedOutputTokens": "configured", "maxInputTokens": "configured" }
 }
 ```
 
@@ -194,8 +196,17 @@ GET /pair/v1/models/glm-4.7-flash
 - **`recommendedOutputTokens`** is a `max_tokens` that leaves room for the
   answer and, for a reasoning model, the thinking before it. A reasoning model
   given too few tokens spends them all thinking and answers with nothing.
+- **`maxInputTokens`** is the most a request's messages and history may hold:
+  `contextWindow` less `recommendedOutputTokens`. Size what you send by it.
+- **Your capacity settings count.** When you plan a model's context window per
+  session and its room for the reply (Sessions settings), those values are
+  reported with source `configured`, and each placement shows the setting under
+  `configured`. A planned window takes effect once the engine is reloaded with
+  it: until then the window still loaded is reported, because the engine cuts
+  off there.
 - **`sources`** says, for each capability and limit, whether every engine
-  involved reported it (`engine`) or PAIR estimated it (`estimated`): from the
+  involved reported it (`engine`), your capacity setting decided it
+  (`configured`), or PAIR estimated it (`estimated`): from the
   model's name or template, a default, or because a node could not be asked.
   A node running an older PAIR is reported with `detailsAvailable: false`.
 

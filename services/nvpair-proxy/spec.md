@@ -1203,20 +1203,30 @@ A loopback facade that fronts no engine (`router.go`), enabled with
     is complete; otherwise estimated false.
   - `contextWindow`: the loaded context, else the configured one, else
     estimated 4096 (no more than the maximum); `loaded` is whether a loaded
-    context was reported. `maxContextWindow`: the trained context, else the
+    context was reported. When the node's PAIR has a capacity setting for the
+    model (read with the details: §5.12's report locally, `GET
+    /pair/v1/peer/capacity` from a peer; none for a manual node), its session
+    window replaces that when the model is not loaded or the setting is
+    smaller, with source `configured`; the placement carries the setting as
+    `configured {contextWindow, replyTokens, maxInputTokens, sessions}`. `maxContextWindow`: the trained context, else the
     window, estimated.
   An estimated window or maximum is capped at the largest maximum an engine
   reported for the model on another placement.
   The report combines them: `reasoning` if any placement, every other
   capability only if all; `contextWindow` the smallest, `maxContextWindow` the
   largest, `maxOutputTokens` the smallest engine cap or `null`.
-  `recommendedOutputTokens` is `window/4` clamped to 4096–32768 for a
+  `recommendedOutputTokens` is the smallest room for the reply a placement's
+  setting keeps (source `configured`) when it is less than the window; else
+  `window/4` clamped to 4096–32768 for a
   reasoning model, `window/8` clamped to 1024–8192 otherwise (8192 or 2048
   when the window is unknown), then at most `window/2` and the output cap.
-  `sources` gives each of the ten fields `engine` only when every placement's
+  `maxInputTokens` is the window less `recommendedOutputTokens`, with the
+  latter's source.
+  `sources` gives each of the eleven fields `engine` only when every placement's
   engine reported it (for `reasoning`, also when any engine reported it true;
   for `maxContextWindow`, when the winning value was reported); otherwise
-  `estimated`. `recommendedOutputTokens` is always estimated.
+  `estimated`; a value a setting decided is `configured` (estimated wins over
+  configured, configured over engine, when several placements decide it).
 - **Where it ran.** A reply an engine produced, success or failure, carries
   `X-PAIR-Node-ID` and `X-PAIR-Engine` for the attempt that produced it, set
   in `ModifyResponse` and on the final transport-error reply. A reply the

@@ -51,8 +51,9 @@ const (
 )
 
 const (
-	sourceEngine    = "engine"
-	sourceEstimated = "estimated"
+	sourceEngine     = "engine"
+	sourceConfigured = "configured"
+	sourceEstimated  = "estimated"
 )
 
 // modelCapabilities are what a model can do. Every placement must have a
@@ -78,8 +79,23 @@ type modelLimits struct {
 	// one, and the reply is then bounded by the window less the prompt.
 	MaxOutputTokens *int64 `json:"maxOutputTokens"`
 	// RecommendedOutputTokens is enough for an answer, and for a reasoning
-	// model its thinking too.
+	// model its thinking too: the room for the reply the user set in PAIR,
+	// when one is set.
 	RecommendedOutputTokens int64 `json:"recommendedOutputTokens"`
+	// MaxInputTokens is the most a request's messages and history may hold:
+	// the window less the reply budget. PAIR refuses a session conversation
+	// that outgrows the part its setting gives it.
+	MaxInputTokens int64 `json:"maxInputTokens"`
+}
+
+// capabilityConfigured is a node's PAIR capacity setting for the model, as
+// the planner saved it: each session's window, the room in it kept for the
+// reply, what is left for messages, and how many sessions run at once.
+type capabilityConfigured struct {
+	ContextWindow  int64 `json:"contextWindow"`
+	ReplyTokens    int64 `json:"replyTokens"`
+	MaxInputTokens int64 `json:"maxInputTokens"`
+	Sessions       int   `json:"sessions"`
 }
 
 type capabilityNode struct {
@@ -97,6 +113,8 @@ type capabilityPlacement struct {
 	// DetailsAvailable is false when the placement could not be asked, so its
 	// values are estimates.
 	DetailsAvailable bool `json:"detailsAvailable"`
+	// Configured is the node's PAIR capacity setting for the model, or nil.
+	Configured *capabilityConfigured `json:"configured"`
 }
 
 // modelCapabilitiesReport answers GET /pair/v1/models/{id}.
@@ -106,14 +124,42 @@ type modelCapabilitiesReport struct {
 	Limits       modelLimits           `json:"limits"`
 	Placements   []capabilityPlacement `json:"placements"`
 	// Sources says, for each capability and limit, whether every engine
-	// involved stated it ("engine") or PAIR inferred it ("estimated").
+	// involved stated it ("engine"), the user's PAIR setting decided it
+	// ("configured"), or PAIR inferred it ("estimated").
 	Sources map[string]string `json:"sources"`
 }
 
 // fact is one value about one placement and whether its engine stated it.
+// configured marks a value the user's PAIR setting decided instead.
 type fact[T any] struct {
-	value  T
-	engine bool
+	value      T
+	engine     bool
+	configured bool
+}
+
+func (f fact[T]) source() string {
+	switch {
+	case f.engine:
+		return sourceEngine
+	case f.configured:
+		return sourceConfigured
+	}
+	return sourceEstimated
+}
+
+// combinedSource is the source of a value several facts decided: estimated
+// if any was, else configured if any was, else the engines'.
+func combinedSource(sources ...string) string {
+	out := sourceEngine
+	for _, s := range sources {
+		switch s {
+		case sourceEstimated:
+			return sourceEstimated
+		case sourceConfigured:
+			out = sourceConfigured
+		}
+	}
+	return out
 }
 
 // placementFacts is what one placement's details say, with the gaps filled.
@@ -121,8 +167,10 @@ type placementFacts struct {
 	chat, structured, tools, vision, embedding, reasoning fact[bool]
 	loaded                                                bool
 	context, maxContext                                   fact[int64]
-	// maxOutput is zero when the engine sets no cap.
+	// maxOutput is zero when the engine sets no cap, and reply zero when
+	// the user's PAIR setting keeps no room for the reply.
 	maxOutput int64
+	reply     int64
 }
 
 // reasoningFamilies match model names and architectures known to think
@@ -143,79 +191,82 @@ func hasCapability(d modelDetails, names ...string) bool {
 	return false
 }
 
-// derivePlacement turns one placement's details into facts. ok is false when
-// the placement could not be asked, and d is then empty.
-func derivePlacement(engine, model string, d modelDetails, ok bool) placementFacts {
+// derivePlacement turns one placement's details and its node's PAIR setting
+// into facts. ok is false when the placement could not be asked, and d is
+// then empty; set is nil when the node has no setting for the model.
+func derivePlacement(engine, model string, d modelDetails, ok bool, set *capabilityConfigured) placementFacts {
 	var pf placementFacts
 	complete := ok && d.CapabilitiesComplete
 	name := model + " " + d.Name + " " + d.Architecture
 
 	switch {
 	case ok && engine == "lmstudio" && d.Type != "":
-		pf.embedding = fact[bool]{strings.HasPrefix(strings.ToLower(d.Type), "embedding"), true}
+		pf.embedding = fact[bool]{value: strings.HasPrefix(strings.ToLower(d.Type), "embedding"), engine: true}
 	case complete && engine == "ollama":
-		pf.embedding = fact[bool]{hasCapability(d, "embedding") && !hasCapability(d, "completion"), true}
+		pf.embedding = fact[bool]{value: hasCapability(d, "embedding") && !hasCapability(d, "completion"), engine: true}
 	default:
-		pf.embedding = fact[bool]{strings.Contains(strings.ToLower(name), "embed") ||
-			slices.Contains(embeddingArchitectures, strings.ToLower(d.Architecture)), false}
+		pf.embedding = fact[bool]{value: strings.Contains(strings.ToLower(name), "embed") ||
+			slices.Contains(embeddingArchitectures, strings.ToLower(d.Architecture))}
 	}
-	pf.chat = fact[bool]{!pf.embedding.value, pf.embedding.engine}
+	pf.chat = fact[bool]{value: !pf.embedding.value, engine: pf.embedding.engine}
 	// Every engine PAIR fronts constrains a chat model's output to a JSON
 	// schema, but none says so per model.
-	pf.structured = fact[bool]{pf.chat.value, false}
+	pf.structured = fact[bool]{value: pf.chat.value, engine: false}
 
 	switch {
 	case hasCapability(d, "tools"):
-		pf.tools = fact[bool]{true, true}
+		pf.tools = fact[bool]{value: true, engine: true}
 	case complete:
-		pf.tools = fact[bool]{false, true}
+		pf.tools = fact[bool]{value: false, engine: true}
 	}
 	switch {
 	case hasCapability(d, "vision"):
-		pf.vision = fact[bool]{true, true}
+		pf.vision = fact[bool]{value: true, engine: true}
 	case complete || (ok && engine == "llamacpp" && d.LoadedContext > 0):
 		// llama.cpp lists every modality of a loaded model.
-		pf.vision = fact[bool]{false, true}
+		pf.vision = fact[bool]{value: false, engine: true}
 	}
 	switch {
 	case hasCapability(d, "thinking", "reasoning"):
-		pf.reasoning = fact[bool]{true, true}
+		pf.reasoning = fact[bool]{value: true, engine: true}
 	case d.TemplateThinks || reasoningFamilies.MatchString(name):
 		// Ollama models pulled before it reported thinking say nothing, and
 		// a reasoning model that is wrongly budgeted answers with nothing at
 		// all, so the evidence wins over an engine's silence.
-		pf.reasoning = fact[bool]{true, false}
+		pf.reasoning = fact[bool]{value: true, engine: false}
 	case complete:
-		pf.reasoning = fact[bool]{false, true}
+		pf.reasoning = fact[bool]{value: false, engine: true}
 	}
 
 	if d.ContextLength > 0 {
-		pf.maxContext = fact[int64]{d.ContextLength, true}
+		pf.maxContext = fact[int64]{value: d.ContextLength, engine: true}
 	}
 	switch {
 	case d.LoadedContext > 0:
 		pf.loaded = true
-		pf.context = fact[int64]{d.LoadedContext, true}
+		pf.context = fact[int64]{value: d.LoadedContext, engine: true}
 	case d.ConfiguredContext > 0:
-		pf.context = fact[int64]{d.ConfiguredContext, true}
+		pf.context = fact[int64]{value: d.ConfiguredContext, engine: true}
 	default:
-		pf.context = fact[int64]{estimatedLoadContext, false}
+		pf.context = fact[int64]{value: estimatedLoadContext, engine: false}
 		if pf.maxContext.value > 0 && pf.maxContext.value < estimatedLoadContext {
 			pf.context.value = pf.maxContext.value
 		}
 	}
+	// The user's window per session: the engine truncates at what it loaded
+	// and PAIR refuses beyond the setting, so the smaller holds. A setting
+	// for a model that is not loaded is the window it will be loaded with.
+	if set != nil && set.ContextWindow > 0 && (!pf.loaded || set.ContextWindow < pf.context.value) {
+		pf.context = fact[int64]{value: set.ContextWindow, configured: true}
+	}
 	if pf.maxContext.value == 0 {
-		pf.maxContext = fact[int64]{pf.context.value, false}
+		pf.maxContext = fact[int64]{value: pf.context.value}
 	}
 	pf.maxOutput = d.MaxOutputTokens
-	return pf
-}
-
-func sourceOf(engine bool) string {
-	if engine {
-		return sourceEngine
+	if set != nil {
+		pf.reply = set.ReplyTokens
 	}
-	return sourceEstimated
+	return pf
 }
 
 // recommendedOutput is how many tokens to ask for: room for an answer, and a
@@ -242,11 +293,13 @@ func recommendedOutput(window int64, reasoning bool, maxOutput *int64) int64 {
 	return n
 }
 
-// placementDetails is one placement and what was learned about it.
+// placementDetails is one placement and what was learned about it: the
+// engine's details, and the node's PAIR capacity setting for the model.
 type placementDetails struct {
 	ref     placementRef
 	details modelDetails
 	ok      bool
+	set     *capabilityConfigured
 }
 
 // aggregateCapabilities combines the placements into one report. There is at
@@ -271,7 +324,7 @@ func aggregateCapabilities(id string, placements []placementDetails) modelCapabi
 	facts := make([]placementFacts, 0, len(placements))
 	var reportedMax int64
 	for _, pd := range placements {
-		pf := derivePlacement(pd.ref.engine(), pd.ref.model, pd.details, pd.ok)
+		pf := derivePlacement(pd.ref.engine(), pd.ref.model, pd.details, pd.ok, pd.set)
 		if pf.maxContext.engine {
 			reportedMax = max(reportedMax, pf.maxContext.value)
 		}
@@ -284,7 +337,7 @@ func aggregateCapabilities(id string, placements []placementDetails) modelCapabi
 		if reportedMax > 0 && !f.maxContext.engine {
 			f.maxContext.value = reportedMax
 		}
-		if reportedMax > 0 && !f.context.engine {
+		if reportedMax > 0 && !f.context.engine && !f.context.configured {
 			f.context.value = min(f.context.value, reportedMax)
 		}
 	}
@@ -297,12 +350,13 @@ func aggregateCapabilities(id string, placements []placementDetails) modelCapabi
 			ContextWindow:    pf.context.value,
 			MaxContextWindow: pf.maxContext.value,
 			DetailsAvailable: pd.ok,
+			Configured:       pd.set,
 		})
 	}
 	sources := make(map[string]string)
 	setBool := func(key string, dst *bool, acc boolAcc) {
 		*dst = acc.value
-		sources[key] = sourceOf(acc.engine)
+		sources[key] = fact[bool]{engine: acc.engine}.source()
 	}
 	caps := &report.Capabilities
 	setBool("chat", &caps.Chat, all(func(f placementFacts) fact[bool] { return f.chat })(facts))
@@ -325,28 +379,44 @@ func aggregateCapabilities(id string, placements []placementDetails) modelCapabi
 	setBool("reasoning", &caps.Reasoning, reasoning)
 
 	limits := &report.Limits
-	ctxEngine, maxEngine := true, false
+	ctxSources := make([]string, 0, len(facts))
+	maxSource := sourceEstimated
+	var reply int64
 	for i, f := range facts {
 		if i == 0 || f.context.value < limits.ContextWindow {
 			limits.ContextWindow = f.context.value
 		}
-		ctxEngine = ctxEngine && f.context.engine
+		ctxSources = append(ctxSources, f.context.source())
 		if f.maxContext.value > limits.MaxContextWindow || (f.maxContext.value == limits.MaxContextWindow && f.maxContext.engine) {
-			limits.MaxContextWindow, maxEngine = f.maxContext.value, f.maxContext.engine
+			limits.MaxContextWindow, maxSource = f.maxContext.value, f.maxContext.source()
 		}
 		if f.maxOutput > 0 && (limits.MaxOutputTokens == nil || f.maxOutput < *limits.MaxOutputTokens) {
 			v := f.maxOutput
 			limits.MaxOutputTokens = &v
 		}
+		if f.reply > 0 && (reply == 0 || f.reply < reply) {
+			reply = f.reply
+		}
 	}
+	ctxSource := combinedSource(ctxSources...)
 	if limits.MaxContextWindow < limits.ContextWindow {
-		limits.MaxContextWindow, maxEngine = limits.ContextWindow, ctxEngine
+		limits.MaxContextWindow, maxSource = limits.ContextWindow, ctxSource
 	}
-	sources["contextWindow"] = sourceOf(ctxEngine)
-	sources["maxContextWindow"] = sourceOf(maxEngine)
-	sources["maxOutputTokens"] = sourceOf(limits.MaxOutputTokens != nil)
-	limits.RecommendedOutputTokens = recommendedOutput(limits.ContextWindow, caps.Reasoning, limits.MaxOutputTokens)
-	sources["recommendedOutputTokens"] = sourceEstimated
+	sources["contextWindow"] = ctxSource
+	sources["maxContextWindow"] = maxSource
+	sources["maxOutputTokens"] = fact[bool]{engine: limits.MaxOutputTokens != nil}.source()
+	// The room for the reply the user set wins over PAIR's estimate, as long
+	// as it leaves something for the messages.
+	if reply > 0 && reply < limits.ContextWindow {
+		limits.RecommendedOutputTokens = reply
+		sources["recommendedOutputTokens"] = sourceConfigured
+		sources["maxInputTokens"] = sourceConfigured
+	} else {
+		limits.RecommendedOutputTokens = recommendedOutput(limits.ContextWindow, caps.Reasoning, limits.MaxOutputTokens)
+		sources["recommendedOutputTokens"] = sourceEstimated
+		sources["maxInputTokens"] = sourceEstimated
+	}
+	limits.MaxInputTokens = limits.ContextWindow - limits.RecommendedOutputTokens
 	report.Sources = sources
 	return report
 }
@@ -385,7 +455,7 @@ type capabilityEntry struct {
 	answered   bool
 	expires    time.Time
 	used       time.Time
-	details    modelDetails
+	info       placementInfo
 	ok         bool
 	done       chan struct{}
 	refreshing bool
@@ -397,10 +467,18 @@ type capabilityCache struct {
 	mu      sync.Mutex
 	entries map[capabilityKey]*capabilityEntry
 	now     func() time.Time
-	fetch   func(ctx context.Context, ref placementRef) (modelDetails, error)
+	fetch   func(ctx context.Context, ref placementRef) (placementInfo, error)
 }
 
-func newCapabilityCache(fetch func(ctx context.Context, ref placementRef) (modelDetails, error)) *capabilityCache {
+// placementInfo is what is cached for a placement: its engine's details and
+// its node's PAIR capacity setting for the model (nil when there is none, or
+// the node could not say).
+type placementInfo struct {
+	details modelDetails
+	set     *capabilityConfigured
+}
+
+func newCapabilityCache(fetch func(ctx context.Context, ref placementRef) (placementInfo, error)) *capabilityCache {
 	return &capabilityCache{entries: make(map[capabilityKey]*capabilityEntry), now: time.Now, fetch: fetch}
 }
 
@@ -455,7 +533,7 @@ func (c *capabilityCache) lookup(ctx context.Context, refs []placementRef, wait 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for i, e := range entries {
-		out[i] = placementDetails{ref: refs[i], details: e.details, ok: e.ok}
+		out[i] = placementDetails{ref: refs[i], details: e.info.details, ok: e.ok, set: e.info.set}
 	}
 	return out
 }
@@ -475,9 +553,13 @@ func (c *capabilityCache) refresh(k capabilityKey, e *capabilityEntry, ref place
 	// A failed refresh keeps a previous good answer, and is retried sooner
 	// than a good answer is refreshed.
 	if err == nil {
-		e.details, e.ok = d, true
+		e.info, e.ok = d, true
 		e.expires = c.now().Add(capabilityTTL)
 	} else {
+		// With no good answer yet, the node's setting is still worth having.
+		if !e.ok {
+			e.info.set = d.set
+		}
 		e.expires = c.now().Add(capabilityFailedTTL)
 	}
 	e.refreshing = false
@@ -491,20 +573,81 @@ func (c *capabilityCache) refresh(k capabilityKey, e *capabilityEntry, ref place
 // whose model files are not on this disk.
 var remoteSpecReader = &specClient{client: specReader.client, homeDir: specReader.homeDir, noFiles: true}
 
-// describePlacement asks a placement's engine about the model: this node's
-// engine directly, a cluster peer through its proxy's details route over
-// mTLS, a manual node's engine at the address the user gave.
-func (p *Proxy) describePlacement(ctx context.Context, ref placementRef) (modelDetails, error) {
+// describePlacement asks a placement's engine about the model, and the
+// placement's node for its PAIR capacity setting, at the same time. The
+// engine: this node's directly, a cluster peer's through its proxy's details
+// route over mTLS, a manual node's at the address the user gave. The setting:
+// this node's own, a cluster peer's over its mTLS capacity route; a manual
+// node has no PAIR to ask. The setting is returned even when the engine could
+// not be asked, and its absence is never an error.
+func (p *Proxy) describePlacement(ctx context.Context, ref placementRef) (placementInfo, error) {
 	engine := ref.engine()
+	var info placementInfo
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		info.set = p.placementSetting(ctx, ref)
+	}()
+	var err error
 	switch {
 	case ref.cand.local:
-		return specReader.details(ctx, engine, ref.cand.url, ref.model)
+		info.details, err = specReader.details(ctx, engine, ref.cand.url, ref.model)
 	case ref.cand.peerUUID != "":
 		client := &http.Client{Transport: p.candidateTransport(ref.cand), Timeout: peerDetailsTimeout}
-		return fetchPeerModelDetails(ctx, client, ref.cand.url, ref.model)
+		info.details, err = fetchPeerModelDetails(ctx, client, ref.cand.url, ref.model)
 	default:
-		return remoteSpecReader.details(ctx, engine, ref.cand.url, ref.model)
+		info.details, err = remoteSpecReader.details(ctx, engine, ref.cand.url, ref.model)
 	}
+	wg.Wait()
+	return info, err
+}
+
+// placementSetting reads the placement's node's capacity report and returns
+// its setting for the model, or nil.
+func (p *Proxy) placementSetting(ctx context.Context, ref placementRef) *capabilityConfigured {
+	var rows []modelCapacity
+	switch {
+	case ref.cand.local:
+		rows = p.capacityReport(ctx)
+	case ref.cand.peerUUID != "":
+		u := *ref.cand.url
+		u.Path, u.RawPath, u.RawQuery = peerCapacityPath, "", ""
+		var err error
+		if rows, err = p.fetchPeerCapacity(ctx, u.String(), ref.cand.peerUUID); err != nil {
+			slog.Debug("peer capacity unavailable for capabilities", "node_id", ref.cand.id, "err", err)
+			return nil
+		}
+	default:
+		return nil
+	}
+	return settingFor(rows, ref)
+}
+
+// settingFor picks the row for the placement's engine and model, matched under
+// the engine's naming rule, and returns its setting if the user made one.
+func settingFor(rows []modelCapacity, ref placementRef) *capabilityConfigured {
+	if ref.cand.fac == nil {
+		return nil
+	}
+	profile := ref.cand.fac.profile
+	want := profile.normalizeModel(ref.model)
+	for _, row := range rows {
+		if row.Engine != profile.Name || row.Configured == nil || profile.normalizeModel(row.Model) != want {
+			continue
+		}
+		input := row.MessageTokens
+		if input == 0 {
+			input = row.SessionShare
+		}
+		return &capabilityConfigured{
+			ContextWindow:  row.SessionShare,
+			ReplyTokens:    row.ReplyTokens,
+			MaxInputTokens: input,
+			Sessions:       row.MaxSessions,
+		}
+	}
+	return nil
 }
 
 // inventoryFingerprint identifies a node's advertised inventory.

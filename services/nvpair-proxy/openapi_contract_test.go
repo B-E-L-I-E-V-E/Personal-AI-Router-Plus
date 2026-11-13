@@ -67,8 +67,9 @@ func wantDocumented(t *testing.T, where, text string, fields []string) {
 
 func TestOpenAPI_DocumentsTheCapacityRow(t *testing.T) {
 	doc := openAPIText(t)
-	wantDocumented(t, "ModelCapacity", section(t, doc, "    ModelCapacity:"), jsonFields(modelCapacity{}))
-	wantDocumented(t, "ModelCapacity.configured", section(t, doc, "        configured:"), jsonFields(capacitySetting{}))
+	row := section(t, doc, "    ModelCapacity:")
+	wantDocumented(t, "ModelCapacity", row, jsonFields(modelCapacity{}))
+	wantDocumented(t, "ModelCapacity.configured", section(t, "\n"+row, "        configured:"), jsonFields(capacitySetting{}))
 }
 
 func TestOpenAPI_DocumentsTheModelCapabilities(t *testing.T) {
@@ -76,7 +77,9 @@ func TestOpenAPI_DocumentsTheModelCapabilities(t *testing.T) {
 	wantDocumented(t, "ModelCapabilitiesReport", section(t, doc, "    ModelCapabilitiesReport:"), jsonFields(modelCapabilitiesReport{}))
 	wantDocumented(t, "ModelCapabilities", section(t, doc, "    ModelCapabilities:"), jsonFields(modelCapabilities{}))
 	wantDocumented(t, "ModelLimits", section(t, doc, "    ModelLimits:"), jsonFields(modelLimits{}))
-	wantDocumented(t, "CapabilityPlacement", section(t, doc, "    CapabilityPlacement:"), jsonFields(capabilityPlacement{}))
+	placement := section(t, doc, "    CapabilityPlacement:")
+	wantDocumented(t, "CapabilityPlacement", placement, jsonFields(capabilityPlacement{}))
+	wantDocumented(t, "CapabilityPlacement.configured", section(t, "\n"+placement, "        configured:"), jsonFields(capabilityConfigured{}))
 }
 
 func TestOpenAPI_DocumentsTheCapacitySetting(t *testing.T) {
