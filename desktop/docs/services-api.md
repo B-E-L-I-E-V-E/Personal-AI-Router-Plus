@@ -103,6 +103,7 @@
 | `engine:models` | request (we call) | ✅ yes |
 | `engine:prepare-shutdown` | request (we call) | ➖ ignored |
 | `engine:preview-launch` | request (we call) | ⚠️ not called |
+| `engine:reload-model` | request (we call) | ✅ yes |
 | `engine:remote-apply-settings` | request (we call) | ⚠️ not called |
 | `engine:remote-delete-model` | request (we call) | ✅ yes |
 | `engine:remote-get-installed` | request (we call) | ✅ yes |
@@ -111,6 +112,7 @@
 | `engine:remote-load-model` | request (we call) | ✅ yes |
 | `engine:remote-preview-settings` | request (we call) | ⚠️ not called |
 | `engine:remote-pull-model` | request (we call) | ✅ yes |
+| `engine:remote-reload-model` | request (we call) | ✅ yes |
 | `engine:remote-start` | request (we call) | ✅ yes |
 | `engine:remote-stop` | request (we call) | ✅ yes |
 | `engine:remote-unload-model` | request (we call) | ✅ yes |

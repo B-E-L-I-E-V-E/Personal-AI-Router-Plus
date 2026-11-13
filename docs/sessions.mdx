@@ -316,7 +316,7 @@ many layers on the GPU as the sessions you need allow.
 | Engine | Expert split |
 | --- | --- |
 | llama.cpp | Applied with `--n-cpu-moe N`: the experts of the first N layers in system memory |
-| LM Studio | Planned; applying tells you the value for **Number of layers for which to force MoE weights onto CPU** in the model's load settings |
+| LM Studio | Planned; LM Studio's load command takes no expert placement, so applying tells you the value for **Number of layers for which to force MoE weights onto CPU** in the model's load settings |
 | Ollama | Not available: Ollama has no setting that keeps only the experts on the CPU (`num_gpu` moves whole layers, attention included) |
 
 On Apple silicon it is never offered: the GPU and the CPU share one memory, so
@@ -374,7 +374,7 @@ limits PAIR's traffic to the plan:
 | --- | --- |
 | Ollama | `OLLAMA_CONTEXT_LENGTH` and `OLLAMA_NUM_PARALLEL`. These apply to every model Ollama runs, so one Ollama plan replaces another |
 | llama.cpp | `--ctx-size` (window × sessions) and `--parallel` |
-| LM Studio | Not restarted. PAIR limits traffic to the plan; set the same context length and parallel count when you load the model |
+| LM Studio | The model is unloaded and loaded again with Context Length = window and Max Concurrent Predictions = sessions; other models stay loaded. If the plan does not fit, the model is loaded again as it was and the error is shown. PAIR needs LM Studio's `lms` command with the `--parallel` load option; without it, or on a node running an older PAIR, applying tells you what to set in the model's load settings |
 
 Restarting interrupts requests running on that engine. PAIR cannot restart an
 engine it did not install, such as your own Ollama; it says so instead.

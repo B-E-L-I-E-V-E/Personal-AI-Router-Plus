@@ -3,7 +3,8 @@
 
 package main
 
-// controlmodels.go holds fast ec endpoints for remote model load, unload, and delete.
+// controlmodels.go holds fast ec endpoints for remote model load, unload, and
+// delete, and the LM Studio reload with a context length and parallel predictions.
 // They mirror the local engine:action mapping in modelops.go and return the
 // action result as JSON.
 
@@ -17,6 +18,7 @@ const (
 	controlLoadPath   = "/v1/models/load"
 	controlUnloadPath = "/v1/models/unload"
 	controlDeletePath = "/v1/models/delete"
+	controlReloadPath = "/v1/models/reload"
 )
 
 func (s *controlServer) handleLoad(w http.ResponseWriter, r *http.Request) {
@@ -75,4 +77,30 @@ func (s *controlServer) handleModelAction(w http.ResponseWriter, r *http.Request
 		return
 	}
 	_, _ = w.Write(res)
+}
+
+// handleReload reloads an LM Studio model with a context length and parallel
+// predictions (modelReloadRequest), answering modelReloadResult.
+func (s *controlServer) handleReload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req modelReloadRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxControlBody)).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if err := req.validate(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	res, err := s.exec.ModelReload(r.Context(), req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(res)
 }

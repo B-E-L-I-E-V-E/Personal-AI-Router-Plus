@@ -33,6 +33,7 @@ import {
     launchDefaults,
     llamaCppLaunchText,
     lmStudioMessage,
+    lmStudioReloadedMessage,
     ollamaLaunchText,
     parsePlanner,
     planCapacity,
@@ -447,26 +448,89 @@ describe('capacity planner bridge', () => {
         })
     })
 
-    it('limits LM Studio traffic with the plan’s reply budget', async () => {
+    const lmStudioPlanner = plannerState({
+        plans: [
+            {
+                engine: 'lmstudio',
+                model: 'm',
+                windowTokens: 8192,
+                sessions: 2,
+                cacheType: 'f16',
+                applied: false
+            }
+        ]
+    })
+
+    it('reloads an LM Studio model with the plan and records it', async () => {
         callProxy.mockImplementation(async (_e: string, method: string) =>
-            method === 'capacity/planner'
-                ? plannerState({
-                      plans: [
-                          {
-                              engine: 'lmstudio',
-                              model: 'm',
-                              windowTokens: 8192,
-                              sessions: 2,
-                              cacheType: 'f16',
-                              applied: false
-                          }
-                      ]
-                  })
-                : {}
+            method === 'capacity/planner' ? lmStudioPlanner : {}
         )
-        await applyPlan({ engine: 'lmstudio', model: 'm' })
+        callProcess.mockResolvedValue({ outcome: 'reloaded', model: 'm' })
+        const result = await applyPlan({ engine: 'lmstudio', model: 'm' })
+        expect(result.applied).toBe(true)
+        expect(result.message).toBe(
+            'LM Studio reloaded m with a context length of 8192 tokens and 2 parallel predictions.'
+        )
+        expect(callProcess.mock.calls.map(c => [c[1], c[2]])).toEqual([
+            [
+                'engine:reload-model',
+                { engine: 'lmstudio', model: 'm', contextLength: 8192, parallel: 2 }
+            ]
+        ])
+        const applied = callProxy.mock.calls.find(c => c[1] === 'capacity/planner-set')
+        expect(applied?.[2]).toEqual({
+            applied: {
+                engine: 'lmstudio',
+                model: 'm',
+                windowTokens: 8192,
+                sessions: 2,
+                cacheType: 'f16',
+                cpuExpertLayers: 0
+            }
+        })
+    })
+
+    it('reloads another node’s LM Studio model on that node', async () => {
+        callProxy.mockImplementation(
+            async (_e: string, method: string, params: Record<string, unknown>) =>
+                method === 'capacity/peer-call' && params.method === 'capacity/planner'
+                    ? lmStudioPlanner
+                    : {}
+        )
+        callProcess.mockResolvedValue({ outcome: 'reloaded', model: 'm' })
+        const result = await applyPlan({ engine: 'lmstudio', model: 'm', nodeId: 'node-2' })
+        expect(result.applied).toBe(true)
+        expect(callProcess.mock.calls.map(c => [c[1], c[2]])).toEqual([
+            [
+                'engine:remote-reload-model',
+                {
+                    node: 'node-2',
+                    engine: 'lmstudio',
+                    model: 'm',
+                    params: { contextLength: 8192, parallel: 2 }
+                }
+            ]
+        ])
+        const applied = callProxy.mock.calls.find(c => c[2].method === 'capacity/planner-set')
+        expect(applied?.[2]).toMatchObject({ nodeId: 'node-2' })
+    })
+
+    it('tells the user what to set when LM Studio cannot be reloaded', async () => {
+        callProxy.mockImplementation(async (_e: string, method: string) =>
+            method === 'capacity/planner' ? lmStudioPlanner : {}
+        )
+        callProcess.mockResolvedValue({
+            outcome: 'unsupported',
+            reason: 'node node-2 runs a PAIR without LM Studio reload; update PAIR on it'
+        })
+        const result = await applyPlan({ engine: 'lmstudio', model: 'm' })
+        expect(result.applied).toBe(false)
+        expect(result.message).toContain('update PAIR on it')
+        expect(result.message).toContain('set Context Length to 8192')
+        expect(callProxy.mock.calls.some(c => c[1] === 'capacity/planner-set')).toBe(false)
         const set = callProxy.mock.calls.find(c => c[1] === 'capacity/set')
-        // The default 8,192 is more than half this window, so half is kept.
+        // PAIR still limits traffic: the default 8,192 reply budget is more
+        // than half this window, so half is kept.
         expect(set?.[2]).toEqual({
             engine: 'lmstudio',
             model: 'm',
@@ -474,6 +538,35 @@ describe('capacity planner bridge', () => {
             maxSessions: 2,
             replyTokens: 4096
         })
+    })
+
+    it('reports a failed LM Studio reload as an error, not as applied', async () => {
+        callProxy.mockImplementation(async (_e: string, method: string) =>
+            method === 'capacity/planner' ? lmStudioPlanner : {}
+        )
+        callProcess.mockRejectedValue(new Error('-32000: load m: not enough memory'))
+        await expect(applyPlan({ engine: 'lmstudio', model: 'm' })).rejects.toThrow(
+            'not enough memory'
+        )
+        expect(callProxy.mock.calls.some(c => c[1] === 'capacity/planner-set')).toBe(false)
+    })
+
+    it('names the expert layers LM Studio’s load command cannot set', () => {
+        const saved: SavedCapacityPlan = {
+            engine: 'lmstudio',
+            model: 'm',
+            windowTokens: 32768,
+            sessions: 2,
+            cacheType: 'f16',
+            reservePercent: 10,
+            cpuExpertLayers: 20,
+            replyTokens: 0,
+            applied: false,
+            appliedAt: 0,
+            savedAt: 0
+        }
+        expect(lmStudioReloadedMessage('m', saved)).toContain('force MoE weights onto CPU to 20')
+        expect(lmStudioReloadedMessage('m', { ...saved, cpuExpertLayers: 0 })).not.toContain('MoE')
     })
 
     it('does not restart an engine PAIR does not manage', async () => {
@@ -509,6 +602,16 @@ describe('capacity planner bridge', () => {
         expect(callProcess).not.toHaveBeenCalled()
         await runAutoReloadCheckForTest()
         expect(callProcess.mock.calls.some(c => c[1] === 'engine:apply-settings')).toBe(true)
+    })
+
+    it('auto-reloads a pending LM Studio plan once idle', async () => {
+        callProxy.mockImplementation(async (_e: string, method: string) =>
+            method === 'capacity/planner' ? lmStudioPlanner : {}
+        )
+        callProcess.mockResolvedValue({ outcome: 'reloaded', model: 'm' })
+        await runAutoReloadCheckForTest()
+        await runAutoReloadCheckForTest()
+        expect(callProcess.mock.calls.some(c => c[1] === 'engine:reload-model')).toBe(true)
     })
 
     it('leaves pending plans alone when auto reload is off', async () => {

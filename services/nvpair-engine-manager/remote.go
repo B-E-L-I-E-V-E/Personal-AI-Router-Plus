@@ -15,6 +15,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"net/http"
 )
 
 // remoteParam is the shared input for the engine:remote-* methods. Fields not
@@ -124,6 +126,35 @@ func (m *Manager) runRemote(ctx context.Context, msg *Message) {
 			path = controlDeletePath
 		}
 		res, err := client.postJSON(ctx, path, p.Engine, modelActionRequest{Engine: p.Engine, Model: p.Model})
+		m.respondOrErr(msg, res, err)
+
+	case "engine:remote-reload-model":
+		var numbers struct {
+			ContextLength int64 `json:"contextLength"`
+			Parallel      int   `json:"parallel"`
+		}
+		if len(p.Params) > 0 {
+			if err := json.Unmarshal(p.Params, &numbers); err != nil {
+				m.codec.RespondError(msg.ID, -32602, `params must be {"contextLength","parallel"}`)
+				return
+			}
+		}
+		req := modelReloadRequest{Engine: p.Engine, Model: p.Model, ContextLength: numbers.ContextLength, Parallel: numbers.Parallel}
+		if err := req.validate(); err != nil {
+			m.codec.RespondError(msg.ID, -32602, err.Error())
+			return
+		}
+		res, err := client.postJSON(ctx, controlReloadPath, p.Engine, req)
+		var status *remoteStatusError
+		if errors.As(err, &status) && (status.status == http.StatusNotFound || status.status == http.StatusMethodNotAllowed) {
+			// A peer older than this endpoint serves no such path.
+			m.codec.Respond(msg.ID, modelReloadResult{
+				Outcome: reloadOutcomeUnsupported,
+				Reason:  "node " + p.Node + " runs a PAIR without LM Studio reload; update PAIR on it",
+				Model:   p.Model,
+			})
+			return
+		}
 		m.respondOrErr(msg, res, err)
 
 	case "engine:remote-start":
