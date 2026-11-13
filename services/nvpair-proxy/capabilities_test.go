@@ -280,6 +280,27 @@ func TestAggregateCapabilities_UnavailablePeerMakesValuesEstimated(t *testing.T)
 	}
 }
 
+func TestAggregateCapabilities_EstimateStaysWithinTheReportedMaximum(t *testing.T) {
+	// Seen live: an embedding model whose engine reports a 2048 maximum on
+	// one node, and a second node that could not be asked.
+	known := modelDetails{Type: "embedding", CapabilitiesComplete: true, ContextLength: 2048}
+
+	got := aggregateCapabilities("text-embedding-nomic-embed-text-v1.5", []placementDetails{
+		{ref: testPlacement("lmstudio", "node-a", "text-embedding-nomic-embed-text-v1.5"), details: known, ok: true},
+		{ref: testPlacement("lmstudio", "node-b", "text-embedding-nomic-embed-text-v1.5"), ok: false},
+	})
+
+	if got.Limits.MaxContextWindow != 2048 || got.Sources["maxContextWindow"] != sourceEngine {
+		t.Errorf("maxContextWindow = %d (%s), want 2048 from the engine", got.Limits.MaxContextWindow, got.Sources["maxContextWindow"])
+	}
+	if got.Limits.ContextWindow != 2048 {
+		t.Errorf("contextWindow = %d, want 2048", got.Limits.ContextWindow)
+	}
+	if p := got.Placements[1]; p.ContextWindow != 2048 || p.MaxContextWindow != 2048 {
+		t.Errorf("unavailable placement = %+v, want its estimates capped at 2048", p)
+	}
+}
+
 func TestAggregateCapabilities_UnavailablePeerStillReportsReasoningByName(t *testing.T) {
 	got := aggregateCapabilities("glm-4.7-flash", []placementDetails{{ref: testPlacement("lmstudio", "node-b", "glm-4.7-flash"), ok: false}})
 

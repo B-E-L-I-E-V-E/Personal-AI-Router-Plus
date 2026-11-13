@@ -1205,6 +1205,8 @@ A loopback facade that fronts no engine (`router.go`), enabled with
     estimated 4096 (no more than the maximum); `loaded` is whether a loaded
     context was reported. `maxContextWindow`: the trained context, else the
     window, estimated.
+  An estimated window or maximum is capped at the largest maximum an engine
+  reported for the model on another placement.
   The report combines them: `reasoning` if any placement, every other
   capability only if all; `contextWindow` the smallest, `maxContextWindow` the
   largest, `maxOutputTokens` the smallest engine cap or `null`.

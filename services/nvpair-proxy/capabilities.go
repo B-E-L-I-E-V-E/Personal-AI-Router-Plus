@@ -269,9 +269,27 @@ func aggregateCapabilities(id string, placements []placementDetails) modelCapabi
 		}
 	}
 	facts := make([]placementFacts, 0, len(placements))
+	var reportedMax int64
 	for _, pd := range placements {
 		pf := derivePlacement(pd.ref.engine(), pd.ref.model, pd.details, pd.ok)
+		if pf.maxContext.engine {
+			reportedMax = max(reportedMax, pf.maxContext.value)
+		}
 		facts = append(facts, pf)
+	}
+	// It is one model, so an estimate never exceeds the largest context an
+	// engine reported for it on another placement.
+	for i := range facts {
+		f := &facts[i]
+		if reportedMax > 0 && !f.maxContext.engine {
+			f.maxContext.value = reportedMax
+		}
+		if reportedMax > 0 && !f.context.engine {
+			f.context.value = min(f.context.value, reportedMax)
+		}
+	}
+	for i, pd := range placements {
+		pf := facts[i]
 		report.Placements = append(report.Placements, capabilityPlacement{
 			Node:             capabilityNode{ID: pd.ref.cand.id, Name: pd.ref.nodeName},
 			Engine:           pd.ref.engine(),
