@@ -348,15 +348,22 @@ type routerNode struct {
 }
 
 // routerModelInfo is the "pair" member the router adds to each model record.
+// Capabilities, Limits and Sources are the model's capability report
+// (capabilities.go) without its placements, which Nodes already names.
 type routerModelInfo struct {
-	Engines []string     `json:"engines"`
-	Nodes   []routerNode `json:"nodes"`
+	Engines      []string          `json:"engines"`
+	Nodes        []routerNode      `json:"nodes"`
+	Capabilities modelCapabilities `json:"capabilities"`
+	Limits       modelLimits       `json:"limits"`
+	Sources      map[string]string `json:"sources"`
 }
 
 // routerModel accumulates one model id across every engine and node.
 type routerModel struct {
 	raw  json.RawMessage
 	info routerModelInfo
+	// placements are where the model is listed, for its capability report.
+	placements []placementRef
 }
 
 // routerListSource is one (engine, node) model list to fetch.
@@ -441,12 +448,28 @@ func (f *facade) serveRouterModels(w http.ResponseWriter, r *http.Request) {
 			node := routerNode{ID: src.cand.id, Name: src.node.Host, Engine: engine}
 			if !slices.Contains(m.info.Nodes, node) {
 				m.info.Nodes = append(m.info.Nodes, node)
+				m.placements = append(m.placements, placementForNode(src.fac, src.cand, src.node, identity.ID))
 			}
 		}
 	}
 	if !answered {
 		writeIngressError(w, http.StatusServiceUnavailable, "inventory_unavailable", "model inventory unavailable")
 		return
+	}
+
+	// One lookup for every placement, so cold details are fetched together
+	// and the list waits for them once.
+	var refs []placementRef
+	for _, id := range order {
+		refs = append(refs, byID[id].placements...)
+	}
+	looked := p.capabilities.lookup(r.Context(), refs, modelListCapabilityWait)
+	for _, id := range order {
+		m := byID[id]
+		n := len(m.placements)
+		report := aggregateCapabilities(id, looked[:n])
+		looked = looked[n:]
+		m.info.Capabilities, m.info.Limits, m.info.Sources = report.Capabilities, report.Limits, report.Sources
 	}
 
 	data := make([]json.RawMessage, 0, len(order))

@@ -434,6 +434,10 @@ type Proxy struct {
 	// caches what the local engines report.
 	capacity *capacityStore
 
+	// capabilities caches what each placement's engine says a model can do,
+	// for the router's capability endpoint and model list (capabilities.go).
+	capabilities *capabilityCache
+
 	// sessionPolicyPath saves the session policy; empty keeps it in memory
 	// only (tests).
 	sessionPolicyPath string
@@ -483,6 +487,7 @@ func NewProxy(codec *Codec) *Proxy {
 		live:     newLiveRegistry(),
 		webFacts: newWebFactsStore(),
 	}
+	p.capabilities = newCapabilityCache(p.describePlacement)
 	p.sessions.onPeerRelease = p.sendPeerRelease
 	p.sessions.refuse = func() error {
 		if st := p.node.current(); st != nodeRunning {
