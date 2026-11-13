@@ -340,6 +340,9 @@ func jsonStrings(values []any) ([]string, bool) {
 type specClient struct {
 	client  *http.Client
 	homeDir func() (string, error)
+	// noFiles skips reading model files. It is set when the engine is on
+	// another machine, whose file paths mean nothing here.
+	noFiles bool
 }
 
 func (c *specClient) do(ctx context.Context, method string, base *url.URL, path string, query url.Values, body any, dst any) error {

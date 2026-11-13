@@ -239,6 +239,33 @@ NVPAIR_LIVE_LMSTUDIO=1 go test ./...      # drives a real LM Studio install
 Those two install, start, stop, and pull against the engines actually on your
 machine. Run them deliberately, on a machine you do not mind changing.
 
+To check that a running PAIR proxies a request to a particular cluster member,
+send one through it. The test reads PAIR's own record of that request
+(`/pair/v1/performance`) and fails unless the named node and engine served it.
+It changes nothing on the cluster:
+
+```bash
+cd nvpair-proxy
+PAIR_LIVE_URL=http://127.0.0.1:11400 PAIR_LIVE_MODEL=glm-4.7-flash \
+  PAIR_LIVE_NODE=Ultron PAIR_LIVE_ENGINE=lmstudio \
+  go test -run TestLivePAIRProxies -v .
+```
+
+To check that a concurrent burst is split by load, the second live test reads
+`/pair/v1/routing` before the burst, predicts the split with the router's rule,
+and compares it with each reply's `X-PAIR-Node-ID`. Use a model every listed
+node can run:
+
+```bash
+PAIR_LIVE_URL=http://127.0.0.1:11400 PAIR_LIVE_MODEL=text-embedding-nomic-embed-text-v1.5 \
+  PAIR_LIVE_PATH=/v1/embeddings PAIR_LIVE_CONCURRENCY=8 \
+  go test -run TestLivePAIRBalances -v .
+```
+
+`PAIR_LIVE_NODE` takes a node name, looked up in the PAIR router's model list,
+or a node ID; with an engine port as `PAIR_LIVE_URL`, give the ID or set
+`PAIR_LIVE_ROUTER_URL`. The test file lists every variable.
+
 A skip is not a pass. If you are relying on a test, check it actually ran.
 
 ## Versioning

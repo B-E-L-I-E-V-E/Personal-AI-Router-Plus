@@ -68,6 +68,9 @@ func (f *facade) admitSession(ctx context.Context, id string, sess sessionView, 
 	if local < 0 {
 		return cands, modelCapacity{}, 0, nil
 	}
+	// The local candidate's own engine, which on the PAIR router need not be
+	// the facade that took the request.
+	f = cands[local].owner(f)
 	k := capacityKey{Engine: f.profile.Name, Model: model}
 	lim := p.limitFor(f, k)
 	if lim.MaxSessions == 0 && lim.SessionShare == 0 {

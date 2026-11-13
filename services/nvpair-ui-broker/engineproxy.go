@@ -538,6 +538,9 @@ func (b *Broker) routeProcessScopedProxyNotification(method string, params json.
 	case method == noderec.NotifyNodeActivity:
 		b.routeNodeActivity(params)
 		return true
+	case method == methodRouterReady:
+		logRouterReady(params)
+		return true
 	}
 	return false
 }

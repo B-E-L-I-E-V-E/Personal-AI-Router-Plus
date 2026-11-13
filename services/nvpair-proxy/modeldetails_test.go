@@ -59,6 +59,8 @@ func TestOllamaModelDetails_ReportsWhatShowAndTagsSay(t *testing.T) {
 		ModifiedAt:     "2026-11-10T23:53:45.015542771-08:00",
 		Parameters:     "temperature                    0.6\ntop_k                          20",
 		Links:          []modelLink{{Label: "Ollama library", URL: "https://ollama.com/library/qwen3", Source: "model name"}},
+
+		CapabilitiesComplete: true,
 	}
 	if !reflect.DeepEqual(d, want) {
 		t.Fatalf("details:\n got %+v\nwant %+v", d, want)
@@ -206,6 +208,7 @@ func TestLMStudioModelDetails_CombinesTheListingAndTheFile(t *testing.T) {
 	want.SizeBytes = 4920000000
 	want.LoadedContext = 32768
 	want.Capabilities = []string{"tools"}
+	want.CapabilitiesComplete = true
 	if !reflect.DeepEqual(d, want) {
 		t.Fatalf("details:\n got %+v\nwant %+v", d, want)
 	}

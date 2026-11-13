@@ -90,6 +90,21 @@ type modelDetails struct {
 	// model (Ollama's Modelfile PARAMETER lines).
 	Parameters string `json:"parameters,omitempty"`
 
+	// ConfiguredContext is the context window the engine is configured to
+	// load the model with when nothing else asks (Ollama's Modelfile num_ctx),
+	// and MaxOutputTokens the engine's own cap on a reply (num_predict). Zero
+	// means the engine sets none.
+	ConfiguredContext int64 `json:"configuredContext,omitempty"`
+	MaxOutputTokens   int64 `json:"maxOutputTokens,omitempty"`
+	// CapabilitiesComplete says Capabilities lists everything the engine
+	// stated about the model, so a capability missing from it is one the
+	// engine said the model lacks. A node running an older PAIR leaves it
+	// false, and its list is then only evidence of what is there.
+	CapabilitiesComplete bool `json:"capabilitiesComplete,omitempty"`
+	// TemplateThinks says the model's chat template has a thinking section.
+	// It is evidence that the model reasons, not the engine's statement.
+	TemplateThinks bool `json:"templateThinks,omitempty"`
+
 	Links []modelLink `json:"links,omitempty"`
 	Notes []string    `json:"notes,omitempty"`
 }
@@ -267,6 +282,7 @@ func (c *specClient) detailsOllama(ctx context.Context, base *url.URL, d *modelD
 	var show struct {
 		License      string         `json:"license"`
 		Parameters   string         `json:"parameters"`
+		Template     string         `json:"template"`
 		ModelInfo    map[string]any `json:"model_info"`
 		Capabilities []string       `json:"capabilities"`
 		ModifiedAt   string         `json:"modified_at"`
@@ -285,8 +301,13 @@ func (c *specClient) detailsOllama(ctx context.Context, base *url.URL, d *modelD
 	d.ParameterSize = show.Details.ParameterSize
 	d.Quantization = show.Details.QuantizationLevel
 	d.Capabilities = show.Capabilities
+	// Ollama before 0.6 sent no capabilities at all.
+	d.CapabilitiesComplete = len(show.Capabilities) > 0
+	d.TemplateThinks = templateThinks(show.Template)
 	d.ModifiedAt = show.ModifiedAt
 	d.Parameters = strings.TrimSpace(show.Parameters)
+	d.ConfiguredContext = modelfileInt(d.Parameters, "num_ctx")
+	d.MaxOutputTokens = modelfileInt(d.Parameters, "num_predict")
 	if lic := strings.TrimSpace(show.License); lic != "" {
 		if len(lic) > maxLicenseText {
 			lic = lic[:maxLicenseText] + "\n…"
@@ -308,6 +329,20 @@ func (c *specClient) detailsOllama(ctx context.Context, base *url.URL, d *modelD
 			if m.Name == d.Model {
 				d.SizeBytes, d.Digest = m.Size, m.Digest
 				d.ModifiedAt = firstNonEmpty(d.ModifiedAt, m.ModifiedAt)
+			}
+		}
+	}
+	var ps struct {
+		Models []struct {
+			Name          string `json:"name"`
+			Model         string `json:"model"`
+			ContextLength int64  `json:"context_length"`
+		} `json:"models"`
+	}
+	if err := c.do(ctx, http.MethodGet, base, "/api/ps", nil, nil, &ps); err == nil {
+		for _, m := range ps.Models {
+			if m.Name == d.Model || m.Model == d.Model {
+				d.LoadedContext = max64(d.LoadedContext, m.ContextLength)
 			}
 		}
 	}
@@ -336,9 +371,11 @@ func fileDetails(path string, d *modelDetails) error {
 
 func (c *specClient) detailsLlamaCPP(ctx context.Context, base *url.URL, d *modelDetails) error {
 	var props struct {
-		ModelPath  string          `json:"model_path"`
-		Modalities map[string]bool `json:"modalities"`
-		Settings   struct {
+		ModelPath        string          `json:"model_path"`
+		Modalities       map[string]bool `json:"modalities"`
+		ChatTemplate     string          `json:"chat_template"`
+		ChatTemplateCaps map[string]any  `json:"chat_template_caps"`
+		Settings         struct {
 			NCtx int64 `json:"n_ctx"`
 		} `json:"default_generation_settings"`
 	}
@@ -351,7 +388,11 @@ func (c *specClient) detailsLlamaCPP(ctx context.Context, base *url.URL, d *mode
 			d.Capabilities = append(d.Capabilities, name)
 		}
 	}
-	if props.ModelPath == "" {
+	if on, _ := props.ChatTemplateCaps["supports_tools"].(bool); on {
+		d.Capabilities = append(d.Capabilities, "tools")
+	}
+	d.TemplateThinks = templateThinks(props.ChatTemplate)
+	if props.ModelPath == "" || c.noFiles {
 		d.Notes = append(d.Notes, "llama.cpp did not report the model file; load the model to see what its file says about it")
 		return nil
 	}
@@ -404,8 +445,12 @@ func (c *specClient) detailsLMStudio(ctx context.Context, base *url.URL, d *mode
 		d.ContextLength = m.MaxContextLength
 		d.Quantization = m.Quantization.Name
 		d.Capabilities = lmStudioCapabilities(m.Capabilities)
+		d.CapabilitiesComplete = true
 		for _, inst := range m.LoadedInstances {
 			d.LoadedContext = max64(d.LoadedContext, inst.Config.ContextLength)
+		}
+		if c.noFiles {
+			return nil
 		}
 		if path := c.lmStudioFile(m.Path); path != "" {
 			if err := fileDetails(path, d); err != nil {
@@ -419,13 +464,16 @@ func (c *specClient) detailsLMStudio(ctx context.Context, base *url.URL, d *mode
 }
 
 // lmStudioCapabilities reads LM Studio's capabilities, an object of flags
-// ({"vision":true,"trained_for_tool_use":false}) or a list of names.
+// ({"vision":true,"trained_for_tool_use":false}) or a list of names. A flag
+// may be an object instead of a boolean: reasoning is
+// {"allowed_options":["off","on"],"default":"on"}. Such a flag is on unless it
+// is false, null, or its allowed options are only "off".
 func lmStudioCapabilities(raw json.RawMessage) []string {
-	var flags map[string]bool
+	var flags map[string]json.RawMessage
 	if json.Unmarshal(raw, &flags) == nil {
 		var out []string
-		for name, on := range flags {
-			if !on {
+		for name, value := range flags {
+			if !lmStudioFlagOn(value) {
 				continue
 			}
 			if name == "trained_for_tool_use" {
@@ -440,6 +488,51 @@ func lmStudioCapabilities(raw json.RawMessage) []string {
 		return names
 	}
 	return nil
+}
+
+func lmStudioFlagOn(value json.RawMessage) bool {
+	var on bool
+	if json.Unmarshal(value, &on) == nil {
+		return on
+	}
+	var option struct {
+		AllowedOptions []string `json:"allowed_options"`
+	}
+	if json.Unmarshal(value, &option) != nil {
+		return false
+	}
+	if len(option.AllowedOptions) == 0 {
+		return true
+	}
+	for _, o := range option.AllowedOptions {
+		if o != "off" {
+			return true
+		}
+	}
+	return false
+}
+
+// templateThinks reports whether a chat template has a thinking section:
+// Ollama's .Thinking variable, or the <think> tag most reasoning models emit.
+func templateThinks(template string) bool {
+	return strings.Contains(template, ".Thinking") || strings.Contains(template, "<think>") ||
+		strings.Contains(template, "reasoning_content")
+}
+
+// modelfileInt reads one integer PARAMETER from Ollama's parameters text, a
+// line per setting ("num_ctx                        8192"). Zero means unset.
+func modelfileInt(parameters, name string) int64 {
+	for _, line := range strings.Split(parameters, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[0] != name {
+			continue
+		}
+		var n int64
+		if _, err := fmt.Sscan(fields[1], &n); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
 }
 
 type modelDetailsRequest struct {
@@ -524,39 +617,67 @@ func (f *facade) remoteModelDetails(ctx context.Context, nodeID, model string) (
 		return &d, nil
 	}
 	u.Scheme = "https"
-	u.Path = peerModelDetailsPath
-	u.RawQuery = url.Values{"model": {model}}.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := (&http.Client{Transport: p.peerHTTPTransport(node.ClusterUUID), Timeout: peerDetailsTimeout}).Do(req)
+	client := &http.Client{Transport: p.peerHTTPTransport(node.ClusterUUID), Timeout: peerDetailsTimeout}
+	got, err := fetchPeerModelDetails(ctx, client, u, model)
 	if err != nil {
 		slog.Debug("peer model details failed", "node_id", nodeID, "engine", f.profile.Name, "model", model, "err", err)
-		// The error names the node's address; the note stays in plain words.
-		var netErr net.Error
-		if errors.As(err, &netErr) && netErr.Timeout() {
-			d.Notes = append(d.Notes, "that node did not answer in time; it may be offline or unreachable from here")
-		} else {
-			d.Notes = append(d.Notes, "could not reach that node; it may be offline or unreachable from here")
-		}
-		return &d, nil
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") || resp.Header.Get(peerModelDetailsHeader) != "1" {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-		// A node running an older PAIR forwards the unknown path to its
-		// engine, which answers 404.
-		d.Notes = append(d.Notes, fmt.Sprintf("that node did not describe the model (HTTP %d); it may run an older PAIR without model details", resp.StatusCode))
-		return &d, nil
-	}
-	var got modelDetails
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&got); err != nil {
-		d.Notes = append(d.Notes, "that node's answer could not be read: "+err.Error())
+		d.Notes = append(d.Notes, peerDetailsNote(err))
 		return &d, nil
 	}
 	got.Engine, got.Model = f.profile.Name, model
 	return &got, nil
+}
+
+// errPeerNoDetails is a peer's answer that is not from a proxy's details
+// route. A node running an older PAIR forwards the unknown path to its
+// engine, which answers 404.
+type errPeerNoDetails struct{ status int }
+
+func (e errPeerNoDetails) Error() string {
+	return fmt.Sprintf("peer did not describe the model (HTTP %d)", e.status)
+}
+
+// fetchPeerModelDetails asks the proxy at base (a peer's mTLS ingress, through
+// client) to describe one of its models.
+func fetchPeerModelDetails(ctx context.Context, client *http.Client, base *url.URL, model string) (modelDetails, error) {
+	u := *base
+	u.Path = peerModelDetailsPath
+	u.RawPath = ""
+	u.RawQuery = url.Values{"model": {model}}.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return modelDetails{}, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return modelDetails{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") || resp.Header.Get(peerModelDetailsHeader) != "1" {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return modelDetails{}, errPeerNoDetails{status: resp.StatusCode}
+	}
+	var got modelDetails
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&got); err != nil {
+		return modelDetails{}, fmt.Errorf("that node's answer could not be read: %w", err)
+	}
+	return got, nil
+}
+
+// peerDetailsNote says in plain words why a peer could not describe a model.
+// The error itself names the node's address, so it is not shown.
+func peerDetailsNote(err error) string {
+	var noDetails errPeerNoDetails
+	var netErr net.Error
+	switch {
+	case errors.As(err, &noDetails):
+		return fmt.Sprintf("that node did not describe the model (HTTP %d); it may run an older PAIR without model details", noDetails.status)
+	case errors.As(err, &netErr) && netErr.Timeout():
+		return "that node did not answer in time; it may be offline or unreachable from here"
+	case strings.HasPrefix(err.Error(), "that node's answer"):
+		return err.Error()
+	}
+	return "could not reach that node; it may be offline or unreachable from here"
 }
 
 // peerModelDetailsHeader marks an answer from a proxy's details route, so a

@@ -19,9 +19,10 @@ every object.
 ## The basics
 
 **Base URL.** Each engine (Ollama, LM Studio, llama.cpp) has its own PAIR
-endpoint on your machine. Copy it from PAIR's **Endpoints** window. The
-examples use `http://127.0.0.1:11434`, an Ollama endpoint. Don't assume the
-engine's usual port: PAIR may have moved it.
+endpoint on your machine, and the **PAIR router** is one endpoint for all of
+them (see below). Copy either from PAIR's **Endpoints** window. The examples
+use `http://127.0.0.1:11434`, an Ollama endpoint. Don't assume the engine's
+usual port: PAIR may have moved it.
 
 **Two kinds of call.**
 
@@ -61,6 +62,157 @@ might want to act on it:
 ```json
 { "error": "session has ended or expired; start a new session" }
 ```
+
+## The PAIR router
+
+The router, on `http://127.0.0.1:11400` by default, is one endpoint for every
+engine. Send a model name and PAIR finds a node and engine that has it: an
+Ollama model, an LM Studio model and a llama.cpp model can all be reached at the
+same address. Like the engine endpoints it accepts calls only from the same
+machine.
+
+| Route | What it does |
+|---|---|
+| `GET /v1/models` | Every model the router can route, on every node and engine, as one OpenAI model list. |
+| `POST /v1/chat/completions`, `/v1/completions`, `/v1/embeddings` | OpenAI-format inference, routed by `model`. |
+| `POST /v1/messages` | Anthropic-format inference, routed by `model`. llama.cpp is not considered, because it has no such route. |
+| `GET /pair/v1/routing` | How the router is choosing right now: each node's queued work, GPU pressure and in-flight reservations, in the scheduler's order. |
+| `GET /pair/v1/models/{id}` | What a model can do and how big a request it takes, wherever the router would send it. |
+| `/pair/v1/…` | PAIR's own API, as on every endpoint. |
+
+Any other path answers `404`: engine-specific routes such as `/api/chat` are on
+that engine's own endpoint.
+
+**Choosing where a request runs.** Every node and engine whose model list has
+the requested model is eligible, matched the way that engine names models:
+Ollama treats `llama3` and `llama3:latest` as one model, while LM Studio and
+llama.cpp match the name exactly. Among those, the least busy node wins,
+whichever engine it runs: the same choice PAIR makes on an engine's own
+endpoint. If one machine has the model in two engines, Ollama is preferred,
+then LM Studio, then llama.cpp. If the chosen engine fails before it answers,
+PAIR tries the next one, which may be another engine. The request body is sent
+unchanged, and streaming, sessions and `X-Request-ID` work as on the engine
+endpoints.
+
+**Where a request ran.** Every reply an engine produced, failures included,
+carries `X-PAIR-Node-ID` (the node) and `X-PAIR-Engine` (`ollama`, `lmstudio` or
+`llamacpp`). A reply the router wrote itself, such as `model_not_found`, has
+neither. The engine endpoints do not add these headers.
+
+**Checking the choice.** `GET /pair/v1/routing` shows the load the router
+compares:
+
+```json
+{
+  "generation": 223,
+  "nodes": [
+    { "id": "b4e0…", "rank": 1, "pending": 0, "gpuPressure": 0, "reservations": 0, "load": 0 },
+    { "id": "c952…", "rank": 2, "pending": 0, "gpuPressure": 0, "reservations": 0, "load": 0 }
+  ]
+}
+```
+
+A request goes to the eligible node with the lowest `load`, ties going to the
+lower `rank`, and adds one to that node's `reservations` until it ends.
+`generation` changes with every new figure from the scheduler.
+
+**The model list** has one entry per model ID, from the first engine and node
+that listed it, with a `pair` member saying where else it is:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "qwen2.5-7b-instruct",
+      "object": "model",
+      "owned_by": "organization_owner",
+      "pair": {
+        "engines": ["lmstudio"],
+        "nodes": [{ "id": "6f1c…", "name": "studio.local.", "engine": "lmstudio" }],
+        "capabilities": { "chat": true, "structuredOutput": true, "tools": true, "vision": false, "embedding": false, "reasoning": false },
+        "limits": { "contextWindow": 32768, "maxContextWindow": 131072, "maxOutputTokens": null, "recommendedOutputTokens": 4096 },
+        "sources": { "chat": "engine", "…": "…" }
+      }
+    }
+  ]
+}
+```
+
+The list holds only models PAIR will route. A model an engine lists that the
+node's model inventory does not carry is left out. For example, LM Studio lists
+DFlash draft models, which it cannot serve on their own. A node or engine that
+does not answer is also left out of the list. When nothing
+answers, the list is `503` with code `inventory_unavailable`.
+
+**When no node has the model** the router answers before contacting any engine:
+
+```http
+HTTP/1.1 502 Bad Gateway
+Content-Type: application/json
+
+{ "error": "no available node advertises the requested model", "code": "model_not_found" }
+```
+
+A request without a `model` gets `400` with code `model_required`.
+
+### Model capabilities
+
+Ask the router what a model can do before sizing a request, instead of
+configuring limits by hand. Escape a `/` in the model ID:
+
+```http
+GET /pair/v1/models/glm-4.7-flash
+```
+
+```json
+{
+  "id": "glm-4.7-flash",
+  "capabilities": { "chat": true, "structuredOutput": true, "tools": true, "vision": false, "embedding": false, "reasoning": true },
+  "limits": { "contextWindow": 65536, "maxContextWindow": 202752, "maxOutputTokens": null,
+              "recommendedOutputTokens": 16384, "maxInputTokens": 49152 },
+  "placements": [
+    { "node": { "id": "b4e0…", "name": "Ultron" }, "engine": "lmstudio", "loaded": true,
+      "contextWindow": 65536, "maxContextWindow": 202752, "detailsAvailable": true,
+      "configured": { "contextWindow": 65536, "replyTokens": 16384, "maxInputTokens": 49152, "sessions": 8 } }
+  ],
+  "sources": { "chat": "engine", "structuredOutput": "estimated", "tools": "engine", "vision": "engine", "embedding": "engine",
+               "reasoning": "engine", "contextWindow": "engine", "maxContextWindow": "engine",
+               "maxOutputTokens": "estimated", "recommendedOutputTokens": "configured", "maxInputTokens": "configured" }
+}
+```
+
+- **Placements** are every node and engine the router would send this model
+  to. The report holds wherever the request lands: a capability is `true`
+  only if every placement has it, except `reasoning`, which is `true` if any
+  placement reasons.
+- **`contextWindow`** is what one request can rely on: the smallest window
+  across placements. A loaded model reports the window it was loaded with; one
+  that is not loaded reports its configured window, or an estimate of 4096.
+  Keep the prompt plus `max_tokens` within it. **`maxContextWindow`** is the
+  most the model supports if it is reloaded with a larger window.
+- **`maxOutputTokens`** is an engine's own cap on a reply (Ollama's
+  `num_predict`), or `null` when there is none.
+- **`recommendedOutputTokens`** is a `max_tokens` that leaves room for the
+  answer and, for a reasoning model, the thinking before it. A reasoning model
+  given too few tokens spends them all thinking and answers with nothing.
+- **`maxInputTokens`** is the most a request's messages and history may hold:
+  `contextWindow` less `recommendedOutputTokens`. Size what you send by it.
+- **Your capacity settings count.** When you plan a model's context window per
+  session and its room for the reply (Sessions settings), those values are
+  reported with source `configured`, and each placement shows the setting under
+  `configured`. A planned window takes effect once the engine is reloaded with
+  it: until then the window still loaded is reported, because the engine cuts
+  off there.
+- **`sources`** says, for each capability and limit, whether every engine
+  involved reported it (`engine`), your capacity setting decided it
+  (`configured`), or PAIR estimated it (`estimated`): from the
+  model's name or template, a default, or because a node could not be asked.
+  A node running an older PAIR is reported with `detailsAvailable: false`.
+
+Answers are cached for 30 seconds per node and refreshed when a node's model
+list changes, so asking once per job is cheap. Asking never delays inference.
+A model no node has answers `404` with code `model_not_found`.
 
 ## Inference in a session
 
@@ -636,6 +788,10 @@ All but the slot-timeout row were returned by a real node; that one is quoted fr
 | `409` | Another agent uses the session | `{"error":"session belongs to a different agent"}` |
 | `409` | A benchmark is already running | `{"error":"a benchmark is already running; wait for it to finish"}` |
 | `410` | The session ended or expired | `{"error":"session has ended or expired; start a new session"}` |
+| `400` | A request to the PAIR router names no model | `{"code":"model_required","error":"the request names no model"}` |
+| `404` | A path the PAIR router does not serve | `{"code":"not_found","error":"the PAIR router serves GET /v1/models, …"}` |
+| `404` | Capabilities of a model no node has (PAIR router) | `{"code":"model_not_found","error":"no available node advertises the requested model"}` |
+| `502` | No node or engine has the model (PAIR router) | `{"code":"model_not_found","error":"no available node advertises the requested model"}` |
 | `503` | Every node that has the model is paused or stopped | `{"code":"nodes-held","error":"every node that can serve this request is paused or stopped"}` |
 | `503` + `Retry-After: 5` | Every session slot for the model is taken, and the wait ran out | `{"error":"every context slot for this model is in use; timed out waiting for one"}` (or `… and the wait queue is full`) |
 

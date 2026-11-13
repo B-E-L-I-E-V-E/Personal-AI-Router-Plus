@@ -41,6 +41,8 @@
 - ⚠️ nvpair-proxy → facade/enable
 - ⚠️ nvpair-proxy → node/selected
 - ⚠️ nvpair-proxy → node/set-local-backend
+- ⚠️ nvpair-proxy → router/enable
+- ⚠️ nvpair-proxy → router/set-port
 - ⚠️ nvpair-ui-broker → discovery:unsubscribe
 - ⚠️ nvpair-ui-broker → engine:configure-launch
 - ⚠️ nvpair-ui-broker → engine:set-port
@@ -210,6 +212,7 @@
 | `proxy/request` | notification (we consume) | ✅ yes |
 | `proxy/request-started` | notification (we consume) | ➖ ignored |
 | `ready` | notification (we consume) | ✅ yes |
+| `router/ready` | notification (we consume) | ➖ ignored |
 | `capacity/peer-call` | request (we call) | ✅ yes |
 | `capacity/peer-report` | request (we call) | ✅ yes |
 | `capacity/plan` | request (we call) | ✅ yes |
@@ -234,6 +237,9 @@
 | `performance/clear` | request (we call) | ✅ yes |
 | `performance/live` | request (we call) | ✅ yes |
 | `performance/report` | request (we call) | ✅ yes |
+| `router/enable` | request (we call) | ⚠️ not called |
+| `router/set-port` | request (we call) | ⚠️ not called |
+| `router/status` | request (we call) | ✅ yes |
 | `sessions/configure` | request (we call) | ✅ yes |
 | `sessions/end` | request (we call) | ✅ yes |
 | `sessions/list` | request (we call) | ✅ yes |
@@ -303,6 +309,7 @@
 | `node/updated` | request (we call) | ✅ yes |
 | `nodes/list` | request (we call) | ✅ yes |
 | `ready` | request (we call) | ✅ yes |
+| `router/ready` | request (we call) | ➖ ignored |
 | `workloads:get-initial` | request (we call) | ✅ yes |
 | `workloads:remove` | request (we call) | ✅ yes |
 | `workloads:subscribe` | request (we call) | ✅ yes |

@@ -368,6 +368,11 @@ type Proxy struct {
 	facadeMu sync.Mutex
 	facades  map[string]*facade
 
+	// router is the PAIR router facade (router.go), or nil until the broker
+	// enables it. Guarded by facadeMu. Kept out of facades because it is not
+	// an engine: everything that walks facades walks engines.
+	router *facade
+
 	// serveCtx is the process lifetime, and is what a facade's HTTP servers use
 	// as their BaseContext. It must not be an enable request's context: that one
 	// is cancelled when the request returns, which would cancel the context of
@@ -429,6 +434,10 @@ type Proxy struct {
 	// caches what the local engines report.
 	capacity *capacityStore
 
+	// capabilities caches what each placement's engine says a model can do,
+	// for the router's capability endpoint and model list (capabilities.go).
+	capabilities *capabilityCache
+
 	// sessionPolicyPath saves the session policy; empty keeps it in memory
 	// only (tests).
 	sessionPolicyPath string
@@ -478,6 +487,7 @@ func NewProxy(codec *Codec) *Proxy {
 		live:     newLiveRegistry(),
 		webFacts: newWebFactsStore(),
 	}
+	p.capabilities = newCapabilityCache(p.describePlacement)
 	p.sessions.onPeerRelease = p.sendPeerRelease
 	p.sessions.refuse = func() error {
 		if st := p.node.current(); st != nodeRunning {
@@ -872,6 +882,9 @@ func (p *Proxy) shutdown(ctx context.Context) {
 	for _, f := range p.enabledFacades() {
 		f.stopServing(ctx)
 	}
+	if rf := p.routerFacade(); rf != nil {
+		rf.stopServing(ctx)
+	}
 	p.closeIdleTransports()
 }
 
@@ -898,6 +911,23 @@ type candidate struct {
 	// Context capacity is reported per node, so a session served here counts
 	// against this node's capacity.
 	local bool
+	// fac is the engine facade whose inventory admitted this candidate. On an
+	// engine's own port it is always that port's facade; on the PAIR router it
+	// is whichever engine advertises the model on this node, so one request's
+	// candidates can span engines. Everything engine-specific about an attempt
+	// — address memory, discovery presence, session pins, usage and perf
+	// attribution — is read from here rather than from the facade that took
+	// the request.
+	fac *facade
+}
+
+// owner is the engine facade an attempt on this candidate belongs to. The
+// fallback covers candidates built without one, which only tests do.
+func (c candidate) owner(fallback *facade) *facade {
+	if c.fac != nil {
+		return c.fac
+	}
+	return fallback
 }
 
 // candidateTransport returns the reverse-proxy / model-list transport for a
@@ -1250,7 +1280,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// appear in any orchestrator in-flight map — that's fine; the
 	// completion event still bumps the failed counter regardless of
 	// whether a matching Started was seen.
-	reqID := strconv.FormatUint(f.nextRequestID.Add(1), 10)
+	reqID := f.mintRequestID()
 
 	// The caller-facing request ID. Set on the inbound header so every forward
 	// attempt carries it upstream, and on the response before anything can be
@@ -1280,6 +1310,21 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	routingModel := ""
 	if isInf {
 		routingModel = model
+	}
+	// The router picks an engine by the model alone, so a request that names
+	// none has nothing to route on. Refused before any session or node is
+	// touched, like any other malformed request.
+	if f.router && isInf && model == "" {
+		writeIngressError(w, http.StatusBadRequest, "model_required", "the request names no model")
+		return
+	}
+	// resolve is the candidate set for this request. On an engine's own port it
+	// is that engine's owners; on the PAIR router it is every engine's.
+	resolve := func() ([]candidate, int) {
+		if f.router {
+			return p.resolveRouterCandidates(r.URL.Path, routingModel)
+		}
+		return f.resolveCandidatesHeld(routingModel)
 	}
 
 	// Sessions and agents apply to inference only; on any other route the
@@ -1343,19 +1388,31 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	bodyLen := len(bodyBytes)
 
 	// The live view shows a generation request from the moment it arrives.
+	// The router learns which engine it is likely to use only once it has
+	// resolved, so it starts the entry just after that instead.
 	var liveReq *liveEntry
+	endLive := func() {}
+	defer func() { endLive() }()
 	measured := isInf && model != "" && isGenerationPath(r.URL.Path)
-	if measured {
-		var endLive func()
+	beginLive := func(engine string) {
 		liveReq, endLive = p.live.begin(liveRequest{
 			RequestID: requestID, SessionID: sessionID, AgentID: agentID,
-			Engine: f.profile.Name, Model: model, Path: r.URL.Path,
+			Engine: engine, Model: model, Path: r.URL.Path,
 			Origin: liveOriginRouted, Benchmark: benchmark,
 		}, bodyLen)
-		defer endLive()
+	}
+	if measured && !f.router {
+		beginLive(f.profile.Name)
 	}
 
-	candidates, heldNodes := f.resolveCandidatesHeld(routingModel)
+	candidates, heldNodes := resolve()
+	if measured && f.router {
+		beginLive(leadEngine(candidates, f))
+	}
+	// admitEngine is the engine whose context capacity admission applies,
+	// fixed before admission can drop a candidate so the reply budget below is
+	// applied for the same engine the limit came from.
+	admitEngine := admissionEngine(candidates, f)
 	if pinNode != "" {
 		candidates = pinCandidates(candidates, pinNode)
 		if len(candidates) == 0 {
@@ -1388,7 +1445,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	if sessionID != "" && model != "" {
 		// The session's measured size goes out on every reply, refusals
 		// included, so an agent can see it is near or past its share.
-		if c, ok := sess.Context[f.profile.Name]; ok && c.Model == model {
+		if c, ok := sess.Context[admitEngine]; ok && c.Model == model {
 			w.Header().Set(contextTokensHeader, strconv.FormatInt(c.Tokens, 10))
 		}
 		var admitErr error
@@ -1437,9 +1494,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// then re-pins the session to whichever node served. The reservation needs no
 	// adjustment here, because the dispatch loop moves it to each node it tries.
 	if sessionID != "" && f.SelectedID() == "" {
-		if node := sess.Nodes[f.profile.Name]; node != "" {
-			preferNode(candidates, node)
-		}
+		preferSessionNode(candidates, sess, f)
 	}
 	// Released exactly once, whichever way the request ends: normal unwind,
 	// client disconnect, or an early return below. Without this a node stays
@@ -1491,6 +1546,15 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if len(candidates) == 0 && f.router {
+		// The router has no "no node selected" case: every request it takes is
+		// model-bearing, so an empty set always means nobody advertises it.
+		slog.Warn("router request rejected",
+			"id", reqID, "request_id", requestID, "method", r.Method, "path", r.URL.Path,
+			"model", model, "reason", "no node advertises requested model")
+		writeIngressError(w, http.StatusBadGateway, "model_not_found", routerModelNotFound)
+		return
+	}
 	if len(candidates) == 0 {
 		rejectionBody := `{"error":"no active node selected or available"}`
 		rejectionError := "no active node"
@@ -1534,6 +1598,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var (
 		servedNodeID string
+		servedFacade *facade
 		servedTarget string
 		ttfbMs       int64
 		proxyErr     string
@@ -1565,7 +1630,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		wl = &Workload{
 			ID:          reqID,
 			Model:       model,
-			Engine:      f.profile.Name,
+			Engine:      leadEngine(candidates, f),
 			RunID:       p.runID,
 			RequestID:   requestID,
 			SessionID:   sessionID,
@@ -1693,7 +1758,15 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			"err", reportErr,
 		)
 
-		_ = f.notify("proxy/request", RequestEvent{
+		// A routed request is reported by the engine that served it, so it
+		// appears in that engine's request log. One that never reached an
+		// engine is reported by the facade that took it, which on the router
+		// is nobody.
+		reporter := f
+		if servedFacade != nil {
+			reporter = servedFacade
+		}
+		_ = reporter.notify("proxy/request", RequestEvent{
 			ID:        reqID,
 			RequestID: requestID, SessionID: sessionID, AgentID: agentID,
 			NodeID:   servedNodeID,
@@ -1869,7 +1942,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			var roundHeld int
-			round, roundHeld = f.resolveCandidatesHeld(routingModel)
+			round, roundHeld = resolve()
 			if pinNode != "" {
 				// A pinned benchmark step does not wait for its node to come
 				// back: the step fails and the run goes on.
@@ -1894,6 +1967,9 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		cand := round[next]
 		next++
+		// cf is the engine this attempt goes to: f itself on an engine's own
+		// port, and possibly a different engine per attempt on the router.
+		cf := cand.owner(f)
 		// This node was paused or stopped after the round was resolved.
 		if cand.local && !p.node.accepting() {
 			continue
@@ -1965,7 +2041,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 					if claim.settled() {
 						return
 					}
-					if f.discovery.Has(cand.id) {
+					if cf.discovery.Has(cand.id) {
 						continue
 					}
 					if claim.abandon() {
@@ -1986,8 +2062,8 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 			// engine may not silently cut a conversation that does not fit,
 			// and a reply with no length of its own stays within the reply
 			// budget. Other nodes apply their own budgets on ingress.
-			if cand.local && sessionID != "" && isInf {
-				body = withSessionBudget(body, f.profile.Name, r.URL.Path, sessionLimit.ReplyTokens)
+			if cand.local && sessionID != "" && isInf && cf.profile.Name == admitEngine {
+				body = withSessionBudget(body, cf.profile.Name, r.URL.Path, sessionLimit.ReplyTokens)
 			}
 			attemptReq.Body = io.NopCloser(bytes.NewReader(body))
 			if len(body) != len(bodyBytes) {
@@ -2016,6 +2092,12 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				// the client response, so an upstream that echoes X-Request-ID
 				// back would otherwise produce a second value.
 				resp.Header.Del(requestIDHeader)
+				// The router names the node and engine that produced the reply,
+				// success or not, so a client can see where its request went.
+				// Engine ports keep their responses as the engine sent them.
+				if f.router {
+					setServedByHeaders(resp.Header, cand.id, cf.profile.Name)
+				}
 				// A peer that refused because it is paused or stopped is left
 				// out of later rounds and requests until it says otherwise.
 				if cand.peerUUID != "" {
@@ -2090,7 +2172,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				// The share applies on this node only, so report it only when
 				// this node is the one serving.
-				if cand.local && sessionLimit.SessionShare > 0 {
+				if cand.local && sessionLimit.SessionShare > 0 && cf.profile.Name == admitEngine {
 					w.Header().Set(contextLimitHeader, strconv.FormatInt(sessionLimit.SessionShare, 10))
 					if sessionLimit.MessageTokens > 0 {
 						w.Header().Set(contextReplyHeader, strconv.FormatInt(sessionLimit.ReplyTokens, 10))
@@ -2103,7 +2185,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				// numbers are kept here too (perf.go).
 				var usageDone func(tokenUsage)
 				if sessionID != "" && isInf {
-					engine := f.profile.Name
+					engine := cf.profile.Name
 					usageDone = func(u tokenUsage) {
 						p.sessions.recordUsage(sessionID, engine, model, u, bodyLen)
 					}
@@ -2111,7 +2193,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				var perf *perfTracker
 				if measured && resp.StatusCode < 300 {
 					perf = newPerfTracker(attemptStart, perfRecord{
-						RequestID: requestID, Engine: f.profile.Name, Model: model,
+						RequestID: requestID, Engine: cf.profile.Name, Model: model,
 						NodeID: cand.id, Local: cand.local, Path: r.URL.Path,
 						SessionID: sessionID, AgentID: agentID, Origin: liveOriginRouted,
 					}, func(rec perfRecord) { p.perf.add(rec, benchmark) })
@@ -2121,6 +2203,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				// Committing to this candidate — body stream is about to begin.
 				ttfbMs = time.Since(start).Milliseconds()
 				servedNodeID = cand.id
+				servedFacade = cf
 				servedTarget = cand.url.Host
 				proxyErr = "" // clear any error recorded from a failed-over candidate
 				// Arm the liveness report only now. statusCapture also carries
@@ -2134,7 +2217,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				// Preserve the upstream response, including absent CORS permissions.
 				if !started {
 					started = true
-					_ = f.notify("proxy/request-started", RequestStartedEvent{
+					_ = cf.notify("proxy/request-started", RequestStartedEvent{
 						ID:        reqID,
 						RequestID: requestID, SessionID: sessionID, AgentID: agentID,
 						NodeID: cand.id,
@@ -2150,7 +2233,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 					// The node that committed is the one holding this turn in
 					// its KV cache, so the session's next turn goes there.
 					if sessionID != "" {
-						p.sessions.pin(sessionID, f.profile.Name, cand)
+						p.sessions.pin(sessionID, cf.profile.Name, cand)
 					}
 					// Record the commit here, not just after the loop: a copy
 					// error aborts this handler by panic, and finalize needs to
@@ -2196,7 +2279,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 					// can fail over to another of its published addresses
 					// (multi-homed peer). The in-request failover below moves on to
 					// the next node.
-					f.targets.Forget(cand.id)
+					cf.targets.Forget(cand.id)
 				}
 				if !last {
 					// Transport/dial error with candidates left: fail over.
@@ -2210,6 +2293,7 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				// No further dispatch is permitted: terminal, surface it.
 				respondedWithError = true
 				servedNodeID = cand.id
+				servedFacade = cf
 				servedTarget = cand.url.Host
 				proxyErr = err.Error()
 				slog.Warn("proxy upstream error, retries exhausted",
@@ -2227,6 +2311,9 @@ func (f *facade) handleHTTP(w http.ResponseWriter, r *http.Request) {
 				status := http.StatusBadGateway
 				if stderrors.Is(err, errFirstBodyTimeout) {
 					status = http.StatusGatewayTimeout
+				}
+				if f.router {
+					setServedByHeaders(ew.Header(), cand.id, cf.profile.Name)
 				}
 				ew.Header().Set("Content-Type", "application/json")
 				ew.Header().Set("X-Content-Type-Options", "nosniff")
@@ -2434,6 +2521,7 @@ func (f *facade) resolveCandidatesHeld(model string) (out []candidate, held int)
 			url:      u,
 			peerUUID: peerUUID,
 			local:    local,
+			fac:      f,
 		})
 	}
 
@@ -2507,9 +2595,15 @@ func (p *Proxy) reserveCandidate(f *facade, candidates []candidate) ([]candidate
 		}
 	}
 
+	// The first position wins when a node appears more than once. On an
+	// engine's own port that never happens; on the PAIR router one machine can
+	// offer the model through two engines, and the earlier entry is the engine
+	// the router's ordering prefers.
 	candidateIndex := make(map[string]int, len(candidates))
 	for i, cand := range candidates {
-		candidateIndex[cand.id] = i
+		if _, seen := candidateIndex[cand.id]; !seen {
+			candidateIndex[cand.id] = i
+		}
 	}
 
 	p.priorityMu.Lock()
@@ -3052,6 +3146,9 @@ func (p *Proxy) handleMessage(msg *Message) {
 		if err := p.codec.Respond(msg.ID, result); err != nil {
 			log.Printf("failed to respond to facade/enable: %v", err)
 		}
+
+	case "router/enable", "router/status", "router/set-port":
+		p.handleRouterMessage(method, msg)
 
 	case "nodes/list":
 		f, ok := p.requireFacade(msg, engine)
