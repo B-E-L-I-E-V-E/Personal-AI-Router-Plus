@@ -44,6 +44,10 @@ tags:
       prompt or reply text, and they reset when the service restarts.
   - name: Node info
     description: Read-only node telemetry polled from discovered PAIR nodes.
+  - name: PAIR router
+    description: >
+      The PAIR router's own API, on the router endpoint (`http://127.0.0.1:11400`
+      by default). Loopback only.
 paths:
   /api/chat:
     post:
@@ -501,6 +505,42 @@ paths:
                 $ref: "#/components/schemas/NodeState"
         default:
           $ref: "#/components/responses/ErrorResponse"
+  /pair/v1/models/{modelId}:
+    servers:
+      - url: http://127.0.0.1:11400
+        description: The PAIR router. Its port can be moved; copy it from PAIR's Endpoints window.
+    get:
+      tags:
+        - PAIR router
+      operationId: getModelCapabilities
+      summary: Report what a model can do wherever the router would send it
+      description: >
+        Combines what each placement's engine reports: a capability is true only
+        if every placement has it, except `reasoning`, true if any placement
+        reasons. `contextWindow` is the smallest window across placements.
+        Values PAIR inferred rather than read from an engine are marked
+        `estimated` in `sources`. Cached for 30 seconds per placement; asking
+        never delays inference.
+      parameters:
+        - name: modelId
+          in: path
+          required: true
+          description: The model ID as the router's `/v1/models` lists it, path-escaped (`qwen%2Fqwen3-8b`).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The model's capabilities and limits.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/RequestID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelCapabilitiesReport"
+        "404":
+          # No available node advertises the model: code model_not_found.
+          $ref: "#/components/responses/ErrorResponse"
   /v1/node-info:
     get:
       tags:
@@ -623,6 +663,88 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
   schemas:
+    ModelCapabilitiesReport:
+      type: object
+      required: [id, capabilities, limits, placements, sources]
+      properties:
+        id:
+          type: string
+          example: glm-4.7-flash
+        capabilities:
+          $ref: "#/components/schemas/ModelCapabilities"
+        limits:
+          $ref: "#/components/schemas/ModelLimits"
+        placements:
+          type: array
+          items:
+            $ref: "#/components/schemas/CapabilityPlacement"
+        sources:
+          type: object
+          description: >
+            One entry per capability and limit field: `engine` when every
+            placement's engine reported it, `estimated` when PAIR inferred it.
+          additionalProperties:
+            type: string
+            enum: [engine, estimated]
+    ModelCapabilities:
+      type: object
+      required: [chat, structuredOutput, tools, vision, embedding, reasoning]
+      properties:
+        chat:
+          type: boolean
+        structuredOutput:
+          type: boolean
+          description: Accepts a JSON schema for its output.
+        tools:
+          type: boolean
+        vision:
+          type: boolean
+        embedding:
+          type: boolean
+        reasoning:
+          type: boolean
+          description: Thinks before answering, so it needs output tokens for both.
+    ModelLimits:
+      type: object
+      required: [contextWindow, maxContextWindow, maxOutputTokens, recommendedOutputTokens]
+      properties:
+        contextWindow:
+          type: integer
+          description: Tokens one request can rely on, prompt and reply together.
+        maxContextWindow:
+          type: integer
+          description: The largest window the model supports.
+        maxOutputTokens:
+          type: integer
+          nullable: true
+          description: An engine's own cap on a reply, or null when none sets one.
+        recommendedOutputTokens:
+          type: integer
+          description: A max_tokens with room for the answer and, for a reasoning model, its thinking.
+    CapabilityPlacement:
+      type: object
+      required: [node, engine, loaded, contextWindow, maxContextWindow, detailsAvailable]
+      properties:
+        node:
+          type: object
+          required: [id, name]
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+        engine:
+          type: string
+          enum: [ollama, lmstudio, llamacpp]
+        loaded:
+          type: boolean
+        contextWindow:
+          type: integer
+        maxContextWindow:
+          type: integer
+        detailsAvailable:
+          type: boolean
+          description: False when the placement could not be asked; its values are estimates.
     CreateSessionRequest:
       type: object
       additionalProperties: false

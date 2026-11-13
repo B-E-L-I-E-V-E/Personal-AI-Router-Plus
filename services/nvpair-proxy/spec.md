@@ -985,15 +985,23 @@ is omitted, never filled in.
 
 - **Ollama**: `/api/show` (not verbose) for `details` (family, parameter size,
   quantization, format), `capabilities`, `license` (cut to 16 KiB),
-  `parameters`, `modified_at` and the `general.*` keys of `model_info`;
-  `/api/tags` for size and digest.
-- **llama.cpp**: `/props?model=` for `modalities` and the loaded `n_ctx`, and
-  the GGUF file it names. A model that is not loaded has no file path, and a
-  note says so.
+  `parameters` (and from them `configuredContext` = `num_ctx` and
+  `maxOutputTokens` = `num_predict`), `modified_at`, whether the `template`
+  has a thinking section (`templateThinks`: `.Thinking`, `<think>` or
+  `reasoning_content`) and the `general.*` keys of `model_info`; `/api/tags`
+  for size and digest; `/api/ps` for the loaded `context_length`.
+  `capabilitiesComplete` is set when Ollama sent a capability list.
+- **llama.cpp**: `/props?model=` for `modalities`, `chat_template_caps.supports_tools`
+  (as `tools`), whether `chat_template` thinks, the loaded `n_ctx`, and the GGUF
+  file it names. A model that is not loaded has no file path, and a note says so.
 - **LM Studio**: `/api/v1/models` for type, publisher, display name,
   architecture, quantization, size, parameter string, maximum and loaded
   context and capabilities, and the GGUF in LM Studio's models folder (as for
-  the capacity planner) when present.
+  the capacity planner) when present. A capability flag is on when it is
+  `true` or an object whose `allowed_options` are not only `"off"` (LM Studio
+  reports `reasoning` as `{"allowed_options":["off","on"],"default":"on"}`);
+  `trained_for_tool_use` is `tools`. `capabilitiesComplete` is set when the
+  model is listed.
   The engine's own answer wins where it and the file disagree.
 - **GGUF** `general.*` keys: `name`, `description`, `author`/`organization`,
   `license`, `size_label`, `parameter_count`, `file_type` (named as llama.cpp
@@ -1015,6 +1023,11 @@ is omitted, never filled in.
 
 Failures to read the engine or the file are notes in the result, not JSON-RPC
 errors.
+
+`capabilitiesComplete` means a capability missing from `capabilities` is one
+the engine said the model lacks. A peer running an older PAIR omits it (and
+then reported LM Studio's capability object as nothing at all), so its list is
+only evidence of what is there.
 
 ### 5.18 Model facts from the web
 
@@ -1157,8 +1170,51 @@ A loopback facade that fronts no engine (`router.go`), enabled with
   of its routable candidates, keeps only ids that node's inventory advertises
   under the engine's naming rule (the same match routing uses, so a listed model
   always routes), and returns one list de-duplicated by `id`, first record wins,
-  with `pair.engines` and `pair.nodes`. Partial when sources fail;
+  with `pair.engines` and `pair.nodes`, and `pair.capabilities`,
+  `pair.limits` and `pair.sources` from the capability report below, over the
+  (node, engine) pairs that listed it; the list waits at most 2.5 s for cold
+  details. Partial when sources fail;
   `503` when none answers. No CORS merge: a browser origin gets no grant.
+- **Model capabilities.** `GET /pair/v1/models/{id}` (`capabilities.go`), `id`
+  path-escaped (an unescaped `/` is also taken as part of it). Placements are
+  the router's candidates for `id`, from every enabled engine facade's
+  `resolveCandidates(id)`, each named as that node advertises the model. None
+  is `404 {"error":"no available node advertises the requested model","code":"model_not_found"}`.
+  Each placement is described by §5.17's readers: this node's engine at the
+  local backend, a pinned peer by `GET /pair/v1/peer/models/details` over mTLS
+  on the candidate's address, a manual node's engine at its address without
+  reading files. Results are cached per (engine, node, model, node inventory)
+  for 30 s, a failure for 5 s, a stale entry served while it refreshes in the
+  background and a failed refresh keeping the previous answer; entries unused
+  for 10 min are dropped. A cold lookup waits at most 4.5 s; a placement with
+  no answer is `detailsAvailable: false`. Inference never reads the cache.
+  Per placement:
+  - `embedding`: LM Studio `type` starting `embedding`; Ollama `embedding`
+    without `completion` when its list is complete; otherwise estimated from
+    `embed` in the name or an encoder architecture. `chat` is its negation.
+    `structuredOutput` is `chat`, always estimated.
+  - `tools`, `vision`: reported when listed; reported absent when the list is
+    complete (for llama.cpp `vision`, when the model is loaded); otherwise
+    estimated false.
+  - `reasoning`: reported when `thinking` or `reasoning` is listed; estimated
+    true when the template thinks or the name or architecture matches a known
+    reasoning family (deepseek-r1, qwq, qwen3, glm-4.5 to 4.9, gpt-oss, …),
+    since engines are silent about older pulls; reported false when the list
+    is complete; otherwise estimated false.
+  - `contextWindow`: the loaded context, else the configured one, else
+    estimated 4096 (no more than the maximum); `loaded` is whether a loaded
+    context was reported. `maxContextWindow`: the trained context, else the
+    window, estimated.
+  The report combines them: `reasoning` if any placement, every other
+  capability only if all; `contextWindow` the smallest, `maxContextWindow` the
+  largest, `maxOutputTokens` the smallest engine cap or `null`.
+  `recommendedOutputTokens` is `window/4` clamped to 4096–32768 for a
+  reasoning model, `window/8` clamped to 1024–8192 otherwise (8192 or 2048
+  when the window is unknown), then at most `window/2` and the output cap.
+  `sources` gives each of the ten fields `engine` only when every placement's
+  engine reported it (for `reasoning`, also when any engine reported it true;
+  for `maxContextWindow`, when the winning value was reported); otherwise
+  `estimated`. `recommendedOutputTokens` is always estimated.
 - **Where it ran.** A reply an engine produced, success or failure, carries
   `X-PAIR-Node-ID` and `X-PAIR-Engine` for the attempt that produced it, set
   in `ModifyResponse` and on the final transport-error reply. A reply the
@@ -1168,7 +1224,7 @@ A loopback facade that fronts no engine (`router.go`), enabled with
   `reservations` and their sum `load`, read under the lock reserveCandidate
   takes.
 - **Surface.** Anything other than the model list, the inference paths,
-  `/pair/v1/routing` and `/pair/v1/*` is `404`. The mTLS personality answers `404`: peers reach this
+  `/pair/v1/routing`, `/pair/v1/models/{id}` and `/pair/v1/*` is `404`. The mTLS personality answers `404`: peers reach this
   node's engines on their own ports.
 
 ## 6. Reservations

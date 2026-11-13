@@ -77,6 +77,7 @@ machine.
 | `POST /v1/chat/completions`, `/v1/completions`, `/v1/embeddings` | OpenAI-format inference, routed by `model`. |
 | `POST /v1/messages` | Anthropic-format inference, routed by `model`. llama.cpp is not considered, because it has no such route. |
 | `GET /pair/v1/routing` | How the router is choosing right now: each node's queued work, GPU pressure and in-flight reservations, in the scheduler's order. |
+| `GET /pair/v1/models/{id}` | What a model can do and how big a request it takes, wherever the router would send it. |
 | `/pair/v1/…` | PAIR's own API, as on every endpoint. |
 
 Any other path answers `404`: engine-specific routes such as `/api/chat` are on
@@ -128,7 +129,10 @@ that listed it, with a `pair` member saying where else it is:
       "owned_by": "organization_owner",
       "pair": {
         "engines": ["lmstudio"],
-        "nodes": [{ "id": "6f1c…", "name": "studio.local.", "engine": "lmstudio" }]
+        "nodes": [{ "id": "6f1c…", "name": "studio.local.", "engine": "lmstudio" }],
+        "capabilities": { "chat": true, "structuredOutput": true, "tools": true, "vision": false, "embedding": false, "reasoning": false },
+        "limits": { "contextWindow": 32768, "maxContextWindow": 131072, "maxOutputTokens": null, "recommendedOutputTokens": 4096 },
+        "sources": { "chat": "engine", "…": "…" }
       }
     }
   ]
@@ -151,6 +155,53 @@ Content-Type: application/json
 ```
 
 A request without a `model` gets `400` with code `model_required`.
+
+### Model capabilities
+
+Ask the router what a model can do before sizing a request, instead of
+configuring limits by hand. Escape a `/` in the model ID:
+
+```http
+GET /pair/v1/models/glm-4.7-flash
+```
+
+```json
+{
+  "id": "glm-4.7-flash",
+  "capabilities": { "chat": true, "structuredOutput": true, "tools": true, "vision": false, "embedding": false, "reasoning": true },
+  "limits": { "contextWindow": 8192, "maxContextWindow": 202752, "maxOutputTokens": null, "recommendedOutputTokens": 4096 },
+  "placements": [
+    { "node": { "id": "b4e0…", "name": "Ultron" }, "engine": "lmstudio", "loaded": true,
+      "contextWindow": 8192, "maxContextWindow": 202752, "detailsAvailable": true }
+  ],
+  "sources": { "chat": "engine", "structuredOutput": "estimated", "tools": "engine", "vision": "engine", "embedding": "engine",
+               "reasoning": "engine", "contextWindow": "engine", "maxContextWindow": "engine",
+               "maxOutputTokens": "estimated", "recommendedOutputTokens": "estimated" }
+}
+```
+
+- **Placements** are every node and engine the router would send this model
+  to. The report holds wherever the request lands: a capability is `true`
+  only if every placement has it, except `reasoning`, which is `true` if any
+  placement reasons.
+- **`contextWindow`** is what one request can rely on: the smallest window
+  across placements. A loaded model reports the window it was loaded with; one
+  that is not loaded reports its configured window, or an estimate of 4096.
+  Keep the prompt plus `max_tokens` within it. **`maxContextWindow`** is the
+  most the model supports if it is reloaded with a larger window.
+- **`maxOutputTokens`** is an engine's own cap on a reply (Ollama's
+  `num_predict`), or `null` when there is none.
+- **`recommendedOutputTokens`** is a `max_tokens` that leaves room for the
+  answer and, for a reasoning model, the thinking before it. A reasoning model
+  given too few tokens spends them all thinking and answers with nothing.
+- **`sources`** says, for each capability and limit, whether every engine
+  involved reported it (`engine`) or PAIR estimated it (`estimated`): from the
+  model's name or template, a default, or because a node could not be asked.
+  A node running an older PAIR is reported with `detailsAvailable: false`.
+
+Answers are cached for 30 seconds per node and refreshed when a node's model
+list changes, so asking once per job is cheap. Asking never delays inference.
+A model no node has answers `404` with code `model_not_found`.
 
 ## Inference in a session
 
@@ -727,7 +778,8 @@ All but the slot-timeout row were returned by a real node; that one is quoted fr
 | `409` | A benchmark is already running | `{"error":"a benchmark is already running; wait for it to finish"}` |
 | `410` | The session ended or expired | `{"error":"session has ended or expired; start a new session"}` |
 | `400` | A request to the PAIR router names no model | `{"code":"model_required","error":"the request names no model"}` |
-| `404` | A path the PAIR router does not serve | `{"code":"not_found","error":"the PAIR router serves GET /v1/models and …"}` |
+| `404` | A path the PAIR router does not serve | `{"code":"not_found","error":"the PAIR router serves GET /v1/models, …"}` |
+| `404` | Capabilities of a model no node has (PAIR router) | `{"code":"model_not_found","error":"no available node advertises the requested model"}` |
 | `502` | No node or engine has the model (PAIR router) | `{"code":"model_not_found","error":"no available node advertises the requested model"}` |
 | `503` | Every node that has the model is paused or stopped | `{"code":"nodes-held","error":"every node that can serve this request is paused or stopped"}` |
 | `503` + `Retry-After: 5` | Every session slot for the model is taken, and the wait ran out | `{"error":"every context slot for this model is in use; timed out waiting for one"}` (or `… and the wait queue is full`) |

@@ -337,7 +337,7 @@ func (f *facade) handleRouter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeIngressError(w, http.StatusNotFound, "not_found",
-		"the PAIR router serves GET /v1/models and POST /v1/chat/completions, /v1/completions, /v1/embeddings and /v1/messages")
+		"the PAIR router serves GET /v1/models, GET /pair/v1/models/{id} and POST /v1/chat/completions, /v1/completions, /v1/embeddings and /v1/messages")
 }
 
 // routerNode is one place a model can run, in the router's model list.

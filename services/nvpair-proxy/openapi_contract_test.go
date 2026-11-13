@@ -71,6 +71,14 @@ func TestOpenAPI_DocumentsTheCapacityRow(t *testing.T) {
 	wantDocumented(t, "ModelCapacity.configured", section(t, doc, "        configured:"), jsonFields(capacitySetting{}))
 }
 
+func TestOpenAPI_DocumentsTheModelCapabilities(t *testing.T) {
+	doc := openAPIText(t)
+	wantDocumented(t, "ModelCapabilitiesReport", section(t, doc, "    ModelCapabilitiesReport:"), jsonFields(modelCapabilitiesReport{}))
+	wantDocumented(t, "ModelCapabilities", section(t, doc, "    ModelCapabilities:"), jsonFields(modelCapabilities{}))
+	wantDocumented(t, "ModelLimits", section(t, doc, "    ModelLimits:"), jsonFields(modelLimits{}))
+	wantDocumented(t, "CapabilityPlacement", section(t, doc, "    CapabilityPlacement:"), jsonFields(capabilityPlacement{}))
+}
+
 func TestOpenAPI_DocumentsTheCapacitySetting(t *testing.T) {
 	put := section(t, openAPIText(t), "    put:")
 	wantDocumented(t, "PUT /pair/v1/capacity", put, jsonFields(capacitySetParams{}))
