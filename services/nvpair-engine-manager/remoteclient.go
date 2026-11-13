@@ -54,6 +54,11 @@ func waitsForEngineReadiness(path, engine string) bool {
 	if path == controlLoadPath {
 		return engine == "ollama"
 	}
+	// controlReloadPath unloads and loads an LM Studio model, which takes as
+	// long as the model takes to load.
+	if path == controlReloadPath {
+		return true
+	}
 	return path == controlStartPath || path == controlDeletePath
 }
 
@@ -149,9 +154,20 @@ func (c *remoteClient) postJSON(ctx context.Context, path, engine string, body a
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("remote %s: HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(data)))
+		return nil, &remoteStatusError{path: path, status: resp.StatusCode, body: strings.TrimSpace(string(data))}
 	}
 	return json.RawMessage(data), nil
+}
+
+// remoteStatusError is a peer's non-2xx answer to postJSON.
+type remoteStatusError struct {
+	path   string
+	status int
+	body   string
+}
+
+func (e *remoteStatusError) Error() string {
+	return fmt.Sprintf("remote %s: HTTP %d: %s", e.path, e.status, e.body)
 }
 
 // stream POSTs body to a streaming ec endpoint and consumes its NDJSON frames,

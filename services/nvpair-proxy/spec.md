@@ -879,7 +879,13 @@ Ollama gets `OLLAMA_CONTEXT_LENGTH`, `OLLAMA_NUM_PARALLEL` and, for a
 quantized cache, `OLLAMA_KV_CACHE_TYPE` with flash attention; llama.cpp gets
 `--ctx-size` (window × sessions), `--parallel`, `--cache-type-k/-v` and
 `--flash-attn on`. Other launch tokens are kept verbatim. An engine PAIR did
-not install (`editable: false`) is not restarted. With `autoReload` on, the
+not install (`editable: false`) is not restarted. LM Studio takes context per
+model load, so the desktop has engine-manager reload the model
+(`engine:reload-model`, or `engine:remote-reload-model` for another node) with
+context length = window and parallel predictions = sessions, then reports
+`planner-set {applied}`. When that node's LM Studio cannot be driven the plan
+stays pending, the desktop sets the capacity with `capacity/set`, and tells
+the user what to set in LM Studio. With `autoReload` on, the
 desktop applies a pending plan after two consecutive idle checks 30 s apart,
 and retries a failed one after 10 minutes.
 

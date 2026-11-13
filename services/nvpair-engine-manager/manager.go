@@ -287,9 +287,12 @@ func (m *Manager) handleMessage(ctx context.Context, msg *Message) {
 	case "engine:action":
 		go m.runAction(ctx, msg)
 
+	case "engine:reload-model":
+		go m.runReloadModel(ctx, msg)
+
 	case "engine:remote-get-installed", "engine:remote-install", "engine:remote-pull-model",
 		"engine:remote-load-model", "engine:remote-unload-model", "engine:remote-delete-model",
-		"engine:remote-start", "engine:remote-stop":
+		"engine:remote-reload-model", "engine:remote-start", "engine:remote-stop":
 		go m.runRemote(ctx, msg)
 
 	default:
@@ -452,6 +455,21 @@ func (m *Manager) parse(msg *Message, v any) bool {
 		return false
 	}
 	return true
+}
+
+// runReloadModel reloads an LM Studio model on this node with a context length
+// and parallel predictions (engine:reload-model).
+func (m *Manager) runReloadModel(ctx context.Context, msg *Message) {
+	var req modelReloadRequest
+	if !m.parse(msg, &req) {
+		return
+	}
+	if err := req.validate(); err != nil {
+		m.codec.RespondError(msg.ID, -32602, err.Error())
+		return
+	}
+	res, err := m.exec.ModelReload(ctx, req)
+	m.respondOrErr(msg, res, err)
 }
 
 func (m *Manager) respondOrErr(msg *Message, result any, err error) {

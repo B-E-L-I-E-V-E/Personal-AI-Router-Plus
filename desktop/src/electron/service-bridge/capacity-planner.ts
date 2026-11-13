@@ -37,7 +37,9 @@ const DEFAULT_REPLY_TOKENS = 8192
  * The capacity planner sizes a model's sessions from its node's GPU memory
  * (nvpair-proxy does the math and reads the model), and applies a saved plan
  * by rewriting the engine's launch settings through the broker, which
- * restarts the engine. Plans and the auto-reload switch live in the proxy.
+ * restarts the engine. LM Studio takes context per model load instead, so its
+ * plan is applied by the engine manager reloading the model. Plans and the
+ * auto-reload switch live in the proxy.
  *
  * Every call takes an optional node ID. Another cluster member's model is
  * planned by that node's proxy, for the GPUs and memory its node-info reports,
@@ -543,9 +545,8 @@ function replyBudget(plan: SavedCapacityPlan): number {
 }
 
 /**
- * What to set in LM Studio, which takes context, slots and expert placement
- * per model load, outside PAIR's launch settings. Its REST load takes no
- * expert placement, so the user sets it in the model's load settings.
+ * What to set in LM Studio by hand when PAIR cannot reload it (no lms, an lms
+ * without the load options, or a node running an older PAIR).
  */
 export function lmStudioMessage(model: string, plan: SavedCapacityPlan, gpuCount = 0): string {
     const experts =
@@ -555,6 +556,71 @@ export function lmStudioMessage(model: string, plan: SavedCapacityPlan, gpuCount
     const gpus =
         gpuCount > 1 ? `, with every layer on the GPUs split across all ${gpuCount} of them` : ''
     return `PAIR now limits ${model} to ${plan.sessions} sessions of ${plan.windowTokens} tokens. LM Studio sets these when it loads a model: in the model's load settings, set Context Length to ${plan.windowTokens} and Max Concurrent Predictions to ${plan.sessions}${experts}${gpus}, then reload it.`
+}
+
+/**
+ * What applying a plan to LM Studio did: the model was reloaded with the
+ * plan's context length and parallel predictions, or PAIR cannot drive this
+ * node's LM Studio (reason says why) and nothing was changed.
+ */
+type LmStudioReload = { outcome: 'reloaded' } | { outcome: 'unsupported'; reason: string }
+
+function parseLmStudioReload(value: JsonValue | undefined): LmStudioReload {
+    const obj = objectValue(value)
+    const outcome = stringValue(obj?.outcome)
+    if (outcome === 'reloaded') return { outcome }
+    if (outcome === 'unsupported')
+        return { outcome, reason: stringValue(obj?.reason) || 'no reason given' }
+    throw new Error(`LM Studio reload answered an unknown outcome "${outcome}"`)
+}
+
+/**
+ * Reloads an LM Studio model with the plan's context length and parallel
+ * predictions. The node's engine manager does it, through the broker for this
+ * node and over the cluster's engine-control surface for another.
+ */
+async function reloadLmStudio(
+    model: string,
+    plan: SavedCapacityPlan,
+    remote: string | undefined
+): Promise<LmStudioReload> {
+    const numbers = { contextLength: plan.windowTokens, parallel: plan.sessions }
+    const supervisor = getModularSupervisor()
+    return parseLmStudioReload(
+        remote
+            ? await supervisor.callProcess(
+                  'broker',
+                  'engine:remote-reload-model',
+                  { node: remote, engine: 'lmstudio', model, params: numbers },
+                  MODULAR_ENGINE_LIFECYCLE_CALL_TIMEOUT_MS
+              )
+            : await supervisor.callProcess(
+                  'broker',
+                  'engine:reload-model',
+                  { engine: 'lmstudio', model, ...numbers },
+                  MODULAR_ENGINE_LIFECYCLE_CALL_TIMEOUT_MS
+              )
+    )
+}
+
+/**
+ * The result of reloading an LM Studio model. Its load command takes no
+ * expert placement or GPU split, so those stay in the model's load settings.
+ */
+export function lmStudioReloadedMessage(
+    model: string,
+    plan: SavedCapacityPlan,
+    gpuCount = 0
+): string {
+    const experts =
+        plan.cpuExpertLayers > 0
+            ? ` LM Studio's load command takes no expert placement: in the model's load settings, set Number of layers for which to force MoE weights onto CPU to ${plan.cpuExpertLayers}.`
+            : ''
+    const gpus =
+        gpuCount > 1
+            ? ` Keep every layer on the GPUs split across all ${gpuCount} of them in its load settings.`
+            : ''
+    return `LM Studio reloaded ${model} with a context length of ${plan.windowTokens} tokens and ${plan.sessions} parallel predictions.${experts}${gpus}`
 }
 
 let applying: Promise<ApplyPlanResult> | null = null
@@ -622,27 +688,33 @@ async function applyPlanNow(
     }
 
     if (engine === 'lmstudio') {
-        // LM Studio sets context per model load, outside PAIR's launch settings;
-        // PAIR still limits traffic to the plan.
-        await callNodeProxy(
-            'capacity/set',
-            {
-                engine,
-                model,
-                contextTokens: plan.windowTokens * plan.sessions,
-                maxSessions: plan.sessions,
-                replyTokens: replyBudget(plan)
-            },
-            remote
-        )
-        return {
-            applied: false,
-            message: lmStudioMessage(
-                model,
-                plan,
-                layout.gpus.length > 1 && !layout.error ? layout.gpus.length : 0
+        const gpuCount = layout.gpus.length > 1 && !layout.error ? layout.gpus.length : 0
+        const reload = await reloadLmStudio(model, plan, remote)
+        if (reload.outcome === 'unsupported') {
+            // Nothing was reloaded; PAIR still limits traffic to the plan.
+            await callNodeProxy(
+                'capacity/set',
+                {
+                    engine,
+                    model,
+                    contextTokens: plan.windowTokens * plan.sessions,
+                    maxSessions: plan.sessions,
+                    replyTokens: replyBudget(plan)
+                },
+                remote
             )
+            return {
+                applied: false,
+                message: `PAIR cannot reload LM Studio on this node (${reload.reason}). ${lmStudioMessage(model, plan, gpuCount)}`
+            }
         }
+        await markApplied()
+        log.info({
+            sublevel: 'apply',
+            message: 'Reloaded LM Studio model for capacity plan',
+            data: { engine, model, windowTokens: plan.windowTokens, sessions: plan.sessions }
+        })
+        return { applied: true, message: lmStudioReloadedMessage(model, plan, gpuCount) }
     }
     if (engine !== 'ollama' && engine !== 'llamacpp')
         return { applied: false, message: `unknown engine ${engine}` }
@@ -727,7 +799,6 @@ async function autoReloadTick(): Promise<void> {
     const pending = state.plans.filter(
         p =>
             !p.applied &&
-            p.engine !== 'lmstudio' &&
             Date.now() - (failedAt.get(`${p.engine}/${p.model}`) ?? 0) > FAILED_RETRY_MS
     )
     if (!state.autoReload || pending.length === 0 || !state.activity.idle) {
