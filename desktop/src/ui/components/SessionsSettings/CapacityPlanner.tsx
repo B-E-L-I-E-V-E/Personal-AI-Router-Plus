@@ -819,7 +819,13 @@ export default function CapacityPlanner({
                     Close
                 </Button>
             </Flex>
-            {engine !== 'lmstudio' && (
+            {engine === 'lmstudio' ? (
+                <Text kind="body/regular/sm" className="text-subtle-color">
+                    Applying unloads this model from LM Studio and loads it again with this context
+                    window and {chosen} parallel predictions. A large model takes minutes to load,
+                    and requests in progress on it are interrupted.
+                </Text>
+            ) : (
                 <Text kind="body/regular/sm" className="text-subtle-color">
                     Applying restarts{' '}
                     {engine === 'ollama' ? 'Ollama (every model it runs)' : 'llama.cpp'} with these

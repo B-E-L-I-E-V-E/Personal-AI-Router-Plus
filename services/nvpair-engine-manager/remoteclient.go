@@ -57,6 +57,15 @@ func waitsForEngineReadiness(path, engine string) bool {
 	return path == controlStartPath || path == controlDeletePath
 }
 
+// loadsWithSettings reports whether body is a load with explicit settings. The
+// peer answers only after `lms load` has the model in memory, minutes for a
+// large one, so the ordinary response-header budget would cut it off and the
+// peer would abandon the load.
+func loadsWithSettings(path string, body any) bool {
+	req, ok := body.(modelActionRequest)
+	return ok && path == controlLoadPath && req.Load != nil
+}
+
 func newRemoteHTTPClient(base *http.Transport, responseHeaderTimeout time.Duration) *http.Client {
 	tr := base.Clone()
 	tr.ResponseHeaderTimeout = responseHeaderTimeout
@@ -138,7 +147,7 @@ func (c *remoteClient) postJSON(ctx context.Context, path, engine string, body a
 	}
 	req.Header.Set("Content-Type", "application/json")
 	client := c.http
-	if waitsForEngineReadiness(path, engine) && c.readyHTTP != nil {
+	if (waitsForEngineReadiness(path, engine) || loadsWithSettings(path, body)) && c.readyHTTP != nil {
 		client = c.readyHTTP
 	}
 	resp, err := client.Do(req)

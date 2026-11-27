@@ -101,6 +101,7 @@ func (e *Executor) ModelsResult(ctx context.Context) ModelsResult {
 			defer wg.Done()
 			st, err := e.Status(name)
 			if err != nil || !st.Running {
+				e.forgetListed(name)
 				return
 			}
 			if listSpec != nil {
@@ -109,8 +110,20 @@ func (e *Executor) ModelsResult(ctx context.Context) ModelsResult {
 				} else if models, ok := extractStringsResult(raw, listSpec); ok {
 					perEngine[i] = models
 					listOK[i] = true
+					e.rememberListed(name, models)
 				} else {
 					slog.Debug("engine:models list_models returned an invalid inventory", "engine", name)
+				}
+				if !listOK[i] {
+					// LM Studio can leave this call unanswered for a while as it
+					// loads a large model. A running engine does not lose its
+					// models for that long, and peers that read the sweep would
+					// otherwise stop routing the engine's models to this node
+					// ("no available node advertises the requested model").
+					if last, ok := e.lastListedFor(name); ok {
+						perEngine[i] = last
+						listOK[i] = true
+					}
 				}
 			}
 			if loadedSpec != nil {
@@ -261,4 +274,30 @@ func resolveObjectPath(obj map[string]json.RawMessage, path string) (json.RawMes
 		value, ok = nested[part]
 	}
 	return value, ok
+}
+
+// rememberListed records an engine's successful model listing.
+func (e *Executor) rememberListed(engine string, models []string) {
+	e.listedMu.Lock()
+	defer e.listedMu.Unlock()
+	if e.lastListed == nil {
+		e.lastListed = make(map[string][]string)
+	}
+	e.lastListed[engine] = append([]string(nil), models...)
+}
+
+// lastListedFor returns the engine's last successful listing, a copy.
+func (e *Executor) lastListedFor(engine string) ([]string, bool) {
+	e.listedMu.Lock()
+	defer e.listedMu.Unlock()
+	models, ok := e.lastListed[engine]
+	return append([]string(nil), models...), ok
+}
+
+// forgetListed drops the listing of an engine that is no longer running, so a
+// restart never reports models from before it.
+func (e *Executor) forgetListed(engine string) {
+	e.listedMu.Lock()
+	defer e.listedMu.Unlock()
+	delete(e.lastListed, engine)
 }

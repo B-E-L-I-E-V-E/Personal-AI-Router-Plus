@@ -85,6 +85,10 @@
       "description": "Load a downloaded model into memory (params: {\"model\": \"<name>\"}).",
       "cmd": ["{cli}", "load", "{model}"]
     },
+    "load_model_with_settings": {
+      "description": "Load a downloaded model with an explicit context window and parallel prediction count (params: {\"model\": \"<name>\", \"context_length\": <tokens>, \"parallel\": <count>}). LM Studio fixes both when a model loads, and a load without them uses the model's own default.",
+      "cmd": ["{cli}", "load", "{model}", "--context-length", "{context_length}", "--parallel", "{parallel}", "--yes"]
+    },
     "list_downloaded": {
       "description": "List models downloaded to disk via the lms CLI.",
       "cmd": ["{cli}", "ls"]

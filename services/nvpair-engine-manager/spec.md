@@ -31,7 +31,7 @@ extensibility story for an open-source product.
 - Config-declared **actions** mapped to each engine's local control API:
   Ollama declares `list_models`, `loaded_models`, `pull_model`, `run_model`,
   `unload_model`, and `delete_model`; LM Studio declares
-  `list_models`/`list_downloaded`, `loaded_models`, `pull_model`, `load_model`,
+  `list_models`/`list_downloaded`, `loaded_models`, `pull_model`, `load_model`, `load_model_with_settings` (`lms load` with `--context-length` and `--parallel`),
   `chat`, `unload_model`, and `delete_model` (`remove_path` with
   `lms-disk-path` resolution);
   llama.cpp declares list, loaded-list, pull, load, unload, and native cache
@@ -49,7 +49,7 @@ extensibility story for an open-source product.
   and must not be started or adopted because its `/models` contract does not
   expose router residency state.
 - Per-engine stdout/stderr log capture and structured operational error records, surfaced via the errors pipeline.
-- A normalized node-level model list (`engine:models`): union of every running engine's `list_models`, name-extracted via each action's declarative `result` spec, plus the per-engine set of models loaded in memory (`loadedByEngine`, from each engine's `loaded_models` action). A successful explicit empty inventory remains an engine key with `[]`; a missing/malformed/failed inventory omits that engine key instead of being mislabeled as authoritative empty. A watcher polls the loaded set and pushes `engine:models-changed` when it changes (explicit load/unload, JIT auto-load, TTL/idle eviction).
+- A normalized node-level model list (`engine:models`): union of every running engine's `list_models`, name-extracted via each action's declarative `result` spec, plus the per-engine set of models loaded in memory (`loadedByEngine`, from each engine's `loaded_models` action). A successful explicit empty inventory remains an engine key with `[]`; a missing/malformed inventory omits that engine key instead of being mislabeled as authoritative empty. A running engine whose listing fails keeps its last successful listing (LM Studio can leave `list_models` unanswered while it loads a large model); a stopped engine forgets it. A watcher polls the loaded set and pushes `engine:models-changed` when it changes (explicit load/unload, JIT auto-load, TTL/idle eviction).
 - Expose all of the above over the `engine:*` JSON-RPC surface to whatever orchestrates the service, plus an optional plain-HTTP LAN endpoint (`--http-port`, `GET /v1/models`) that serves the model list to a peer's discovery daemon (the list moved off the size-limited mDNS TXT onto HTTP).
 
 **Out of scope**
@@ -152,7 +152,7 @@ Requests (caller → service):
 | `engine:remote-get-installed` | `{ node }` | `{ engines: [EngineStatus] }` from the remote node |
 | `engine:remote-install` | `{ node, engine, start? }` | `{ opId, status }` after the remote install |
 | `engine:remote-pull-model` | `{ node, engine, model?, params? }` | `{ opId, result }` after the remote pull |
-| `engine:remote-load-model` | `{ node, engine, model }` | the remote action result |
+| `engine:remote-load-model` | `{ node, engine, model, load? }` | the remote action result. `load` is `{ contextLength, parallel }`, accepted for LM Studio only: the peer runs its `load_model_with_settings` action, and answers once the model is in memory. The caller unloads a loaded copy first |
 | `engine:remote-unload-model` | `{ node, engine, model }` | the remote action result |
 | `engine:remote-delete-model` | `{ node, engine, model }` | the remote action result |
 | `engine:remote-start` | `{ node, engine, port? }` | `EngineStatus` from the remote node (manifest `runtime.bind`; no per-call bind on the remote path) |

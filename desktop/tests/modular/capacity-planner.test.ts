@@ -32,14 +32,12 @@ import {
     getPlanner,
     launchDefaults,
     llamaCppLaunchText,
-    lmStudioMessage,
     ollamaLaunchText,
     parsePlanner,
     planCapacity,
     runAutoReloadCheckForTest,
     splitLaunchTokens
 } from '@/electron/service-bridge/capacity-planner'
-import type { SavedCapacityPlan } from '@/shared/types/sessions'
 
 const plan = { windowTokens: 32768, sessions: 4, cacheType: 'f16' as const }
 
@@ -151,26 +149,6 @@ describe('expert offload', () => {
         expect(llamaCppLaunchText('-cmoe --n-cpu-moe 12 -ncmoe=3 --temp 0.7', plan)).toBe(
             '--temp 0.7 --ctx-size 131072 --parallel 4'
         )
-    })
-
-    it('tells the user what to set in LM Studio, expert layers included', () => {
-        const saved: SavedCapacityPlan = {
-            engine: 'lmstudio',
-            model: 'm',
-            windowTokens: 32768,
-            sessions: 2,
-            cacheType: 'f16',
-            reservePercent: 10,
-            cpuExpertLayers: 20,
-            replyTokens: 0,
-            applied: false,
-            appliedAt: 0,
-            savedAt: 0
-        }
-        expect(lmStudioMessage('m', saved)).toContain(
-            'Number of layers for which to force MoE weights onto CPU to 20'
-        )
-        expect(lmStudioMessage('m', { ...saved, cpuExpertLayers: 0 })).not.toContain('MoE')
     })
 
     it('sends system memory and the expert split with a plan request', async () => {
@@ -447,32 +425,130 @@ describe('capacity planner bridge', () => {
         })
     })
 
+    const lmPlan = {
+        engine: 'lmstudio',
+        model: 'qwen/qwen3.8-27b',
+        windowTokens: 262144,
+        sessions: 4,
+        cacheType: 'f16',
+        applied: false
+    }
+
+    /** A proxy answering the planner, and capacity reports that follow `loads`. */
+    function lmStudioProxy(loads: Array<{ windowTokens: number; slots: number } | null>) {
+        const reports = [...loads]
+        callProxy.mockImplementation(async (_e: string, method: string) => {
+            if (method === 'capacity/planner') return plannerState({ plans: [lmPlan] })
+            if (method === 'capacity/report') {
+                const load = reports.length > 1 ? reports.shift() : reports[0]
+                return {
+                    models: [
+                        {
+                            engine: 'lmstudio',
+                            model: 'qwen/qwen3.8-27b',
+                            detected: load ?? {}
+                        }
+                    ]
+                }
+            }
+            return {}
+        })
+    }
+
     it('limits LM Studio traffic with the plan’s reply budget', async () => {
-        callProxy.mockImplementation(async (_e: string, method: string) =>
-            method === 'capacity/planner'
-                ? plannerState({
-                      plans: [
-                          {
-                              engine: 'lmstudio',
-                              model: 'm',
-                              windowTokens: 8192,
-                              sessions: 2,
-                              cacheType: 'f16',
-                              applied: false
-                          }
-                      ]
-                  })
-                : {}
-        )
-        await applyPlan({ engine: 'lmstudio', model: 'm' })
+        lmStudioProxy([{ windowTokens: 262144, slots: 4 }])
+        await applyPlan({ engine: 'lmstudio', model: 'qwen/qwen3.8-27b' })
         const set = callProxy.mock.calls.find(c => c[1] === 'capacity/set')
-        // The default 8,192 is more than half this window, so half is kept.
         expect(set?.[2]).toEqual({
             engine: 'lmstudio',
-            model: 'm',
-            contextTokens: 16384,
-            maxSessions: 2,
-            replyTokens: 4096
+            model: 'qwen/qwen3.8-27b',
+            contextTokens: 1048576,
+            maxSessions: 4,
+            replyTokens: 8192
+        })
+    })
+
+    it('reloads a loaded LM Studio model with the plan’s window and slots', async () => {
+        // Loaded with 8,192 before the apply, with the plan after it.
+        lmStudioProxy([
+            { windowTokens: 8192, slots: 4 },
+            { windowTokens: 262144, slots: 4 }
+        ])
+        callProcess.mockResolvedValue({})
+        const result = await applyPlan({ engine: 'lmstudio', model: 'qwen/qwen3.8-27b' })
+        expect(result.applied).toBe(true)
+        const calls = callProcess.mock.calls.filter(c => c[1] === 'engine:action')
+        expect(calls.map(c => c[2].action)).toEqual(['unload_model', 'load_model_with_settings'])
+        expect(calls[1][2].params).toEqual({
+            model: 'qwen/qwen3.8-27b',
+            context_length: 262144,
+            parallel: 4
+        })
+        const applied = callProxy.mock.calls.find(c => c[1] === 'capacity/planner-set')
+        expect(applied?.[2].applied).toMatchObject({ engine: 'lmstudio', windowTokens: 262144 })
+    })
+
+    it('loads an LM Studio model that is not loaded, without unloading first', async () => {
+        lmStudioProxy([null, { windowTokens: 262144, slots: 4 }])
+        callProcess.mockResolvedValue({})
+        const result = await applyPlan({ engine: 'lmstudio', model: 'qwen/qwen3.8-27b' })
+        expect(result.applied).toBe(true)
+        expect(callProcess.mock.calls.map(c => c[2].action)).toEqual(['load_model_with_settings'])
+    })
+
+    it('does not reload an LM Studio model that already has the plan', async () => {
+        lmStudioProxy([{ windowTokens: 262144, slots: 4 }])
+        const result = await applyPlan({ engine: 'lmstudio', model: 'qwen/qwen3.8-27b' })
+        expect(result.applied).toBe(true)
+        expect(callProcess).not.toHaveBeenCalled()
+    })
+
+    it('reports a load LM Studio did not honour instead of marking it applied', async () => {
+        lmStudioProxy([{ windowTokens: 8192, slots: 4 }])
+        callProcess.mockResolvedValue({})
+        const result = await applyPlan({ engine: 'lmstudio', model: 'qwen/qwen3.8-27b' })
+        expect(result.applied).toBe(false)
+        expect(result.message).toContain('not the planned 262144')
+        expect(callProxy.mock.calls.some(c => c[1] === 'capacity/planner-set')).toBe(false)
+    })
+
+    it('loads and unloads a remote LM Studio model through its node', async () => {
+        callProxy.mockImplementation(
+            async (_e: string, _method: string, params: { method?: string }) => {
+                if (params.method === 'capacity/planner') return plannerState({ plans: [lmPlan] })
+                if (params.method === 'capacity/report') {
+                    return {
+                        models: [
+                            {
+                                engine: 'lmstudio',
+                                model: 'qwen/qwen3.8-27b',
+                                detected:
+                                    callProcess.mock.calls.length >= 2
+                                        ? { windowTokens: 262144, slots: 4 }
+                                        : { windowTokens: 8192, slots: 4 }
+                            }
+                        ]
+                    }
+                }
+                return {}
+            }
+        )
+        callProcess.mockResolvedValue({})
+        const result = await applyPlan({
+            engine: 'lmstudio',
+            model: 'qwen/qwen3.8-27b',
+            nodeId: 'node-2'
+        })
+        expect(result.applied).toBe(true)
+        expect(callProcess.mock.calls.map(c => c[1])).toEqual([
+            'engine:remote-unload-model',
+            'engine:remote-load-model'
+        ])
+        expect(callProcess.mock.calls[1][2]).toEqual({
+            node: 'node-2',
+            engine: 'lmstudio',
+            model: 'qwen/qwen3.8-27b',
+            load: { contextLength: 262144, parallel: 4 }
         })
     })
 
