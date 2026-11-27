@@ -13,6 +13,13 @@ release workflow, with macOS builds signed and notarized; the app updates from
 those releases. A build made locally from source is unsigned unless built with
 `PAIR_MAC_SIGN=1`, and updates only once a release exists.
 
+## 1.3.9 — LM Studio models load with the context window and sessions you plan (#27)
+
+- Apply now and Save and apply now reload an LM Studio model with the planned context window and parallel sessions, on this node or another one. Before, PAIR only limited its own traffic and the model kept LM Studio's default context.
+- A plan counts as applied only when LM Studio reports the planned context. The plan line and the model row show what is loaded, for example "not applied: loaded with 8,192 tokens".
+- Reload automatically when idle reloads an LM Studio model that is loaded with other settings. It never loads a model that is not loaded.
+- A node keeps advertising an engine's models while the engine is busy loading a large model.
+
 ## 1.3.7 — Split a mixture-of-experts model between GPU and system memory (#17)
 
 - **Context & sessions…** for a mixture-of-experts model now has an **Expert layers kept on the GPU** slider instead of an all-or-nothing switch. The GPU memory and system memory bars follow it, sized from each layer's exact expert weights in the model's tensor table (layers differ in mixed quantizations; dense leading layers have none).
