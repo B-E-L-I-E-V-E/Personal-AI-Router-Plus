@@ -123,6 +123,11 @@ type Executor struct {
 	// immediate out-of-cycle loaded-set check instead of waiting for the next
 	// tick. Buffered depth 1: a coalesced signal is enough.
 	loadedPoke chan struct{}
+	// listedMu guards lastListed, each running engine's last successful
+	// list_models answer. A sweep that cannot list a running engine reuses it
+	// (see ModelsResult) instead of reporting the engine as having no models.
+	listedMu   sync.Mutex
+	lastListed map[string][]string
 
 	reservedPort atomic.Int32
 	// StopAll is terminal for an Executor; the gate closes its start/snapshot race.

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ModelCapacity, SavedCapacityPlan } from '@/shared/types/sessions'
-import { planStatus } from '@/ui/components/SessionsSettings/plan-status'
+import { loadDiffersFromPlan, planStatus } from '@/ui/components/SessionsSettings/plan-status'
 
 /** The proxy's capacity row for one model, if it reports one. */
 export function findCapacity(
@@ -58,7 +58,15 @@ export function modelConfigLines(
 ): ModelConfigLines {
     const summary = capacitySummary(capacity)
     if (!plan) return summary ? { summary } : {}
-    const planLine = planStatus(plan, autoReload)
+    const loaded = capacity?.detectedWindowTokens ?? 0
+    const planLine = planStatus(plan, autoReload, loaded)
+    // The engine runs the model with other settings than the plan, so the
+    // limits PAIR holds traffic to are not what the model has: say what it has.
+    if (loadDiffersFromPlan(plan, loaded)) {
+        return loaded > 0
+            ? { summary: `Loaded now: ${loaded.toLocaleString()} tokens per session`, planLine }
+            : { summary: summary ? `Now: ${summary}` : undefined, planLine }
+    }
     if (!summary) return { planLine }
     if (plan.applied && capacity?.source === 'configured') return { summary }
     return { summary: `Now: ${summary}`, planLine }

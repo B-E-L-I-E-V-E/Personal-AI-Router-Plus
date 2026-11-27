@@ -132,4 +132,23 @@ describe('model row config lines', () => {
     it('shows nothing without a plan or report', () => {
         expect(modelConfigLines(undefined, undefined, true)).toEqual({})
     })
+
+    it('shows what LM Studio loaded when it differs from an applied plan', () => {
+        const lines = modelConfigLines(
+            capacity({ engine: 'lmstudio', detectedWindowTokens: 8192 }),
+            plan({ engine: 'lmstudio', windowTokens: 262144 }),
+            true
+        )
+        expect(lines.summary).toBe('Loaded now: 8,192 tokens per session')
+        expect(lines.planLine).toContain('not applied: loaded with 8,192 tokens')
+    })
+
+    it('shows only the summary when LM Studio runs the plan', () => {
+        const lines = modelConfigLines(
+            capacity({ engine: 'lmstudio', detectedWindowTokens: 40960 }),
+            plan({ engine: 'lmstudio' }),
+            true
+        )
+        expect(lines.planLine).toBeUndefined()
+    })
 })

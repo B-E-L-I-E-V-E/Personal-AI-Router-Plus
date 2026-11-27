@@ -50,13 +50,17 @@ func (s *controlServer) handleModelAction(w http.ResponseWriter, r *http.Request
 		http.Error(w, `"model" is required`, http.StatusBadRequest)
 		return
 	}
+	if req.Load != nil && op != "load" {
+		http.Error(w, `"load" only applies to a load`, http.StatusBadRequest)
+		return
+	}
 	var (
 		res json.RawMessage
 		err error
 	)
 	switch op {
 	case "load":
-		res, err = s.exec.ModelLoad(r.Context(), req.Engine, req.Model)
+		res, err = s.exec.ModelLoad(r.Context(), req.Engine, req.Model, req.Load)
 	case "unload":
 		res, err = s.exec.ModelUnload(r.Context(), req.Engine, req.Model)
 	case "delete":

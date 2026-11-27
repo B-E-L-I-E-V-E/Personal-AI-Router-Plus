@@ -388,3 +388,40 @@ func TestSameStringSet(t *testing.T) {
 		})
 	}
 }
+
+// A running engine whose listing cannot be read for a moment, as LM Studio's is
+// while it loads a large model, keeps the models it last listed. A sweep that
+// dropped them would make peers stop routing the engine's models to this node.
+func TestModelsResultKeepsLastListingWhileEngineIsBusy(t *testing.T) {
+	m := testEngineManifest(fakeEngineBin)
+	m.Actions["list_models"] = Action{
+		HTTP:   &ActionHTTP{Method: "GET", Path: "/api/tags"},
+		Result: &ActionResult{Array: "models", Field: "name"},
+	}
+	ex := newTestExecutor(t, m)
+	ctx := context.Background()
+	t.Cleanup(func() { _ = ex.Stop("fake") })
+	if err := ex.Start(ctx, "fake"); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	want := map[string][]string{"fake": {"llama3.2:1b"}}
+	if res := ex.ModelsResult(ctx); !reflect.DeepEqual(res.ByEngine, want) {
+		t.Fatalf("first sweep ByEngine = %v, want %v", res.ByEngine, want)
+	}
+
+	// The listing cannot be read: the sweep's own context is already over.
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	res := ex.ModelsResult(cancelled)
+	if !reflect.DeepEqual(res.ByEngine, want) || !reflect.DeepEqual(res.Models, []string{"llama3.2:1b"}) {
+		t.Fatalf("sweep with an unreadable listing = %v / %v, want the last listing", res.Models, res.ByEngine)
+	}
+
+	// A stopped engine is not queryable, and a restart never reports old models.
+	if err := ex.Stop("fake"); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if res := ex.ModelsResult(cancelled); len(res.ByEngine) != 0 {
+		t.Fatalf("stopped engine ByEngine = %v, want none", res.ByEngine)
+	}
+}

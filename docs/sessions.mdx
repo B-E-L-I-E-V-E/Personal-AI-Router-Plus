@@ -316,7 +316,7 @@ many layers on the GPU as the sessions you need allow.
 | Engine | Expert split |
 | --- | --- |
 | llama.cpp | Applied with `--n-cpu-moe N`: the experts of the first N layers in system memory |
-| LM Studio | Planned; applying tells you the value for **Number of layers for which to force MoE weights onto CPU** in the model's load settings |
+| LM Studio | Planned; applying tells you the value for **Number of layers for which to force MoE weights onto CPU** in the model's load settings, because `lms load` takes no expert placement |
 | Ollama | Not available: Ollama has no setting that keeps only the experts on the CPU (`num_gpu` moves whole layers, attention included) |
 
 On Apple silicon it is never offered: the GPU and the CPU share one memory, so
@@ -374,9 +374,9 @@ limits PAIR's traffic to the plan:
 | --- | --- |
 | Ollama | `OLLAMA_CONTEXT_LENGTH` and `OLLAMA_NUM_PARALLEL`. These apply to every model Ollama runs, so one Ollama plan replaces another |
 | llama.cpp | `--ctx-size` (window × sessions) and `--parallel` |
-| LM Studio | Not restarted. PAIR limits traffic to the plan; set the same context length and parallel count when you load the model |
+| LM Studio | The model is unloaded and loaded again with `lms load --context-length <window> --parallel <sessions>`. LM Studio fixes both when a model loads, so only a reload changes them. PAIR reads the loaded context back and counts the plan as applied only when LM Studio reports it |
 
-Restarting interrupts requests running on that engine. PAIR cannot restart an
+Restarting, or for LM Studio reloading, interrupts requests running on that engine; a large model takes minutes to load. PAIR cannot restart an
 engine it did not install, such as your own Ollama; it says so instead.
 
 **Reload automatically when idle** (on by default) applies a saved plan by
@@ -386,6 +386,14 @@ apply now** or **Apply now**. The switch is in the dialog and covers every model
 on the node. A saved plan's status shows at the top of the dialog, with **Apply
 now** while it is pending and **Remove plan**, which also lifts the limit the
 plan set.
+
+For LM Studio the status compares the plan with what the model is loaded with,
+as LM Studio reports it, rather than with a saved flag: "not applied: loaded
+with 8,192 tokens" says the plan has not reached the engine, and the model row
+shows "Loaded now" with that number. Reloading when idle reloads a model that is
+already loaded with other settings; it never loads a model that is not loaded,
+since a large model takes minutes and gigabytes to load. Press **Apply now** to
+load it with the plan.
 
 ![The top of the dialog with a saved plan: 21 × 40,960 tokens, 8,192 for replies, will apply when this node is idle, with Apply now and Remove plan buttons.](assets/onboarding/sessions/05-saved-plan.png)
 

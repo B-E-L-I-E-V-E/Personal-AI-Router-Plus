@@ -26,6 +26,8 @@ type remoteParam struct {
 	Port   int             `json:"port,omitempty"`
 	Model  string          `json:"model,omitempty"`
 	Params json.RawMessage `json:"params,omitempty"`
+	// Load is the context window and parallel count for engine:remote-load-model.
+	Load *loadSettings `json:"load,omitempty"`
 }
 
 // remoteProgress is the engine:remote-progress notification payload the broker
@@ -123,7 +125,7 @@ func (m *Manager) runRemote(ctx context.Context, msg *Message) {
 		case "engine:remote-delete-model":
 			path = controlDeletePath
 		}
-		res, err := client.postJSON(ctx, path, p.Engine, modelActionRequest{Engine: p.Engine, Model: p.Model})
+		res, err := client.postJSON(ctx, path, p.Engine, modelActionRequest{Engine: p.Engine, Model: p.Model, Load: p.Load})
 		m.respondOrErr(msg, res, err)
 
 	case "engine:remote-start":

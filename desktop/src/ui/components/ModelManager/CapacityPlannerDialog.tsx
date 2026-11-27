@@ -16,8 +16,9 @@ import {
 import getErrorString from '@/shared/utils/get-error-string'
 import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
 import CapacityPlanner from '@/ui/components/SessionsSettings/CapacityPlanner'
-import { planStatus } from '@/ui/components/SessionsSettings/plan-status'
+import { planNeedsApply, planStatus } from '@/ui/components/SessionsSettings/plan-status'
 import { useConnectionStore } from '@/ui/stores/connection.store'
+import { findCapacity } from '@/ui/components/ModelManager/model-config-summary'
 import {
     findPlan,
     removePlanAndLimit,
@@ -65,6 +66,12 @@ export function CapacityPlannerDialog({
         remote ? setPeerPlanner(remote, state) : setOwnPlanner(state)
     const refresh = () => (remote ? refreshPeer(remote) : refreshOwn())
     const saved = findPlan(planner, engine, model)
+    const ownCapacity = useCapacityPlannerStore(s => s.capacity)
+    const peerCapacity = useCapacityPlannerStore(s => (remote ? s.peerCapacity[remote] : undefined))
+    // What the engine runs the model with now, as it reports it (0: not loaded).
+    const loadedWindow =
+        findCapacity(remote ? (peerCapacity ?? null) : ownCapacity, engine, model)
+            ?.detectedWindowTokens ?? 0
     const [error, setError] = useState<string | null>(null)
     const [result, setResult] = useState<string | null>(null)
     const [busy, setBusy] = useState(false)
@@ -80,6 +87,7 @@ export function CapacityPlannerDialog({
         run(async () => {
             const applied = await window.pairApi.sessions.applyPlan(engine, model, remote)
             setPlanner(await window.pairApi.sessions.getPlanner(remote))
+            void refresh()
             setResult(applied.message)
         }, 'Could not apply the plan')
     // Removing a plan also lifts the limit it set, so the model goes back to
@@ -132,8 +140,9 @@ export function CapacityPlannerDialog({
                         {remote && unreachable === undefined && !result && (
                             <Text kind="body/regular/sm" className="text-subtle-color">
                                 Planned for {where}’s GPUs and memory, and saved on {where}.
-                                Applying restarts the engine on {where}. Reloading when idle is done
-                                by PAIR on {where}, so it needs PAIR running there.
+                                Applying restarts the engine on {where} (LM Studio: reloads the
+                                model). Reloading when idle is done by PAIR on {where}, so it needs
+                                PAIR running there.
                             </Text>
                         )}
                         {error && (
@@ -141,9 +150,11 @@ export function CapacityPlannerDialog({
                         )}
                         {saved && !result && unreachable === undefined && (
                             <Flex justify="between" align="center" gap="2" wrap="wrap">
-                                <Text kind="body/regular/sm">{planStatus(saved, autoReload)}</Text>
+                                <Text kind="body/regular/sm">
+                                    {planStatus(saved, autoReload, loadedWindow)}
+                                </Text>
                                 <Flex gap="2">
-                                    {!saved.applied && (
+                                    {planNeedsApply(saved, loadedWindow) && (
                                         <Button
                                             size="small"
                                             kind="primary"

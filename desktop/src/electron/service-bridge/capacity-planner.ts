@@ -542,19 +542,117 @@ function replyBudget(plan: SavedCapacityPlan): number {
     return Math.min(plan.replyTokens || DEFAULT_REPLY_TOKENS, Math.floor(plan.windowTokens / 2))
 }
 
+/** What LM Studio runs a model with now: zero when the model is not loaded. */
+interface LmStudioLoad {
+    windowTokens: number
+    slots: number
+}
+
+/** Reads the loaded instance of one LM Studio model from its node's capacity report. */
+async function readLmStudioLoad(model: string, nodeId?: string): Promise<LmStudioLoad> {
+    const report = objectValue(await callNodeProxy('capacity/report', {}, nodeId))
+    for (const entry of arrayValue(report?.models)) {
+        const row = objectValue(entry)
+        if (row?.engine !== 'lmstudio' || row.model !== model) continue
+        const detected = objectValue(row.detected)
+        return {
+            windowTokens: numberValue(detected?.windowTokens),
+            slots: numberValue(detected?.slots)
+        }
+    }
+    return { windowTokens: 0, slots: 0 }
+}
+
+/** Whether the loaded instance already has the plan's window and slots. */
+function lmStudioLoadMatches(load: LmStudioLoad, plan: SavedCapacityPlan): boolean {
+    return load.windowTokens === plan.windowTokens && load.slots === plan.sessions
+}
+
 /**
- * What to set in LM Studio, which takes context, slots and expert placement
- * per model load, outside PAIR's launch settings. Its REST load takes no
- * expert placement, so the user sets it in the model's load settings.
+ * Reloads an LM Studio model with a plan's context window and slots: unloads
+ * the loaded copy, loads it again with those settings, then reads back what
+ * LM Studio reports. It is applied only when LM Studio reports the plan's
+ * window; a load that came back different is reported, not claimed.
  */
-export function lmStudioMessage(model: string, plan: SavedCapacityPlan, gpuCount = 0): string {
+async function loadLmStudioWithPlan(
+    model: string,
+    plan: SavedCapacityPlan,
+    remote: string | undefined
+): Promise<ApplyPlanResult> {
+    const before = await readLmStudioLoad(model, remote)
+    if (before.windowTokens > 0 && lmStudioLoadMatches(before, plan)) {
+        return {
+            applied: true,
+            message: `${model} is already loaded in LM Studio with ${plan.sessions} sessions and a ${plan.windowTokens}-token context.`
+        }
+    }
+    const supervisor = getModularSupervisor()
+    if (before.windowTokens > 0) {
+        // LM Studio keeps a loaded copy as it is and would add a second one.
+        if (remote) {
+            await supervisor.callProcess(
+                'broker',
+                'engine:remote-unload-model',
+                { node: remote, engine: 'lmstudio', model },
+                MODULAR_ENGINE_LIFECYCLE_CALL_TIMEOUT_MS
+            )
+        } else {
+            await supervisor.callProcess(
+                'broker',
+                'engine:action',
+                { engine: 'lmstudio', action: 'unload_model', params: { model } },
+                MODULAR_ENGINE_LIFECYCLE_CALL_TIMEOUT_MS
+            )
+        }
+    }
+    if (remote) {
+        await supervisor.callProcess(
+            'broker',
+            'engine:remote-load-model',
+            {
+                node: remote,
+                engine: 'lmstudio',
+                model,
+                load: { contextLength: plan.windowTokens, parallel: plan.sessions }
+            },
+            MODULAR_ENGINE_LIFECYCLE_CALL_TIMEOUT_MS
+        )
+    } else {
+        await supervisor.callProcess(
+            'broker',
+            'engine:action',
+            {
+                engine: 'lmstudio',
+                action: 'load_model_with_settings',
+                params: {
+                    model,
+                    context_length: plan.windowTokens,
+                    parallel: plan.sessions
+                }
+            },
+            MODULAR_ENGINE_LIFECYCLE_CALL_TIMEOUT_MS
+        )
+    }
+    const after = await readLmStudioLoad(model, remote)
+    if (after.windowTokens !== plan.windowTokens) {
+        return {
+            applied: false,
+            message: `LM Studio loaded ${model} with ${after.windowTokens > 0 ? `a ${after.windowTokens}-token context` : 'no context it reports'}, not the planned ${plan.windowTokens}. The plan is not applied.`
+        }
+    }
+    log.info({
+        sublevel: 'apply',
+        message: 'Loaded LM Studio model with capacity plan',
+        data: { model, windowTokens: plan.windowTokens, sessions: plan.sessions }
+    })
     const experts =
         plan.cpuExpertLayers > 0
-            ? `, Number of layers for which to force MoE weights onto CPU to ${plan.cpuExpertLayers}`
+            ? ` LM Studio takes no expert placement from PAIR: in the model's load settings, set Number of layers for which to force MoE weights onto CPU to ${plan.cpuExpertLayers}.`
             : ''
-    const gpus =
-        gpuCount > 1 ? `, with every layer on the GPUs split across all ${gpuCount} of them` : ''
-    return `PAIR now limits ${model} to ${plan.sessions} sessions of ${plan.windowTokens} tokens. LM Studio sets these when it loads a model: in the model's load settings, set Context Length to ${plan.windowTokens} and Max Concurrent Predictions to ${plan.sessions}${experts}${gpus}, then reload it.`
+    return {
+        applied: true,
+        message: `${model} reloaded in LM Studio with ${plan.sessions} sessions and a ${plan.windowTokens}-token context.${experts}`
+    }
 }
 
 let applying: Promise<ApplyPlanResult> | null = null
@@ -622,8 +720,9 @@ async function applyPlanNow(
     }
 
     if (engine === 'lmstudio') {
-        // LM Studio sets context per model load, outside PAIR's launch settings;
-        // PAIR still limits traffic to the plan.
+        // PAIR limits its own traffic to the plan, then loads the model with
+        // the plan's window and slots: LM Studio fixes both per model load, so
+        // only a reload changes what the engine runs with.
         await callNodeProxy(
             'capacity/set',
             {
@@ -635,14 +734,9 @@ async function applyPlanNow(
             },
             remote
         )
-        return {
-            applied: false,
-            message: lmStudioMessage(
-                model,
-                plan,
-                layout.gpus.length > 1 && !layout.error ? layout.gpus.length : 0
-            )
-        }
+        const result = await loadLmStudioWithPlan(model, plan, remote)
+        if (result.applied) await markApplied()
+        return result
     }
     if (engine !== 'ollama' && engine !== 'llamacpp')
         return { applied: false, message: `unknown engine ${engine}` }
@@ -716,6 +810,30 @@ let timer: ReturnType<typeof setInterval> | null = null
 let idleChecks = 0
 const failedAt = new Map<string, number>()
 
+/**
+ * The plans an idle node should apply by itself. An Ollama or llama.cpp plan is
+ * pending until applied. An LM Studio plan is pending when its model is loaded
+ * with other settings: PAIR reloads a loaded model, but never loads one nobody
+ * asked for, since a large model takes minutes and gigabytes to load.
+ */
+async function pendingPlans(plans: SavedCapacityPlan[]): Promise<SavedCapacityPlan[]> {
+    const pending: SavedCapacityPlan[] = []
+    for (const p of plans) {
+        if (Date.now() - (failedAt.get(`${p.engine}/${p.model}`) ?? 0) <= FAILED_RETRY_MS) continue
+        if (p.engine !== 'lmstudio') {
+            if (!p.applied) pending.push(p)
+            continue
+        }
+        try {
+            const load = await readLmStudioLoad(p.model)
+            if (load.windowTokens > 0 && !lmStudioLoadMatches(load, p)) pending.push(p)
+        } catch {
+            // LM Studio did not answer; look again on the next check.
+        }
+    }
+    return pending
+}
+
 async function autoReloadTick(): Promise<void> {
     if (applying) return
     let state: PlannerState
@@ -724,13 +842,12 @@ async function autoReloadTick(): Promise<void> {
     } catch {
         return // services not up
     }
-    const pending = state.plans.filter(
-        p =>
-            !p.applied &&
-            p.engine !== 'lmstudio' &&
-            Date.now() - (failedAt.get(`${p.engine}/${p.model}`) ?? 0) > FAILED_RETRY_MS
-    )
-    if (!state.autoReload || pending.length === 0 || !state.activity.idle) {
+    if (!state.autoReload || !state.activity.idle) {
+        idleChecks = 0
+        return
+    }
+    const pending = await pendingPlans(state.plans)
+    if (pending.length === 0) {
         idleChecks = 0
         return
     }
