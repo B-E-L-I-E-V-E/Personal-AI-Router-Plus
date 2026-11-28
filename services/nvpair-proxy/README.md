@@ -194,10 +194,19 @@ reports counts. See `spec.md` §5.12.
 A cluster member reads this node's capacity from the mTLS ingress's
 `GET /pair/v1/peer/capacity`, and plans or changes it through
 `POST /pair/v1/peer/capacity/call` (`capacity/plan`, `capacity/planner`,
-`capacity/planner-set`, `capacity/set`, `capacity/report`), run here as for
+`capacity/planner-set`, `capacity/set`, `capacity/report`, `capacity/thinking`), run here as for
 this node's own desktop. The JSON-RPC requests `capacity/peer-report`
 `{"nodeId"}` and `capacity/peer-call` `{"nodeId","method","params"}` reach a
 pinned peer this way. See `spec.md` §5.14.
+
+`capacity/thinking` `{"engine":"lmstudio","model","set"?,"clear"?}` reads, sets
+or clears whether an LM Studio model thinks before it replies. LM Studio holds
+that per model, not per request: it reads a custom field the model declares in
+its hub `model.yaml` from the model's default configuration file
+(`~/.lmstudio/.internal/user-concrete-model-default-config/<model>.json`,
+`operation.fields`), so PAIR edits only that one entry, keeps every other field
+and key, and refuses a file it cannot parse. The change applies on the next
+request with no reload. The answer is `{"supported","reason","default","value","explicit"}`.
 
 **Performance.** PAIR measures every generation request this node routes:
 tokens in and out, reading and writing speed in tokens per second, time to

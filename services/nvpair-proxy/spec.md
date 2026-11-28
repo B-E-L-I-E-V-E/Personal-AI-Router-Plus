@@ -737,8 +737,9 @@ that.
 - **Planning and changing a peer's capacity.** Any cluster member may manage
   any node, so a peer's mTLS ingress answers `POST /pair/v1/peer/capacity/call`
   with `{"method","params"}`, where method is one of `capacity/report`,
-  `capacity/plan`, `capacity/planner`, `capacity/planner-set` and
-  `capacity/set`. The node runs it as it would for its own desktop and answers
+  `capacity/plan`, `capacity/planner`, `capacity/planner-set`,
+  `capacity/set` and `capacity/thinking` (an LM Studio model's thinking setting,
+  kept in LM Studio's per-model default configuration). The node runs it as it would for its own desktop and answers
   `200` `{"result"}` with that method's result, or `400` `{"error"}` with its
   refusal; any other method or body is `400`, any other HTTP method `405`.
   Each change is logged with the calling member's cluster UUID. A plan is

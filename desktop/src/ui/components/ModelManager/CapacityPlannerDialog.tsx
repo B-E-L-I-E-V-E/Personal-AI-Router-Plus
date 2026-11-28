@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
     Button,
     Flex,
@@ -13,6 +13,7 @@ import {
     Switch,
     Text
 } from '@nvidia/foundations-react-core'
+import type { ThinkingState } from '@/shared/types/sessions'
 import getErrorString from '@/shared/utils/get-error-string'
 import { InlineErrorBanner } from '@/ui/components/InlineErrorBanner'
 import CapacityPlanner from '@/ui/components/SessionsSettings/CapacityPlanner'
@@ -76,6 +77,20 @@ export function CapacityPlannerDialog({
     const [result, setResult] = useState<string | null>(null)
     const [busy, setBusy] = useState(false)
     const autoReload = planner?.autoReload ?? true
+    const [thinking, setThinkingState] = useState<ThinkingState | null>(null)
+
+    // LM Studio holds thinking per model, on the node that runs it.
+    useEffect(() => {
+        if (engine !== 'lmstudio') return
+        let current = true
+        window.pairApi.sessions
+            .getThinking(engine, model, remote)
+            .then(state => current && setThinkingState(state))
+            .catch(() => current && setThinkingState(null))
+        return () => {
+            current = false
+        }
+    }, [engine, model, remote])
 
     const run = (work: () => Promise<void>, failure: string) => {
         setBusy(true)
@@ -98,6 +113,12 @@ export function CapacityPlannerDialog({
             void refresh()
             onClose()
         }, 'Could not remove the plan')
+    const changeThinking = (value: boolean | null) =>
+        run(async () => {
+            setThinkingState(
+                await window.pairApi.sessions.setThinking(engine, model, value, remote)
+            )
+        }, 'Could not change thinking')
     const setAutoReload = (on: boolean) =>
         run(async () => {
             setPlanner(await window.pairApi.sessions.setPlanner({ nodeId: remote, autoReload: on }))
@@ -200,6 +221,45 @@ export function CapacityPlannerDialog({
                                 </Stack>
                             </Flex>
                         )}
+                        {engine === 'lmstudio' &&
+                            thinking?.supported &&
+                            !result &&
+                            unreachable === undefined && (
+                                <Flex align="center" gap="3">
+                                    <Switch
+                                        checked={thinking.value}
+                                        size="small"
+                                        disabled={busy}
+                                        aria-label="Thinking"
+                                        onCheckedChange={checked =>
+                                            changeThinking(checked === true)
+                                        }
+                                    />
+                                    <Stack gap="0">
+                                        <Text kind="body/semibold/sm">
+                                            Thinking: {thinking.value ? 'on' : 'off'}
+                                            {thinking.explicit ? '' : ` (the model’s default)`}
+                                        </Text>
+                                        <Text kind="body/regular/sm" className="text-subtle-color">
+                                            Whether the model reasons before it replies. LM Studio
+                                            holds this per model on {where}, and applies it to the
+                                            next request without a reload. With thinking on, a reply
+                                            that must follow a JSON schema can arrive in the
+                                            reasoning field and leave the content empty.
+                                        </Text>
+                                    </Stack>
+                                    {thinking.explicit && (
+                                        <Button
+                                            size="small"
+                                            kind="tertiary"
+                                            disabled={busy}
+                                            onClick={() => changeThinking(null)}
+                                        >
+                                            Use the model’s default
+                                        </Button>
+                                    )}
+                                </Flex>
+                            )}
                         {engine === 'ollama' && !result && unreachable === undefined && (
                             <Text kind="body/regular/sm" className="text-subtle-color">
                                 Ollama uses one window and session count for every model it runs, so

@@ -46,6 +46,7 @@ var peerCapacityMethods = map[string]bool{
 	"capacity/planner":     true,
 	"capacity/planner-set": true,
 	"capacity/set":         true,
+	"capacity/thinking":    true,
 }
 
 var errPeerCapacityUnsupported = errors.New("it runs a PAIR Plus without remote Context & sessions (1.3.0 or older); update it to change its settings from here")
@@ -79,6 +80,8 @@ func (p *Proxy) callCapacityLocal(ctx context.Context, method string, raw json.R
 			return nil, err
 		}
 		return res, nil
+	case "capacity/thinking":
+		return p.thinking(raw)
 	case "capacity/set":
 		row, err := p.setCapacity(ctx, raw)
 		if err != nil {
@@ -94,7 +97,7 @@ func (p *Proxy) callCapacityLocal(ctx context.Context, method string, raw json.R
 // peer's ingress.
 func (p *Proxy) callCapacity(ctx context.Context, params peerCapacityCallParams) (json.RawMessage, error) {
 	if !peerCapacityMethods[params.Method] {
-		return nil, fmt.Errorf("method must be one of capacity/report, capacity/plan, capacity/planner, capacity/planner-set, capacity/set")
+		return nil, fmt.Errorf("method must be one of capacity/report, capacity/plan, capacity/planner, capacity/planner-set, capacity/set, capacity/thinking")
 	}
 	self := params.NodeID == ""
 	var peers []peerTarget
@@ -183,7 +186,7 @@ func (f *facade) servePeerCapacityCall(w http.ResponseWriter, r *http.Request, p
 	}
 	if err != nil || !peerCapacityMethods[body.Method] {
 		writeIngressError(w, http.StatusBadRequest, "peer-capacity-call",
-			`expected {"method":"capacity/report"|"capacity/plan"|"capacity/planner"|"capacity/planner-set"|"capacity/set","params"}`)
+			`expected {"method":"capacity/report"|"capacity/plan"|"capacity/planner"|"capacity/planner-set"|"capacity/set"|"capacity/thinking","params"}`)
 		return true
 	}
 	if body.Method != "capacity/report" && body.Method != "capacity/planner" {

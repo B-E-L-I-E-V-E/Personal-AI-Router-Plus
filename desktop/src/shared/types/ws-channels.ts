@@ -51,6 +51,8 @@ import type {
 } from '@/shared/types/model-details'
 import type {
     ApplyPlanResult,
+    ThinkingState,
+    ThinkingTarget,
     CapacityChange,
     CapacityPlan,
     CapacityPlanRequest,
@@ -144,6 +146,12 @@ export interface WsInvokeChannelMap {
     'capacity:plan': { request: CapacityPlanRequest; response: CapacityPlan }
     'capacity:get-planner': { request: string | undefined; response: PlannerState }
     'capacity:set-planner': { request: PlannerChange; response: PlannerState }
+    'capacity:get-thinking': { request: ThinkingTarget; response: ThinkingState }
+    'capacity:set-thinking': {
+        /** value null returns the model to its default. */
+        request: ThinkingTarget & { value: boolean | null }
+        response: ThinkingState
+    }
     'capacity:apply-plan': {
         request: { engine: string; model: string; nodeId?: string }
         response: ApplyPlanResult
