@@ -13,6 +13,10 @@ release workflow, with macOS builds signed and notarized; the app updates from
 those releases. A build made locally from source is unsigned unless built with
 `PAIR_MAC_SIGN=1`, and updates only once a release exists.
 
+## 1.3.10 — Set thinking on or off per model (#28)
+
+- Each model now has a Thinking setting beside its context plan. PAIR applies it to LM Studio's per-model setting, so a thinking model asked for strict JSON returns the answer in the reply text instead of the reasoning field.
+
 ## 1.3.9 — LM Studio models load with the context window and sessions you plan (#27)
 
 - Apply now and Save and apply now reload an LM Studio model with the planned context window and parallel sessions, on this node or another one. Before, PAIR only limited its own traffic and the model kept LM Studio's default context.
