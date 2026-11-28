@@ -3384,6 +3384,16 @@ func (p *Proxy) handleMessage(msg *Message) {
 			log.Printf("failed to respond to capacity/planner: %v", err)
 		}
 
+	case "capacity/thinking":
+		state, err := p.thinking(msg.Params)
+		if err != nil {
+			p.codec.RespondError(msg.ID, -32602, "invalid params: "+err.Error())
+			return
+		}
+		if err := p.codec.Respond(msg.ID, state); err != nil {
+			log.Printf("failed to respond to capacity/thinking: %v", err)
+		}
+
 	case "capacity/planner-set":
 		ctx, cancel := context.WithTimeout(context.Background(), detectionTimeout+time.Second)
 		defer cancel()

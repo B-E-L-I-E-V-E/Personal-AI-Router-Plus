@@ -35,7 +35,9 @@ import {
     ollamaLaunchText,
     parsePlanner,
     planCapacity,
+    getThinking,
     runAutoReloadCheckForTest,
+    setThinking,
     splitLaunchTokens
 } from '@/electron/service-bridge/capacity-planner'
 
@@ -683,5 +685,34 @@ describe('starting values from launch settings', () => {
             'engine:get-settings',
             expect.anything()
         )
+    })
+})
+
+describe('thinking setting', () => {
+    const state = { supported: true, default: true, value: false, explicit: true }
+
+    it('reads a model’s thinking setting from its node', async () => {
+        callProxy.mockResolvedValueOnce(state)
+        const result = await getThinking({ engine: 'lmstudio', model: 'qwen/qwen3.8-27b' })
+        const call = callProxy.mock.calls.at(-1)
+        expect(call?.[1]).toBe('capacity/thinking')
+        expect(call?.[2]).toEqual({ engine: 'lmstudio', model: 'qwen/qwen3.8-27b' })
+        expect(result).toMatchObject({ supported: true, value: false, explicit: true })
+    })
+
+    it('sets and clears it, on another node when asked', async () => {
+        callProxy.mockResolvedValue(state)
+        await setThinking({ engine: 'lmstudio', model: 'm', value: false })
+        expect(callProxy.mock.calls.at(-1)?.[2]).toEqual({
+            engine: 'lmstudio',
+            model: 'm',
+            set: false
+        })
+        await setThinking({ engine: 'lmstudio', model: 'm', value: null, nodeId: 'node-2' })
+        expect(callProxy.mock.calls.at(-1)?.[2]).toEqual({
+            nodeId: 'node-2',
+            method: 'capacity/thinking',
+            params: { engine: 'lmstudio', model: 'm', clear: true }
+        })
     })
 })

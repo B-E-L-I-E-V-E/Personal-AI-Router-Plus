@@ -282,6 +282,28 @@ export interface PlannerChange {
     remove?: { engine: string; model: string }
 }
 
+/** Whether a model thinks before it replies, as LM Studio holds it for the model. */
+export interface ThinkingState {
+    /** False for a model LM Studio gives no thinking setting. */
+    supported: boolean
+    /** Why it is not supported. */
+    reason: string
+    /** What the model does when nothing is set. */
+    default: boolean
+    /** The setting in force: the chosen value, else the default. */
+    value: boolean
+    /** True when a value was chosen, false when the model default applies. */
+    explicit: boolean
+}
+
+/** Which model's thinking setting, on which node. */
+export interface ThinkingTarget {
+    /** The node the model runs on; omitted means this one. */
+    nodeId?: string
+    engine: string
+    model: string
+}
+
 export interface ApplyPlanResult {
     applied: boolean
     /** What PAIR changed in the engine's launch settings, or why it could not. */

@@ -16,6 +16,7 @@ import type { Workload } from '@/shared/types/workloads'
 import type { NodeServingState, NodeStateInfo, NodeStatesSnapshot } from '@/shared/types/node-state'
 import type {
     ApplyPlanResult,
+    ThinkingState,
     CapacityChange,
     CapacityPlan,
     CapacityPlanRequest,
@@ -139,6 +140,15 @@ export interface ISessionsApi {
     setPlanner(change: PlannerChange): Promise<PlannerState>
     /** Reload the model's engine with its saved plan now. */
     applyPlan(engine: string, model: string, nodeId?: string): Promise<ApplyPlanResult>
+    /** Whether an LM Studio model thinks before it replies. */
+    getThinking(engine: string, model: string, nodeId?: string): Promise<ThinkingState>
+    /** Turn thinking on or off for a model; null returns it to the model's default. */
+    setThinking(
+        engine: string,
+        model: string,
+        value: boolean | null,
+        nodeId?: string
+    ): Promise<ThinkingState>
 }
 
 export interface IPerformanceApi {
@@ -260,7 +270,11 @@ export function createPairApi(transport: ServiceTransport): IPairApi {
             getPlanner: nodeId => transport.invoke('capacity:get-planner', nodeId),
             setPlanner: change => transport.invoke('capacity:set-planner', change),
             applyPlan: (engine, model, nodeId) =>
-                transport.invoke('capacity:apply-plan', { engine, model, nodeId })
+                transport.invoke('capacity:apply-plan', { engine, model, nodeId }),
+            getThinking: (engine, model, nodeId) =>
+                transport.invoke('capacity:get-thinking', { engine, model, nodeId }),
+            setThinking: (engine, model, value, nodeId) =>
+                transport.invoke('capacity:set-thinking', { engine, model, nodeId, value })
         },
         performance: {
             getReport: () => transport.invoke('performance:get-report'),

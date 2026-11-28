@@ -14,7 +14,9 @@ import type {
     PlannerChange,
     PlannerState,
     SavedCapacityPlan,
-    StartValue
+    StartValue,
+    ThinkingState,
+    ThinkingTarget
 } from '@/shared/types/sessions'
 import type { EngineManagerName } from '@/shared/types/engines'
 import type { EngineSettingsReceipt, EngineSettingsSnapshot } from '@/shared/types/engine-settings'
@@ -886,3 +888,43 @@ export function stopCapacityAutoReload(): void {
 
 /** Test hook: run one auto-reload check now. */
 export const runAutoReloadCheckForTest = autoReloadTick
+
+// ---------------------------------------------------------------------------
+// Thinking
+
+function parseThinking(value: JsonValue | undefined): ThinkingState {
+    const obj = objectValue(value)
+    return {
+        supported: obj?.supported === true,
+        reason: stringValue(obj?.reason),
+        default: obj?.default === true,
+        value: obj?.value === true,
+        explicit: obj?.explicit === true
+    }
+}
+
+/** Whether a model thinks before it replies, on its node. LM Studio only. */
+export async function getThinking(target?: ThinkingTarget): Promise<ThinkingState> {
+    if (!target) throw new Error('no model given')
+    return parseThinking(
+        await callNodeProxy(
+            'capacity/thinking',
+            { engine: target.engine, model: target.model },
+            target.nodeId
+        )
+    )
+}
+
+/**
+ * Turns thinking on or off for a model on its node; null returns it to the
+ * model's default. LM Studio reads it on the next request, with no reload.
+ */
+export async function setThinking(
+    change?: ThinkingTarget & { value: boolean | null }
+): Promise<ThinkingState> {
+    if (!change) throw new Error('no model given')
+    const params: JsonObject = { engine: change.engine, model: change.model }
+    if (change.value === null) params.clear = true
+    else params.set = change.value
+    return parseThinking(await callNodeProxy('capacity/thinking', params, change.nodeId))
+}

@@ -217,6 +217,7 @@
 | `capacity/planner-set` | request (we call) | ✅ yes |
 | `capacity/report` | request (we call) | ✅ yes |
 | `capacity/set` | request (we call) | ✅ yes |
+| `capacity/thinking` | request (we call) | ✅ yes |
 | `facade/enable` | request (we call) | ⚠️ not called |
 | `model/details` | request (we call) | ✅ yes |
 | `model/web-facts` | request (we call) | ✅ yes |

@@ -40,6 +40,8 @@ import {
 } from './sessions-bridge'
 import {
     applyPlan,
+    getThinking,
+    setThinking,
     getPlanner,
     planCapacity,
     setPlanner
@@ -753,6 +755,8 @@ const EMPTY_SERVICE_BRIDGE_HANDLERS: BridgeHandlerMap = {
     'capacity:get-planner': payload => getPlanner(payload),
     'capacity:set-planner': payload => setPlanner(payload),
     'capacity:apply-plan': payload => applyPlan(payload),
+    'capacity:get-thinking': payload => getThinking(payload),
+    'capacity:set-thinking': payload => setThinking(payload),
     'engine:model-details': payload => getModelDetails(payload),
     'performance:get-report': () => getPerformanceReport(),
     'performance:get-live': () => getPerformanceLive(),

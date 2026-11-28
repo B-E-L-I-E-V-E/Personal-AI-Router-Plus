@@ -397,6 +397,22 @@ load it with the plan.
 
 ![The top of the dialog with a saved plan: 21 × 40,960 tokens, 8,192 for replies, will apply when this node is idle, with Apply now and Remove plan buttons.](assets/onboarding/sessions/05-saved-plan.png)
 
+#### Thinking (LM Studio)
+
+For an LM Studio model that has one, the dialog shows a **Thinking** switch. It
+sets whether the model reasons before it replies, on the node that runs it, and
+**Use the model's default** removes your choice. LM Studio decides this per
+model, not per request: `reasoning_effort`, `enable_thinking` and
+`chat_template_kwargs` in a chat request leave the reply unchanged, so PAIR does
+not offer a per-request switch. PAIR edits only that one entry in LM Studio's
+configuration for the model and keeps everything else in the file. The change
+applies to the next request, with no reload.
+
+With thinking on, a reply that must follow a JSON schema
+(`response_format: json_schema`) arrives in `reasoning_content` and leaves
+`content` empty. Turn thinking off for a model that callers use for structured
+output.
+
 ### When Capacity Runs Out
 
 A session takes one of a model's slots on the node serving it and keeps it until
